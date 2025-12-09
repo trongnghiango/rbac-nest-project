@@ -1,30 +1,22 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService);
 
-  // Global validation pipe
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  // Note: Global Pipes, Filters, Interceptors are loaded via CoreModule
 
-  // Global prefix
-  app.setGlobalPrefix('api');
-
-  // Enable CORS
+  const prefix = config.get('app.apiPrefix', 'api');
+  app.setGlobalPrefix(prefix);
   app.enableCors();
 
-  const port = process.env.PORT || 3000;
+  const port = config.get('app.port', 3000);
   await app.listen(port);
 
-  console.log(`🚀 Application is running on: http://localhost:${port}/api`);
-  console.log(`📊 Health check: http://localhost:${port}/api/test/health`);
+  console.log(`🚀 Application is running on: http://localhost:${port}/${prefix}`);
+  console.log(`📊 Health check: http://localhost:${port}/${prefix}/test/health`);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
