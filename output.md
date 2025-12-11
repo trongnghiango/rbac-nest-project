@@ -5,55 +5,57 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 
+// Configs
+import databaseConfig from '../config/database.config';
+import appConfig from '../config/app.config';
+import loggingConfig from '../config/logging.config';
+
+// Core & Shared
+import { CoreModule } from '../core/core.module';
+import { SharedModule } from '../modules/shared/shared.module';
+
 // Feature Modules
 import { UserModule } from '../modules/user/user.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { RbacModule } from '../modules/rbac/rbac.module';
 import { TestModule } from '../modules/test/test.module';
-import { SharedModule } from '../modules/shared/shared.module';
 
 @Module({
   imports: [
-    // Configuration
-    SharedModule,
+    // 1. Config
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      load: [databaseConfig, appConfig, loggingConfig],
     }),
 
-    // Database
+    // 2. Core (Global Pipes/Filters/Interceptors)
+    CoreModule,
+    SharedModule,
+
+    // 3. Database
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get('DB_PORT', 5432),
-        username: configService.get('DB_USERNAME', 'postgres'),
-        password: configService.get('DB_PASSWORD', 'postgres'),
-        database: configService.get('DB_NAME', 'rbac_system'),
+      useFactory: (config: ConfigService) => ({
+        ...config.get('database'),
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
         autoLoadEntities: true,
-        synchronize: configService.get('NODE_ENV') === 'development',
-        logging: configService.get('NODE_ENV') === 'development',
       }),
       inject: [ConfigService],
     }),
 
-    // Cache
+    // 4. Cache
     CacheModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (_configService: ConfigService) => ({
-        ttl: 300,
-        max: 100,
-      }),
+      useFactory: () => ({ ttl: 300, max: 100 }),
       inject: [ConfigService],
     }),
 
-    // Feature Modules
+    // 5. Features
     UserModule,
     AuthModule,
     RbacModule,
-    // TestModule,
+    TestModule, // Uncommented TestModule for testing
   ],
 })
 export class AppModule {}
@@ -62,32 +64,42 @@ export class AppModule {}
 ## File: src/bootstrap/main.ts
 ```
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService);
 
-  // Global validation pipe
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  const prefix = config.get('app.apiPrefix', 'api');
+  app.setGlobalPrefix(prefix);
 
-  // Global prefix
-  app.setGlobalPrefix('api');
-
-  // Enable CORS
   app.enableCors();
 
-  const port = process.env.PORT || 3000;
+  // --- SWAGGER CONFIGURATION ---
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('RBAC System API')
+    .setDescription('The RBAC System API description')
+    .setVersion('1.0')
+    .addBearerAuth() // Thêm nút "Authorize" để nhập Token
+    .build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  // Đường dẫn tài liệu: /docs
+  SwaggerModule.setup('docs', app, document, {
+    swaggerOptions: {
+      persistAuthorization: true, // Giữ token khi refresh trang
+    },
+  });
+  // -----------------------------
+
+  const port = config.get('app.port', 3000);
   await app.listen(port);
 
-  console.log(`🚀 Application is running on: http://localhost:${port}/api`);
-  console.log(`📊 Health check: http://localhost:${port}/api/test/health`);
+  console.log(`🚀 API is running on: http://localhost:${port}/${prefix}`);
+  console.log(`📚 Swagger Docs:      http://localhost:${port}/docs`);
+  console.log(`📊 Health check:      http://localhost:${port}/${prefix}/test/health`);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -141,53 +153,57 @@ export class Session {
 
 ## File: src/modules/auth/application/services/authentication.service.ts
 ```
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm'; // Import thêm cái này
+import { Repository } from 'typeorm';               // Import thêm cái này
 import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../../user/domain/entities/user.entity';
+import { Session } from '../../domain/entities/session.entity'; // Import Session Entity
 import { JwtPayload } from '../../../shared/types/common.types';
 
 @Injectable()
 export class AuthenticationService {
   constructor(
     @Inject('IUserRepository') private userRepository: IUserRepository,
+    // Inject thêm Repository của Session
+    @InjectRepository(Session) private sessionRepository: Repository<Session>,
     private jwtService: JwtService,
   ) {}
 
-  async login(credentials: {
-    username: string;
-    password: string;
-  }): Promise<{ accessToken: string; user: any }> {
-    // Find user
+  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string }): Promise<{ accessToken: string; user: any }> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
-    if (!user || !user.isActive) {
-      throw new Error('Invalid credentials');
-    }
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
+    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
 
-    // Verify password
-    if (!user.hashedPassword) {
-      throw new Error('Password not set for this user');
-    }
+    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
+    if (!isValid) throw new UnauthorizedException('Invalid credentials');
 
-    const isValid = await PasswordUtil.compare(
-      credentials.password,
-      user.hashedPassword,
-    );
-
-    if (!isValid) {
-      throw new Error('Invalid credentials');
-    }
-
-    // Generate JWT
+    // 1. Tạo JWT Access Token
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
-      roles: [], // Will be populated by RBAC
+      roles: [],
     };
-
     const accessToken = this.jwtService.sign(payload);
+
+    // 2. LƯU SESSION VÀO DB (Kích hoạt bảng sessions)
+    // Tính thời gian hết hạn (ví dụ 1 ngày)
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1);
+
+    const session = this.sessionRepository.create({
+      userId: user.id,
+      token: accessToken, // Hoặc lưu Refresh Token nếu dùng cơ chế Refresh
+      ipAddress: credentials.ip || 'unknown',
+      userAgent: credentials.userAgent || 'unknown',
+      expiresAt: expiresAt,
+      createdAt: new Date(),
+    });
+
+    await this.sessionRepository.save(session);
 
     return {
       accessToken,
@@ -195,41 +211,22 @@ export class AuthenticationService {
     };
   }
 
-  async validateUser(
-    payload: JwtPayload,
-  ): Promise<ReturnType<User['toJSON']> | null> {
+  // ... (Các hàm validateUser, register giữ nguyên như cũ)
+  async validateUser(payload: JwtPayload): Promise<ReturnType<User['toJSON']> | null> {
     const user = await this.userRepository.findById(payload.sub);
-    if (!user || !user.isActive) {
-      return null;
-    }
+
+    // NÂNG CAO: Có thể check thêm session trong DB xem còn tồn tại không
+    // Nếu admin đã xóa session thì dù token còn hạn cũng trả về null -> Đá user ra
+
+    if (!user || !user.isActive) return null;
     return user.toJSON();
   }
 
-  async register(data: {
-    id: number;
-    username: string;
-    password: string;
-    email?: string;
-    fullName: string;
-  }): Promise<{ accessToken: string; user: any }> {
+  async register(data: any): Promise<{ accessToken: string; user: any }> {
     const existing = await this.userRepository.findByUsername(data.username);
-    if (existing) {
-      throw new Error('User already exists');
-    }
+    if (existing) throw new BadRequestException('User already exists');
 
-    // NOTE: In strict domain logic, creating user might belong to UserService
-    // but we simulate register here for AuthModule completeness as in original script
-
-    // We can't use IUserRepository to create fully typed User object easily if it only accepts User domain entity
-    // So we assume the repo can handle it, or we rely on the implementation details (which is risky in strict DDD)
-    // However, keeping logic from original script:
-
-    // Manual hashing
     const hashedPassword = await PasswordUtil.hash(data.password);
-
-    // We construct a partial user-like object to save,
-    // relying on the repo implementation to handle the persistence conversion
-    // OR we should inject UserService. But to keep original structure:
     const user: any = {
       id: data.id,
       username: data.username,
@@ -243,29 +240,43 @@ export class AuthenticationService {
 
     const savedUser = await this.userRepository.save(user);
 
-    const payload = {
-      sub: savedUser.id,
-      username: savedUser.username,
-      roles: [],
-    };
+    // Khi register xong cũng tạo session luôn
+    const payload = { sub: savedUser.id, username: savedUser.username, roles: [] };
     const accessToken = this.jwtService.sign(payload);
 
-    return {
-      accessToken,
-      user: savedUser.toJSON(),
-    };
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1);
+
+    await this.sessionRepository.save({
+        userId: savedUser.id,
+        token: accessToken,
+        expiresAt: expiresAt,
+        createdAt: new Date()
+    });
+
+    return { accessToken, user: savedUser.toJSON() };
   }
 }
 ```
 
 ## File: src/modules/auth/infrastructure/controllers/auth.controller.ts
 ```
-import { Controller, Post, Body, UseGuards, Get } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Get,
+  Req,
+  Ip,
+} from '@nestjs/common';
 import { AuthenticationService } from '../../application/services/authentication.service';
 import { Public } from '../decorators/public.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { User } from '../../../user/domain/entities/user.entity';
+import { LoginDto, RegisterDto } from '../dtos/auth.dto';
+import type { Request } from 'express'; // Import Request
 
 @Controller('auth')
 export class AuthController {
@@ -273,22 +284,21 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  async login(@Body() credentials: { username: string; password: string }) {
-    return this.authService.login(credentials);
+  async login(
+    @Body() credentials: LoginDto,
+    @Ip() ip: string,
+    @Req() request: Request, // Lấy User Agent từ Request
+  ) {
+    return this.authService.login({
+      ...credentials,
+      ip: ip,
+      userAgent: request.headers['user-agent'],
+    });
   }
 
   @Public()
   @Post('register')
-  async register(
-    @Body()
-    data: {
-      id: number;
-      username: string;
-      password: string;
-      email?: string;
-      fullName: string;
-    },
-  ) {
+  async register(@Body() data: RegisterDto) {
     return this.authService.register(data);
   }
 
@@ -389,6 +399,47 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       roles: payload.roles || [],
     };
   }
+}
+```
+
+## File: src/modules/auth/infrastructure/dtos/auth.dto.ts
+```
+import { IsString, MinLength, IsNumber, IsOptional, IsEmail } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class LoginDto {
+  @ApiProperty({ example: 'superadmin', description: 'Username for login' })
+  @IsString()
+  username: string;
+
+  @ApiProperty({ example: 'SuperAdmin123!', description: 'Password (min 6 chars)' })
+  @IsString()
+  @MinLength(6)
+  password: string;
+}
+
+export class RegisterDto {
+  @ApiProperty({ example: 12345, description: 'User ID (BigInt)' })
+  @IsNumber()
+  id: number;
+
+  @ApiProperty({ example: 'newuser', description: 'Unique username' })
+  @IsString()
+  username: string;
+
+  @ApiProperty({ example: 'StrongP@ss1', description: 'Strong password' })
+  @IsString()
+  @MinLength(6)
+  password: string;
+
+  @ApiProperty({ example: 'Nguyen Van A', description: 'Full Name' })
+  @IsString()
+  fullName: string;
+
+  @ApiPropertyOptional({ example: 'user@example.com' })
+  @IsOptional()
+  @IsEmail()
+  email?: string;
 }
 ```
 
@@ -546,7 +597,12 @@ export interface UserProfile {
 
 ## File: src/modules/user/application/services/user.service.ts
 ```
-import { Injectable, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import type { IUserRepository } from '../../domain/repositories/user-repository.interface';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
@@ -557,61 +613,49 @@ export class UserService {
     @Inject('IUserRepository') private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: {
-    id: number;
-    username: string;
-    email?: string;
-    password?: string;
-    fullName: string;
-  }): Promise<any> {
-    // Check if user exists
+  async createUser(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) {
-      throw new Error('User already exists');
+      throw new BadRequestException('User already exists');
     }
 
-    // Hash password if provided
-    let hashedPassword: string | undefined;
+    let hashedPassword;
     if (data.password) {
       if (!PasswordUtil.validateStrength(data.password)) {
-        throw new Error('Password does not meet strength requirements');
+        throw new BadRequestException('Password is too weak');
       }
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    // Cast object to User to match repository interface
     const newUser = new User();
-    newUser.id = data.id;
-    newUser.username = data.username;
-    newUser.email = data.email;
-    newUser.hashedPassword = hashedPassword;
-    newUser.fullName = data.fullName;
-    newUser.isActive = true;
-    newUser.createdAt = new Date();
-    newUser.updatedAt = new Date();
+    Object.assign(newUser, {
+      ...data,
+      hashedPassword,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const user = await this.userRepository.save(newUser);
-
     return user.toJSON();
   }
 
   async validateCredentials(
     username: string,
-    password: string,
+    pass: string,
   ): Promise<User | null> {
+    // Keep internal logic as is, exceptions handled in AuthService
     const user = await this.userRepository.findByUsername(username);
-    if (!user || !user.isActive || !user.hashedPassword) {
-      return null;
-    }
-
-    const isValid = await PasswordUtil.compare(password, user.hashedPassword);
+    if (!user || !user.isActive || !user.hashedPassword) return null;
+    const isValid = await PasswordUtil.compare(pass, user.hashedPassword);
     return isValid ? user : null;
   }
 
   async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(id);
     if (!user) {
-      throw new Error('User not found');
+      // FIX: Throw NotFoundException
+      throw new NotFoundException(`User with ID ${id} not found`);
     }
     return user.toJSON();
   }
@@ -622,7 +666,7 @@ export class UserService {
   ): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(userId);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundException('User not found');
     }
 
     user.updateProfile(profileData);
@@ -633,9 +677,8 @@ export class UserService {
   async deactivateUser(userId: number): Promise<void> {
     const user = await this.userRepository.findById(userId);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundException('User not found');
     }
-
     user.deactivate();
     await this.userRepository.save(user);
   }
@@ -737,30 +780,92 @@ export class TypeOrmUserRepository implements IUserRepository {
 ## File: src/modules/user/infrastructure/controllers/user.controller.ts
 ```
 import { Controller, Get, Param, Put, Body, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UserService } from '../../application/services/user.service';
 import { CurrentUser } from '../../../auth/infrastructure/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { User } from '../../domain/entities/user.entity';
+import { UpdateProfileDto } from '../dtos/update-profile.dto';
 
-@Controller('users')
+@ApiTags('Users')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@Controller('users')
 export class UserController {
   constructor(private userService: UserService) {}
 
+  @ApiOperation({ summary: 'Get current user profile' })
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
     return this.userService.getUserById(user.id);
   }
 
+  @ApiOperation({ summary: 'Update user profile' })
   @Put('profile')
-  async updateProfile(@CurrentUser() user: User, @Body() profileData: any) {
+  async updateProfile(@CurrentUser() user: User, @Body() profileData: UpdateProfileDto) {
     return this.userService.updateUserProfile(user.id, profileData);
   }
 
+  @ApiOperation({ summary: 'Get user by ID (Admin/Manager)' })
   @Get(':id')
   async getUserById(@Param('id') id: number) {
     return this.userService.getUserById(id);
   }
+}
+```
+
+## File: src/modules/user/infrastructure/dtos/update-profile.dto.ts
+```
+import { IsString, IsOptional, IsUrl, IsEnum, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+
+class SocialLinksDto {
+  @ApiPropertyOptional() @IsOptional() @IsUrl() facebook?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl() telegram?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl() website?: string;
+}
+
+class SettingsDto {
+  @ApiPropertyOptional({ enum: ['dark', 'light'] })
+  @IsOptional() @IsEnum(['dark', 'light']) theme: 'dark' | 'light';
+
+  @ApiPropertyOptional()
+  @IsOptional() notifications: boolean;
+}
+
+export class UpdateProfileDto {
+  @ApiPropertyOptional({ example: 'I love coding' })
+  @IsOptional()
+  @IsString()
+  bio?: string;
+
+  @ApiPropertyOptional({ example: '1990-01-01' })
+  @IsOptional()
+  @IsString()
+  birthday?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUrl()
+  avatarUrl?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
+  @IsOptional()
+  @IsEnum(['male', 'female', 'other'])
+  gender?: 'male' | 'female' | 'other';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SocialLinksDto)
+  socialLinks?: SocialLinksDto;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SettingsDto)
+  settings?: SettingsDto;
 }
 ```
 
@@ -1313,38 +1418,282 @@ export class RoleService {
 }
 ```
 
+## File: src/modules/rbac/application/services/rbac-manager.service.ts
+```
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Role } from '../../domain/entities/role.entity';
+import { Permission } from '../../domain/entities/permission.entity';
+
+@Injectable()
+export class RbacManagerService {
+  private readonly logger = new Logger(RbacManagerService.name);
+
+  constructor(
+    @InjectRepository(Role)
+    private roleRepo: Repository<Role>,
+    @InjectRepository(Permission)
+    private permRepo: Repository<Permission>,
+  ) {}
+
+  // ==========================================
+  // 1. CHỨC NĂNG IMPORT (UPLOAD)
+  // ==========================================
+  async importFromCsv(
+    csvContent: string,
+  ): Promise<{ created: number; updated: number }> {
+    const lines = csvContent
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== '');
+    // Bỏ dòng header nếu có
+    if (lines[0].toLowerCase().includes('role')) {
+      lines.shift();
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    for (const line of lines) {
+      // CSV format: role,resource,action,attributes,description
+      const cols = line.split(',').map((c) => c.trim());
+
+      if (cols.length < 3) continue;
+
+      // Vẫn lấy biến attributes ra nhưng không dùng để lưu vào DB (vì DB ko có cột này)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const [roleName, resource, action, _attributes, description] = cols;
+
+      // 1. Xử lý Permission
+      const permName =
+        resource === '*' ? 'manage:all' : `${resource}:${action}`;
+      let perm = await this.permRepo.findOne({ where: { name: permName } });
+
+      if (!perm) {
+        // Fix TS2769: Bỏ field 'attributes' khi create
+        perm = this.permRepo.create({
+          name: permName,
+          resourceType: resource,
+          action: action,
+          description: description || '',
+          isActive: true,
+        });
+        await this.permRepo.save(perm);
+        createdCount++;
+      } else {
+        // Fix TS2339: Chỉ update description, bỏ qua attributes
+        let isChanged = false;
+        if (description && perm.description !== description) {
+          perm.description = description;
+          isChanged = true;
+        }
+
+        if (isChanged) {
+          await this.permRepo.save(perm);
+          updatedCount++;
+        }
+      }
+
+      // 2. Xử lý Role
+      let role = await this.roleRepo.findOne({
+        where: { name: roleName },
+        relations: ['permissions'],
+      });
+
+      if (!role) {
+        role = this.roleRepo.create({
+          name: roleName,
+          description: 'Imported from CSV',
+          isActive: true,
+          permissions: [],
+        });
+        await this.roleRepo.save(role);
+      }
+
+      // 3. Gán quyền vào Role
+      if (!role.permissions) role.permissions = [];
+      // Fix ESLint unnecessary assertion: perm chắc chắn tồn tại ở đây
+      const hasPerm = role.permissions.some((p) => p.id === perm.id);
+
+      if (!hasPerm) {
+        role.permissions.push(perm);
+        await this.roleRepo.save(role);
+      }
+    }
+
+    this.logger.log(
+      `Import finished. Created: ${createdCount}, Updated: ${updatedCount}`,
+    );
+    return { created: createdCount, updated: updatedCount };
+  }
+
+  // ==========================================
+  // 2. CHỨC NĂNG EXPORT (DOWNLOAD)
+  // ==========================================
+  async exportToCsv(): Promise<string> {
+    const roles = await this.roleRepo.find({
+      relations: ['permissions'],
+      order: { name: 'ASC' },
+    });
+
+    let csvContent = 'role,resource,action,attributes,description\n';
+
+    for (const role of roles) {
+      if (!role.permissions || role.permissions.length === 0) {
+        csvContent += `${role.name},,,,\n`;
+        continue;
+      }
+
+      for (const perm of role.permissions) {
+        const desc =
+          perm.description && perm.description.includes(',')
+            ? `"${perm.description}"`
+            : perm.description || '';
+
+        const line = [
+          role.name,
+          perm.resourceType || '*',
+          perm.action || '*',
+          '*', // Fix TS2339: Hardcode attributes là '*' vì DB không lưu
+          desc,
+        ].join(',');
+
+        csvContent += line + '\n';
+      }
+    }
+
+    return csvContent;
+  }
+}
+```
+
 ## File: src/modules/rbac/infrastructure/controllers/role.controller.ts
 ```
 import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { RoleService } from '../../application/services/role.service';
 import { PermissionService } from '../../application/services/permission.service';
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '../guards/permission.guard';
 import { Permissions } from '../decorators/permission.decorator';
 
+@ApiTags('RBAC - Roles')
+@ApiBearerAuth()
 @Controller('rbac/roles')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 export class RoleController {
   constructor(
     private roleService: RoleService,
     private permissionService: PermissionService,
   ) {}
 
+  @ApiOperation({ summary: 'Get all roles (Requires rbac:manage)' })
   @Get()
   @Permissions('rbac:manage')
   async getAllRoles() {
     return { message: 'Get all roles' };
   }
 
+  @ApiOperation({ summary: 'Assign role to user' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        userId: { type: 'number', example: 1005 },
+        roleId: { type: 'number', example: 2 }
+      }
+    }
+  })
   @Post('assign')
   @Permissions('rbac:manage')
   async assignRole(@Body() body: { userId: number; roleId: number }) {
     await this.permissionService.assignRole(
       body.userId,
       body.roleId,
-      1, // system user id
+      1,
     );
-
     return { success: true, message: 'Role assigned' };
+  }
+}
+```
+
+## File: src/modules/rbac/infrastructure/controllers/rbac-manager.controller.ts
+```
+import {
+  Controller,
+  Post,
+  Get,
+  UseInterceptors,
+  UploadedFile,
+  UseGuards,
+  BadRequestException,
+  Res,
+  StreamableFile,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '../guards/permission.guard';
+import { Permissions } from '../decorators/permission.decorator';
+import { RbacManagerService } from '../../application/services/rbac-manager.service';
+import { BypassTransform } from '../../../../core/decorators/bypass-transform.decorator';
+
+@ApiTags('RBAC - Import/Export')
+@ApiBearerAuth()
+@Controller('rbac/data')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class RbacManagerController {
+  constructor(private rbacManagerService: RbacManagerService) {}
+
+  @ApiOperation({ summary: 'Import RBAC Rules from CSV' })
+  @ApiConsumes('multipart/form-data') // Báo cho Swagger biết đây là upload file
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary', // Định dạng file
+        },
+      },
+    },
+  })
+  @Post('import')
+  @Permissions('system:config')
+  @UseInterceptors(FileInterceptor('file'))
+  async importRbac(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+
+    if (!file.originalname.endsWith('.csv')) {
+      throw new BadRequestException('Only .csv files are allowed');
+    }
+
+    const content = file.buffer.toString('utf-8');
+    const result = await this.rbacManagerService.importFromCsv(content);
+
+    return {
+      success: true,
+      message: 'RBAC data imported successfully',
+      stats: result,
+    };
+  }
+
+  @ApiOperation({ summary: 'Export RBAC Rules to CSV' })
+  @Get('export')
+  @Permissions('system:config')
+  @BypassTransform()
+  async exportRbac(@Res({ passthrough: true }) res: Response) {
+    const csvData = await this.rbacManagerService.exportToCsv();
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="rbac_rules.csv"',
+    });
+
+    return new StreamableFile(Buffer.from(csvData));
   }
 }
 ```
@@ -1427,6 +1776,8 @@ import { RoleController } from './infrastructure/controllers/role.controller';
 import { Role } from './domain/entities/role.entity';
 import { Permission } from './domain/entities/permission.entity';
 import { UserRole } from './domain/entities/user-role.entity';
+import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
+import { RbacManagerService } from './application/services/rbac-manager.service';
 
 @Module({
   imports: [
@@ -1441,8 +1792,13 @@ import { UserRole } from './domain/entities/user-role.entity';
       inject: [ConfigService],
     }),
   ],
-  controllers: [RoleController],
-  providers: [PermissionService, RoleService, PermissionGuard],
+  controllers: [RoleController, RbacManagerController],
+  providers: [
+    PermissionService,
+    RoleService,
+    PermissionGuard,
+    RbacManagerService,
+  ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
 export class RbacModule {}
@@ -1927,5 +2283,206 @@ export class TestModule implements OnModuleInit {
     await this.databaseSeeder.onModuleInit();
   }
 }
+```
+
+## File: src/core/interceptors/transform-response.interceptor.ts
+```
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+  StreamableFile,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
+
+@Injectable()
+export class TransformResponseInterceptor<T> implements NestInterceptor<T, any> {
+  constructor(private reflector: Reflector) {}
+
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    // 1. Check xem có gắn cờ Bypass không
+    const bypass = this.reflector.get<boolean>(
+      BYPASS_TRANSFORM_KEY,
+      context.getHandler(),
+    );
+
+    if (bypass) {
+      return next.handle();
+    }
+
+    // 2. Logic bọc JSON bình thường
+    return next.handle().pipe(
+      map((data) => {
+        // Double check: Nếu data là StreamableFile thì cũng không bọc
+        if (data instanceof StreamableFile) {
+          return data;
+        }
+
+        return {
+          success: true,
+          statusCode: context.switchToHttp().getResponse().statusCode,
+          message:
+            this.reflector.get<string>(
+              'response_message',
+              context.getHandler(),
+            ) || 'Success',
+          result: data,
+        };
+      }),
+    );
+  }
+}
+```
+
+## File: src/core/filters/http-exception.filter.ts
+```
+import {
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+
+@Catch(HttpException)
+export class HttpExceptionFilter implements ExceptionFilter {
+  catch(exception: HttpException, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    const status = exception.getStatus
+      ? exception.getStatus()
+      : HttpStatus.INTERNAL_SERVER_ERROR;
+
+    const exceptionResponse: any = exception.getResponse();
+    const errorMsg = exceptionResponse.message;
+
+    const responseBody = {
+      success: false,
+      statusCode: status,
+      message:
+        typeof exceptionResponse === 'string' ? exceptionResponse : 'Error',
+      errors: errorMsg || null,
+      path: request.url,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      responseBody.message =
+        exceptionResponse['error'] || exceptionResponse['message'];
+      responseBody.errors = exceptionResponse['message'];
+    }
+
+    response.status(status).json(responseBody);
+  }
+}
+```
+
+## File: src/core/core.module.ts
+```
+import { Module } from '@nestjs/common';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+
+import { TransformResponseInterceptor } from './interceptors/transform-response.interceptor';
+import { HttpExceptionFilter } from './filters/http-exception.filter';
+
+@Module({
+  providers: [
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TransformResponseInterceptor,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: HttpExceptionFilter,
+    },
+  ],
+})
+export class CoreModule {}
+```
+
+## File: src/core/decorators/bypass-transform.decorator.ts
+```
+import { SetMetadata } from '@nestjs/common';
+
+export const BYPASS_TRANSFORM_KEY = 'bypass_transform';
+export const BypassTransform = () => SetMetadata(BYPASS_TRANSFORM_KEY, true);
+```
+
+## File: src/config/app.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('app', () => ({
+  env: process.env.NODE_ENV || 'development',
+  port: parseInt(process.env.PORT || '3000', 10),
+  apiPrefix: 'api',
+}));
+```
+
+## File: src/config/database.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('database', () => {
+  // Cấu hình chung cho cả 2 môi trường
+  const commonConfig = {
+    type: 'postgres',
+    synchronize: process.env.NODE_ENV === 'development', // Tắt trên production nhé
+    logging: process.env.NODE_ENV === 'development',
+    autoLoadEntities: true,
+  };
+
+  // 1. Ưu tiên chế độ CLOUD (Neon, Render, Supabase...)
+  // Nếu có biến DATABASE_URL thì dùng luôn chuỗi kết nối
+  if (process.env.DATABASE_URL) {
+    console.log('📡 Using Database Connection String (Cloud/Neon)');
+    return {
+      ...commonConfig,
+      url: process.env.DATABASE_URL,
+      // Neon và các cloud DB thường yêu cầu SSL
+      ssl: {
+        rejectUnauthorized: false, // Chấp nhận chứng chỉ SSL của Neon
+      },
+    };
+  }
+
+  // 2. Chế độ LOCAL (Fallback)
+  console.log('💻 Using Local Database Configuration');
+  return {
+    ...commonConfig,
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+    username: process.env.DB_USERNAME || 'postgres',
+    password: process.env.DB_PASSWORD || 'postgres',
+    database: process.env.DB_DATABASE || 'rbac_system',
+    // Local thường không cần SSL
+    ssl: process.env.DB_SSL === 'true',
+  };
+});
+```
+
+## File: src/config/logging.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('logging', () => ({
+  level: process.env.LOG_LEVEL || 'info',
+}));
 ```
 
