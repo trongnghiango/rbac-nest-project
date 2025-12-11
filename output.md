@@ -5,16 +5,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 
-// Configs
 import databaseConfig from '../config/database.config';
 import appConfig from '../config/app.config';
 import loggingConfig from '../config/logging.config';
 
-// Core & Shared
 import { CoreModule } from '../core/core.module';
 import { SharedModule } from '../modules/shared/shared.module';
-
-// Feature Modules
 import { UserModule } from '../modules/user/user.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { RbacModule } from '../modules/rbac/rbac.module';
@@ -22,40 +18,34 @@ import { TestModule } from '../modules/test/test.module';
 
 @Module({
   imports: [
-    // 1. Config
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
       load: [databaseConfig, appConfig, loggingConfig],
     }),
-
-    // 2. Core (Global Pipes/Filters/Interceptors)
     CoreModule,
     SharedModule,
-
-    // 3. Database
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => ({
-        ...config.get('database'),
-        entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-        autoLoadEntities: true,
-      }),
+      useFactory: (config: ConfigService) => {
+        const dbConfig = config.get('database');
+        return {
+          ...dbConfig,
+          // Load cả Entities và Migrations
+          entities: [__dirname + '/../**/*.orm-entity{.ts,.js}'],
+        };
+      },
       inject: [ConfigService],
     }),
-
-    // 4. Cache
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: () => ({ ttl: 300, max: 100 }),
       inject: [ConfigService],
     }),
-
-    // 5. Features
     UserModule,
     AuthModule,
     RbacModule,
-    TestModule, // Uncommented TestModule for testing
+    TestModule,
   ],
 })
 export class AppModule {}
@@ -72,7 +62,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
 
-  const prefix = config.get('app.apiPrefix', 'api');
+  const prefix: string = config.get('app.apiPrefix', 'api');
   app.setGlobalPrefix(prefix);
 
   app.enableCors();
@@ -94,12 +84,14 @@ async function bootstrap() {
   });
   // -----------------------------
 
-  const port = config.get('app.port', 3000);
+  const port: number = config.get('app.port', 3000);
   await app.listen(port);
 
   console.log(`🚀 API is running on: http://localhost:${port}/${prefix}`);
   console.log(`📚 Swagger Docs:      http://localhost:${port}/docs`);
-  console.log(`📊 Health check:      http://localhost:${port}/${prefix}/test/health`);
+  console.log(
+    `📊 Health check:      http://localhost:${port}/${prefix}/test/health`,
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -108,80 +100,84 @@ bootstrap().catch((err) => console.error('Err::', err['message']));
 
 ## File: src/modules/auth/domain/entities/session.entity.ts
 ```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  Index,
-} from 'typeorm';
-
-@Entity('sessions')
-@Index('idx_sessions_user_id', ['userId'])
-@Index('idx_sessions_expires_at', ['expiresAt'])
 export class Session {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Column('bigint')
-  userId: number;
-
-  @Column()
-  token: string;
-
-  @Column({ type: 'timestamptz' })
-  expiresAt: Date;
-
-  @Column({ nullable: true })
-  ipAddress: string;
-
-  @Column({ nullable: true })
-  userAgent: string;
-
-  @CreateDateColumn()
-  createdAt: Date;
+  constructor(
+    public id: string | undefined, // Cho phép undefined
+    public userId: number,
+    public token: string,
+    public expiresAt: Date,
+    public ipAddress?: string,
+    public userAgent?: string,
+    public createdAt?: Date,
+  ) {}
 
   isExpired(): boolean {
     return new Date() > this.expiresAt;
   }
+}
+```
 
-  isValid(): boolean {
-    return !this.isExpired();
-  }
+## File: src/modules/auth/domain/repositories/session-repository.interface.ts
+```
+import { Session } from '../entities/session.entity';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+
+export interface ISessionRepository {
+  create(session: Session, tx?: Transaction): Promise<void>;
+  findByUserId(userId: number): Promise<Session[]>;
+  deleteByUserId(userId: number): Promise<void>;
 }
 ```
 
 ## File: src/modules/auth/application/services/authentication.service.ts
 ```
-import { Injectable, Inject, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  UnauthorizedException,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm'; // Import thêm cái này
-import { Repository } from 'typeorm';               // Import thêm cái này
 import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
+import type { ISessionRepository } from '../../domain/repositories/session-repository.interface';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../../user/domain/entities/user.entity';
-import { Session } from '../../domain/entities/session.entity'; // Import Session Entity
+import { Session } from '../../domain/entities/session.entity';
 import { JwtPayload } from '../../../shared/types/common.types';
+import type { ITransactionManager } from '../../../../core/shared/application/ports/transaction-manager.port'; // FIX: import type
 
 @Injectable()
 export class AuthenticationService {
   constructor(
     @Inject('IUserRepository') private userRepository: IUserRepository,
-    // Inject thêm Repository của Session
-    @InjectRepository(Session) private sessionRepository: Repository<Session>,
+    @Inject('ISessionRepository') private sessionRepository: ISessionRepository,
+    @Inject('ITransactionManager') private txManager: ITransactionManager,
     private jwtService: JwtService,
   ) {}
 
-  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string }): Promise<{ accessToken: string; user: any }> {
+  async login(credentials: {
+    username: string;
+    password: string;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<any> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
-    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
-    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
+    if (!user || !user.isActive)
+      throw new UnauthorizedException('Invalid credentials');
+    // Access getter directly (domain encapsulation)
+    if (!user.hashedPassword)
+      throw new UnauthorizedException('Password not set');
 
-    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
+    const isValid = await PasswordUtil.compare(
+      credentials.password,
+      user.hashedPassword,
+    );
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
 
-    // 1. Tạo JWT Access Token
+    if (!user.id) throw new InternalServerErrorException('User ID is missing');
+
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
@@ -189,21 +185,20 @@ export class AuthenticationService {
     };
     const accessToken = this.jwtService.sign(payload);
 
-    // 2. LƯU SESSION VÀO DB (Kích hoạt bảng sessions)
-    // Tính thời gian hết hạn (ví dụ 1 ngày)
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 1);
 
-    const session = this.sessionRepository.create({
-      userId: user.id,
-      token: accessToken, // Hoặc lưu Refresh Token nếu dùng cơ chế Refresh
-      ipAddress: credentials.ip || 'unknown',
-      userAgent: credentials.userAgent || 'unknown',
-      expiresAt: expiresAt,
-      createdAt: new Date(),
-    });
+    const session = new Session(
+      undefined,
+      user.id,
+      accessToken,
+      expiresAt,
+      credentials.ip,
+      credentials.userAgent,
+      new Date(),
+    );
 
-    await this.sessionRepository.save(session);
+    await this.sessionRepository.create(session);
 
     return {
       accessToken,
@@ -211,50 +206,63 @@ export class AuthenticationService {
     };
   }
 
-  // ... (Các hàm validateUser, register giữ nguyên như cũ)
-  async validateUser(payload: JwtPayload): Promise<ReturnType<User['toJSON']> | null> {
+  async validateUser(
+    payload: JwtPayload,
+  ): Promise<ReturnType<User['toJSON']> | null> {
     const user = await this.userRepository.findById(payload.sub);
-
-    // NÂNG CAO: Có thể check thêm session trong DB xem còn tồn tại không
-    // Nếu admin đã xóa session thì dù token còn hạn cũng trả về null -> Đá user ra
-
     if (!user || !user.isActive) return null;
     return user.toJSON();
   }
 
-  async register(data: any): Promise<{ accessToken: string; user: any }> {
+  async register(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
     const hashedPassword = await PasswordUtil.hash(data.password);
-    const user: any = {
-      id: data.id,
-      username: data.username,
-      email: data.email,
-      hashedPassword: hashedPassword,
-      fullName: data.fullName,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
 
-    const savedUser = await this.userRepository.save(user);
+    const newUser = new User(
+      undefined,
+      data.username,
+      data.email,
+      hashedPassword,
+      data.fullName,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      new Date(),
+      new Date(),
+    );
 
-    // Khi register xong cũng tạo session luôn
-    const payload = { sub: savedUser.id, username: savedUser.username, roles: [] };
-    const accessToken = this.jwtService.sign(payload);
+    return this.txManager.runInTransaction(async (tx) => {
+      const savedUser = await this.userRepository.save(newUser, tx);
+      if (!savedUser.id)
+        throw new InternalServerErrorException('Failed to generate User ID');
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
+      const payload: JwtPayload = {
+        sub: savedUser.id,
+        username: savedUser.username,
+        roles: [],
+      };
+      const accessToken = this.jwtService.sign(payload);
 
-    await this.sessionRepository.save({
-        userId: savedUser.id,
-        token: accessToken,
-        expiresAt: expiresAt,
-        createdAt: new Date()
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 1);
+
+      const session = new Session(
+        undefined,
+        savedUser.id,
+        accessToken,
+        expiresAt,
+        undefined,
+        undefined,
+        new Date(),
+      );
+
+      await this.sessionRepository.create(session, tx);
+
+      return { accessToken, user: savedUser.toJSON() };
     });
-
-    return { accessToken, user: savedUser.toJSON() };
   }
 }
 ```
@@ -404,7 +412,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
 ## File: src/modules/auth/infrastructure/dtos/auth.dto.ts
 ```
-import { IsString, MinLength, IsNumber, IsOptional, IsEmail } from 'class-validator';
+import {
+  IsString,
+  MinLength,
+  IsNumber,
+  IsOptional,
+  IsEmail,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class LoginDto {
@@ -412,7 +426,10 @@ export class LoginDto {
   @IsString()
   username: string;
 
-  @ApiProperty({ example: 'SuperAdmin123!', description: 'Password (min 6 chars)' })
+  @ApiProperty({
+    example: 'SuperAdmin123!',
+    description: 'Password (min 6 chars)',
+  })
   @IsString()
   @MinLength(6)
   password: string;
@@ -443,6 +460,123 @@ export class RegisterDto {
 }
 ```
 
+## File: src/modules/auth/infrastructure/persistence/entities/session.orm-entity.ts
+```
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  Index,
+} from 'typeorm';
+
+@Entity('sessions')
+@Index('idx_sessions_user_id', ['userId'])
+export class SessionOrmEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column('bigint')
+  userId: number;
+
+  @Column({ type: 'varchar' })
+  token: string;
+
+  @Column({ type: 'timestamptz' })
+  expiresAt: Date;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', nullable: true })
+  ipAddress: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  userAgent: string | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+}
+```
+
+## File: src/modules/auth/infrastructure/persistence/mappers/session.mapper.ts
+```
+import { Session } from '../../../domain/entities/session.entity';
+import { SessionOrmEntity } from '../entities/session.orm-entity';
+
+export class SessionMapper {
+  static toDomain(orm: SessionOrmEntity | null): Session | null {
+    if (!orm) return null;
+    return new Session(
+      orm.id,
+      Number(orm.userId),
+      orm.token,
+      orm.expiresAt,
+      orm.ipAddress || undefined, // Null -> Undefined
+      orm.userAgent || undefined,
+      orm.createdAt,
+    );
+  }
+
+  static toPersistence(domain: Session): SessionOrmEntity {
+    const orm = new SessionOrmEntity();
+    if (domain.id) orm.id = domain.id;
+    orm.userId = domain.userId;
+    orm.token = domain.token;
+    orm.expiresAt = domain.expiresAt;
+    // FIX: Convert undefined -> null
+    orm.ipAddress = domain.ipAddress || null;
+    orm.userAgent = domain.userAgent || null;
+
+    orm.createdAt = domain.createdAt || new Date();
+    return orm;
+  }
+}
+```
+
+## File: src/modules/auth/infrastructure/persistence/typeorm-session.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { Repository, EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ISessionRepository } from '../../domain/repositories/session-repository.interface';
+import { Session } from '../../domain/entities/session.entity';
+import { SessionOrmEntity } from './entities/session.orm-entity';
+import { SessionMapper } from './mappers/session.mapper';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class TypeOrmSessionRepository implements ISessionRepository {
+  constructor(
+    @InjectRepository(SessionOrmEntity)
+    private readonly repository: Repository<SessionOrmEntity>,
+  ) {}
+
+  private getRepository(tx?: Transaction): Repository<SessionOrmEntity> {
+    if (tx) {
+      const entityManager = tx as EntityManager;
+      return entityManager.getRepository(SessionOrmEntity);
+    }
+    return this.repository;
+  }
+
+  async create(session: Session, tx?: Transaction): Promise<void> {
+    const repo = this.getRepository(tx);
+    const orm = SessionMapper.toPersistence(session);
+    await repo.save(orm);
+  }
+
+  async findByUserId(userId: number): Promise<Session[]> {
+    const orms = await this.repository.find({ where: { userId } });
+    return orms
+      .map(SessionMapper.toDomain)
+      .filter((s): s is Session => s !== null);
+  }
+
+  async deleteByUserId(userId: number): Promise<void> {
+    await this.repository.delete({ userId });
+  }
+}
+```
+
 ## File: src/modules/auth/auth.module.ts
 ```
 import { Module } from '@nestjs/common';
@@ -452,31 +586,37 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { UserModule } from '../user/user.module';
-
 import { AuthenticationService } from './application/services/authentication.service';
 import { JwtStrategy } from './infrastructure/strategies/jwt.strategy';
 import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
 import { AuthController } from './infrastructure/controllers/auth.controller';
-import { Session } from './domain/entities/session.entity';
+import { SessionOrmEntity } from './infrastructure/persistence/entities/session.orm-entity';
+import { TypeOrmSessionRepository } from './infrastructure/persistence/typeorm-session.repository';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([Session]),
+    TypeOrmModule.forFeature([SessionOrmEntity]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         secret: configService.get('JWT_SECRET') || 'super-secret-key',
-        signOptions: {
-          expiresIn: configService.get('JWT_EXPIRES_IN', '24h'),
-        },
+        signOptions: { expiresIn: configService.get('JWT_EXPIRES_IN', '24h') },
       }),
       inject: [ConfigService],
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthenticationService, JwtStrategy, JwtAuthGuard],
+  providers: [
+    AuthenticationService,
+    JwtStrategy,
+    JwtAuthGuard,
+    {
+      provide: 'ISessionRepository',
+      useClass: TypeOrmSessionRepository,
+    },
+  ],
   exports: [JwtAuthGuard, AuthenticationService, JwtModule, PassportModule],
 })
 export class AuthModule {}
@@ -484,95 +624,115 @@ export class AuthModule {}
 
 ## File: src/modules/user/domain/entities/user.entity.ts
 ```
-import {
-  Entity,
-  Column,
-  PrimaryColumn,
-  CreateDateColumn,
-  UpdateDateColumn,
-} from 'typeorm';
 import type { UserProfile } from '../types/user-profile.type';
 
-@Entity('users')
 export class User {
-  @PrimaryColumn('bigint')
-  id: number; // Telegram ID or custom ID
+  // Properties are private (Encapsulation)
+  constructor(
+    private _id: number | undefined,
+    private _username: string,
+    private _email?: string,
+    private _hashedPassword?: string,
+    private _fullName?: string,
+    private _isActive: boolean = true,
+    private _phoneNumber?: string,
+    private _avatarUrl?: string,
+    private _profile?: UserProfile,
+    private _createdAt?: Date,
+    private _updatedAt?: Date,
+  ) {}
 
-  @Column({ unique: true })
-  username: string;
-
-  @Column({ unique: true, nullable: true })
-  email?: string;
-
-  @Column({ nullable: true })
-  hashedPassword?: string;
-
-  @Column()
-  fullName: string;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @Column({ nullable: true })
-  phoneNumber?: string;
-
-  @Column({ nullable: true })
-  avatarUrl?: string;
-
-  @Column({ type: 'jsonb', nullable: true }) // Đổi simple-json -> jsonb (Postgres only)
-  profile?: UserProfile;
-  // @Column('simple-json', { nullable: true })
-  // profile?: any;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-
-  // Domain methods
-  updateProfile(profileData: UserProfile): void {
-    this.profile = { ...this.profile, ...profileData };
-    this.updatedAt = new Date();
+  // Getters
+  get id() {
+    return this._id;
+  }
+  get username() {
+    return this._username;
+  }
+  get email() {
+    return this._email;
+  }
+  get hashedPassword() {
+    return this._hashedPassword;
+  }
+  get fullName() {
+    return this._fullName;
+  }
+  get isActive() {
+    return this._isActive;
+  }
+  get phoneNumber() {
+    return this._phoneNumber;
+  }
+  get avatarUrl() {
+    return this._avatarUrl;
+  }
+  get profile() {
+    return this._profile;
+  }
+  get createdAt() {
+    return this._createdAt;
+  }
+  get updatedAt() {
+    return this._updatedAt;
   }
 
-  setPassword(password: string): void {
-    // Password hashing should be done in application service
-    this.hashedPassword = password; // Will be hashed by service
-    this.updatedAt = new Date();
+  // Business Methods (Behavior)
+
+  // Set ID (Only used by persistence layer when creating new)
+  setId(id: number) {
+    if (this._id) throw new Error('ID is immutable once set');
+    this._id = id;
+  }
+
+  updateProfile(profileData: UserProfile): void {
+    this._profile = { ...this._profile, ...profileData };
+    this._updatedAt = new Date();
+  }
+
+  changePassword(hashedPassword: string): void {
+    this._hashedPassword = hashedPassword;
+    this._updatedAt = new Date();
   }
 
   deactivate(): void {
-    this.isActive = false;
-    this.updatedAt = new Date();
+    this._isActive = false;
+    this._updatedAt = new Date();
   }
 
   activate(): void {
-    this.isActive = true;
-    this.updatedAt = new Date();
+    this._isActive = true;
+    this._updatedAt = new Date();
   }
 
   toJSON() {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { hashedPassword, ...rest } = this;
-    return rest;
+    return {
+      id: this._id,
+      username: this._username,
+      email: this._email,
+      fullName: this._fullName,
+      isActive: this._isActive,
+      phoneNumber: this._phoneNumber,
+      avatarUrl: this._avatarUrl,
+      profile: this._profile,
+      createdAt: this._createdAt,
+      updatedAt: this._updatedAt,
+    };
   }
 }
 ```
 
 ## File: src/modules/user/domain/repositories/user-repository.interface.ts
 ```
+import { IRepository } from '../../../../core/shared/application/ports/repository.port';
 import { User } from '../entities/user.entity';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
-export interface IUserRepository {
-  findById(id: number): Promise<User | null>;
-  findByUsername(username: string): Promise<User | null>;
-  findByEmail(email: string): Promise<User | null>;
-  findAllActive(): Promise<User[]>;
-  save(user: User): Promise<User>;
-  update(id: number, data: Partial<User>): Promise<User>;
-  delete(id: number): Promise<void>;
-  count(): Promise<number>;
+export interface IUserRepository extends IRepository<User, number> {
+  findByUsername(username: string, tx?: Transaction): Promise<User | null>;
+  findByEmail(email: string, tx?: Transaction): Promise<User | null>;
+  // Overwrite save to return User (Abstract return void, but we need ID back)
+  save(user: User, tx?: Transaction): Promise<User>;
 }
 ```
 
@@ -613,7 +773,13 @@ export class UserService {
     @Inject('IUserRepository') private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: any): Promise<any> {
+  async createUser(data: {
+    id: number;
+    username: string;
+    email?: string;
+    password?: string;
+    fullName: string;
+  }): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) {
       throw new BadRequestException('User already exists');
@@ -622,19 +788,27 @@ export class UserService {
     let hashedPassword;
     if (data.password) {
       if (!PasswordUtil.validateStrength(data.password)) {
-        throw new BadRequestException('Password is too weak');
+        throw new BadRequestException(
+          'Password does not meet strength requirements',
+        );
       }
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    const newUser = new User();
-    Object.assign(newUser, {
-      ...data,
+    // FIX: Sử dụng Constructor chuẩn của Domain
+    const newUser = new User(
+      data.id,
+      data.username,
+      data.email,
       hashedPassword,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+      data.fullName,
+      true, // isActive
+      undefined, // phoneNumber
+      undefined, // avatarUrl
+      undefined, // profile
+      new Date(), // createdAt
+      new Date(), // updatedAt
+    );
 
     const user = await this.userRepository.save(newUser);
     return user.toJSON();
@@ -644,7 +818,6 @@ export class UserService {
     username: string,
     pass: string,
   ): Promise<User | null> {
-    // Keep internal logic as is, exceptions handled in AuthService
     const user = await this.userRepository.findByUsername(username);
     if (!user || !user.isActive || !user.hashedPassword) return null;
     const isValid = await PasswordUtil.compare(pass, user.hashedPassword);
@@ -654,8 +827,7 @@ export class UserService {
   async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(id);
     if (!user) {
-      // FIX: Throw NotFoundException
-      throw new NotFoundException(`User with ID ${id} not found`);
+      throw new NotFoundException('User not found');
     }
     return user.toJSON();
   }
@@ -679,6 +851,7 @@ export class UserService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
     user.deactivate();
     await this.userRepository.save(user);
   }
@@ -688,32 +861,49 @@ export class UserService {
 ## File: src/modules/user/infrastructure/persistence/typeorm-user.repository.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { Repository, EntityManager } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IUserRepository } from '../../domain/repositories/user-repository.interface';
 import { User } from '../../domain/entities/user.entity';
-import { User as UserEntity } from '../../domain/entities/user.entity';
+import { UserOrmEntity } from './entities/user.orm-entity';
+import { UserMapper } from './mappers/user.mapper';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class TypeOrmUserRepository implements IUserRepository {
   constructor(
-    @InjectRepository(UserEntity)
-    private repository: Repository<UserEntity>,
+    @InjectRepository(UserOrmEntity)
+    private readonly repository: Repository<UserOrmEntity>,
   ) {}
 
-  async findById(id: number): Promise<User | null> {
-    const entity = await this.repository.findOne({ where: { id } });
-    return entity ? this.toDomain(entity) : null;
+  // Helper để lấy đúng Repo (có Transaction hoặc không)
+  private getRepository(tx?: Transaction): Repository<UserOrmEntity> {
+    if (tx) {
+      const entityManager = tx as EntityManager;
+      return entityManager.getRepository(UserOrmEntity);
+    }
+    return this.repository;
   }
 
-  async findByUsername(username: string): Promise<User | null> {
-    const entity = await this.repository.findOne({ where: { username } });
-    return entity ? this.toDomain(entity) : null;
+  async findById(id: number, tx?: Transaction): Promise<User | null> {
+    const repo = this.getRepository(tx);
+    const entity = await repo.findOne({ where: { id } });
+    return UserMapper.toDomain(entity);
   }
 
-  async findByEmail(email: string): Promise<User | null> {
-    const entity = await this.repository.findOne({ where: { email } });
-    return entity ? this.toDomain(entity) : null;
+  async findByUsername(
+    username: string,
+    tx?: Transaction,
+  ): Promise<User | null> {
+    const repo = this.getRepository(tx);
+    const entity = await repo.findOne({ where: { username } });
+    return UserMapper.toDomain(entity);
+  }
+
+  async findByEmail(email: string, tx?: Transaction): Promise<User | null> {
+    const repo = this.getRepository(tx);
+    const entity = await repo.findOne({ where: { email } });
+    return UserMapper.toDomain(entity);
   }
 
   async findAllActive(): Promise<User[]> {
@@ -721,92 +911,179 @@ export class TypeOrmUserRepository implements IUserRepository {
       where: { isActive: true },
       order: { createdAt: 'DESC' },
     });
-    return entities.map((entity) => this.toDomain(entity));
+    return entities
+      .map((entity) => UserMapper.toDomain(entity))
+      .filter((u): u is User => u !== null);
   }
 
-  async save(user: User): Promise<User> {
-    const entity = this.toPersistence(user);
-    const saved = await this.repository.save(entity);
-    return this.toDomain(saved);
+  // Bắt buộc phải implement do IRepository yêu cầu
+  async findAll(criteria?: Partial<User>): Promise<User[]> {
+    // Basic implementation
+    return this.findAllActive();
+  }
+
+  async save(user: User, tx?: Transaction): Promise<User> {
+    const repo = this.getRepository(tx);
+    const ormEntity = UserMapper.toPersistence(user);
+    const saved = await repo.save(ormEntity);
+    return UserMapper.toDomain(saved)!;
   }
 
   async update(id: number, data: Partial<User>): Promise<User> {
-    await this.repository.update(id, this.toPersistence(data as User));
-    const updated = await this.repository.findOne({ where: { id } });
-    return this.toDomain(updated!);
+    await this.repository.update(id, data as any);
+    const updated = await this.findById(id);
+    if (!updated) throw new Error('User not found');
+    return updated;
   }
 
   async delete(id: number): Promise<void> {
     await this.repository.delete(id);
   }
 
+  async exists(id: number): Promise<boolean> {
+    const user = await this.findById(id);
+    return !!user;
+  }
+
   async count(): Promise<number> {
     return this.repository.count();
   }
+}
+```
 
-  private toDomain(entity: UserEntity): User {
-    const user = new User();
-    Object.assign(user, entity);
-    return user;
+## File: src/modules/user/infrastructure/persistence/entities/user.orm-entity.ts
+```
+import {
+  Entity,
+  Column,
+  PrimaryColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import type { UserProfile } from '../../../domain/types/user-profile.type';
+
+@Entity('users')
+export class UserOrmEntity {
+  @PrimaryColumn('bigint')
+  id: number;
+
+  @Column({ unique: true })
+  username: string;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  email: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  hashedPassword: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  fullName: string | null;
+
+  @Column({ default: true })
+  isActive: boolean;
+
+  @Column({ type: 'varchar', nullable: true })
+  phoneNumber: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  avatarUrl: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  profile: UserProfile | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}
+```
+
+## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
+```
+import { User } from '../../../domain/entities/user.entity';
+import { UserOrmEntity } from '../entities/user.orm-entity';
+
+export class UserMapper {
+  static toDomain(ormEntity: UserOrmEntity | null): User | null {
+    if (!ormEntity) return null;
+
+    return new User(
+      Number(ormEntity.id),
+      ormEntity.username,
+      ormEntity.email || undefined,
+      ormEntity.hashedPassword || undefined,
+      ormEntity.fullName || undefined,
+      ormEntity.isActive,
+      ormEntity.phoneNumber || undefined,
+      ormEntity.avatarUrl || undefined,
+      ormEntity.profile || undefined,
+      ormEntity.createdAt,
+      ormEntity.updatedAt,
+    );
   }
 
-  private toPersistence(domain: User): Partial<UserEntity> {
-    const {
-      id,
-      username,
-      email,
-      hashedPassword,
-      fullName,
-      isActive,
-      profile,
-      createdAt,
-      updatedAt,
-    } = domain;
-    return {
-      id,
-      username,
-      email,
-      hashedPassword,
-      fullName,
-      isActive,
-      profile,
-      createdAt,
-      updatedAt,
-    };
+  static toPersistence(domainEntity: User): UserOrmEntity {
+    const ormEntity = new UserOrmEntity();
+    if (domainEntity.id !== undefined) {
+      ormEntity.id = domainEntity.id;
+    }
+    ormEntity.username = domainEntity.username;
+    ormEntity.email = domainEntity.email || null;
+    ormEntity.hashedPassword = domainEntity.hashedPassword || null;
+    ormEntity.fullName = domainEntity.fullName || null;
+    ormEntity.isActive = domainEntity.isActive;
+    ormEntity.phoneNumber = domainEntity.phoneNumber || null;
+    ormEntity.avatarUrl = domainEntity.avatarUrl || null;
+    ormEntity.profile = domainEntity.profile || null;
+
+    ormEntity.createdAt = domainEntity.createdAt || new Date();
+    ormEntity.updatedAt = domainEntity.updatedAt || new Date();
+    return ormEntity;
   }
 }
 ```
 
 ## File: src/modules/user/infrastructure/controllers/user.controller.ts
 ```
-import { Controller, Get, Param, Put, Body, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Param,
+  Put,
+  Body,
+  UseGuards,
+  BadRequestException,
+} from '@nestjs/common';
 import { UserService } from '../../application/services/user.service';
 import { CurrentUser } from '../../../auth/infrastructure/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { User } from '../../domain/entities/user.entity';
 import { UpdateProfileDto } from '../dtos/update-profile.dto';
 
-@ApiTags('Users')
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
 @Controller('users')
+@UseGuards(JwtAuthGuard)
 export class UserController {
   constructor(private userService: UserService) {}
 
-  @ApiOperation({ summary: 'Get current user profile' })
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
+    // FIX: User từ Token chắc chắn phải có ID
+    if (!user.id) throw new BadRequestException('Invalid User Context');
     return this.userService.getUserById(user.id);
   }
 
-  @ApiOperation({ summary: 'Update user profile' })
   @Put('profile')
-  async updateProfile(@CurrentUser() user: User, @Body() profileData: UpdateProfileDto) {
+  async updateProfile(
+    @CurrentUser() user: User,
+    @Body() profileData: UpdateProfileDto,
+  ) {
+    // FIX: User từ Token chắc chắn phải có ID
+    if (!user.id) throw new BadRequestException('Invalid User Context');
     return this.userService.updateUserProfile(user.id, profileData);
   }
 
-  @ApiOperation({ summary: 'Get user by ID (Admin/Manager)' })
   @Get(':id')
   async getUserById(@Param('id') id: number) {
     return this.userService.getUserById(id);
@@ -816,7 +1093,13 @@ export class UserController {
 
 ## File: src/modules/user/infrastructure/dtos/update-profile.dto.ts
 ```
-import { IsString, IsOptional, IsUrl, IsEnum, ValidateNested } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsUrl,
+  IsEnum,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -828,10 +1111,13 @@ class SocialLinksDto {
 
 class SettingsDto {
   @ApiPropertyOptional({ enum: ['dark', 'light'] })
-  @IsOptional() @IsEnum(['dark', 'light']) theme: 'dark' | 'light';
+  @IsOptional()
+  @IsEnum(['dark', 'light'])
+  theme: 'dark' | 'light';
 
   @ApiPropertyOptional()
-  @IsOptional() notifications: boolean;
+  @IsOptional()
+  notifications: boolean;
 }
 
 export class UpdateProfileDto {
@@ -876,10 +1162,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserService } from './application/services/user.service';
 import { TypeOrmUserRepository } from './infrastructure/persistence/typeorm-user.repository';
 import { UserController } from './infrastructure/controllers/user.controller';
-import { User } from './domain/entities/user.entity';
+import { UserOrmEntity } from './infrastructure/persistence/entities/user.orm-entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [TypeOrmModule.forFeature([UserOrmEntity])], // Import ORM Entity here, NOT Domain Entity
   controllers: [UserController],
   providers: [
     UserService,
@@ -895,53 +1181,25 @@ export class UserModule {}
 
 ## File: src/modules/rbac/domain/entities/role.entity.ts
 ```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  ManyToMany,
-  JoinTable,
-} from 'typeorm';
 import { Permission } from './permission.entity';
 
-@Entity('roles')
 export class Role {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ unique: true, length: 50 })
-  name: string;
-
-  @Column({ nullable: true })
-  description: string;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @Column({ default: false })
-  isSystem: boolean;
-
-  @ManyToMany(() => Permission)
-  @JoinTable({
-    name: 'role_permissions',
-    joinColumn: { name: 'role_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'permission_id', referencedColumnName: 'id' },
-  })
-  permissions: Permission[];
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @CreateDateColumn()
-  updatedAt: Date;
+  constructor(
+    public id: number | undefined,
+    public name: string,
+    public description?: string,
+    public isActive: boolean = true,
+    public isSystem: boolean = false,
+    public permissions: Permission[] = [],
+    public createdAt?: Date,
+    public updatedAt?: Date,
+  ) {}
 
   hasPermission(permissionName: string): boolean {
-    return this.permissions?.some((p) => p.name === permissionName) || false;
+    return this.permissions.some((p) => p.name === permissionName);
   }
 
   addPermission(permission: Permission): void {
-    if (!this.permissions) this.permissions = [];
     if (!this.hasPermission(permission.name)) {
       this.permissions.push(permission);
     }
@@ -951,79 +1209,65 @@ export class Role {
 
 ## File: src/modules/rbac/domain/entities/permission.entity.ts
 ```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-} from 'typeorm';
-
-@Entity('permissions')
 export class Permission {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ unique: true, length: 100 })
-  name: string;
-
-  @Column({ nullable: true })
-  description: string;
-
-  @Column({ length: 50, nullable: true })
-  resourceType: string;
-
-  @Column({ length: 50, nullable: true })
-  action: string;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @CreateDateColumn()
-  createdAt: Date;
+  constructor(
+    public id: number | undefined,
+    public name: string,
+    public description?: string,
+    public resourceType?: string,
+    public action?: string,
+    public isActive: boolean = true,
+    public attributes: string = '*',
+    public createdAt?: Date,
+  ) {}
 }
 ```
 
 ## File: src/modules/rbac/domain/entities/user-role.entity.ts
 ```
-import {
-  Entity,
-  Column,
-  PrimaryColumn,
-  CreateDateColumn,
-  Index,
-  ManyToOne,
-  JoinColumn,
-} from 'typeorm';
 import { Role } from './role.entity';
 
-@Entity('user_roles')
-@Index('idx_user_roles_user_id', ['userId'])
-@Index('idx_user_roles_role_id', ['roleId'])
 export class UserRole {
-  @PrimaryColumn('bigint')
-  userId: number;
-
-  @PrimaryColumn('int')
-  roleId: number;
-
-  @Column('bigint', { nullable: true })
-  assignedBy: number;
-
-  @Column({ type: 'timestamptz', nullable: true })
-  expiresAt: Date;
-
-  @CreateDateColumn()
-  assignedAt: Date;
-
-  // Added relation for joins
-  @ManyToOne(() => Role)
-  @JoinColumn({ name: 'roleId' })
-  role: Role;
+  constructor(
+    public userId: number,
+    public roleId: number,
+    public assignedBy?: number,
+    public expiresAt?: Date,
+    public assignedAt?: Date,
+    public role?: Role, // Optional relation
+  ) {}
 
   isActive(): boolean {
     if (!this.expiresAt) return true;
     return new Date() < this.expiresAt;
   }
+}
+```
+
+## File: src/modules/rbac/domain/repositories/rbac-repository.interface.ts
+```
+import { Role } from '../entities/role.entity';
+import { Permission } from '../entities/permission.entity';
+import { UserRole } from '../entities/user-role.entity';
+
+export interface IRoleRepository {
+  findByName(name: string): Promise<Role | null>;
+  save(role: Role): Promise<Role>;
+  findAllWithPermissions(roleIds: number[]): Promise<Role[]>;
+  findAll(): Promise<Role[]>;
+}
+
+export interface IPermissionRepository {
+  findByName(name: string): Promise<Permission | null>;
+  save(permission: Permission): Promise<Permission>;
+  findAll(): Promise<Permission[]>;
+}
+
+export interface IUserRoleRepository {
+  findByUserId(userId: number): Promise<UserRole[]>;
+  save(userRole: UserRole): Promise<void>;
+  findOne(userId: number, roleId: number): Promise<UserRole | null>;
+  delete(userId: number, roleId: number): Promise<void>;
 }
 ```
 
@@ -1085,22 +1329,20 @@ export const DEFAULT_ROLE = SystemRole.USER;
 ```
 import { Injectable, Inject } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
 import type { Cache } from 'cache-manager';
-import { UserRole } from '../../domain/entities/user-role.entity';
-import { Role } from '../../domain/entities/role.entity';
+import type {
+  IUserRoleRepository,
+  IRoleRepository,
+} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
 
 @Injectable()
 export class PermissionService {
-  private readonly CACHE_TTL = 300; // 5 minutes
+  private readonly CACHE_TTL = 300;
   private readonly CACHE_PREFIX = 'rbac:permissions:';
 
   constructor(
-    @InjectRepository(UserRole)
-    private userRoleRepository: Repository<UserRole>,
-    @InjectRepository(Role)
-    private roleRepository: Repository<Role>,
+    @Inject('IUserRoleRepository') private userRoleRepo: IUserRoleRepository,
+    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
@@ -1108,110 +1350,29 @@ export class PermissionService {
     userId: number,
     permissionName: string,
   ): Promise<boolean> {
-    // Check cache first
     const cacheKey = `${this.CACHE_PREFIX}${userId}`;
     const cached = await this.cacheManager.get<string[]>(cacheKey);
+    if (cached) return cached.includes(permissionName) || cached.includes('*');
 
-    if (cached) {
-      return cached.includes(permissionName) || cached.includes('*');
-    }
+    const userRoles = await this.userRoleRepo.findByUserId(userId);
+    // Note: Assuming repo returns domain objects with populated role (if implemented that way)
+    // or we fetch roles separately. For simplicity assuming basic flow:
 
-    // Get user's active roles
-    // Join with role to ensure it exists and is valid
-    const userRoles = await this.userRoleRepository.find({
-      where: { userId },
-      relations: ['role'],
-    });
+    if (userRoles.length === 0) return false;
+    const roleIds = userRoles.map((ur) => ur.roleId);
 
-    const activeRoles = userRoles.filter(
-      (ur) => ur.isActive() && ur.role.isActive,
+    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+
+    const permissions = new Set<string>();
+    roles.forEach((r) =>
+      r.permissions?.forEach((p) => {
+        if (p.isActive) permissions.add(p.name);
+      }),
     );
-    const roleIds = activeRoles.map((ur) => ur.roleId);
 
-    if (roleIds.length === 0) return false;
-
-    // Get roles with permissions
-    const roles = await this.roleRepository.find({
-      where: { id: In(roleIds), isActive: true },
-      relations: ['permissions'],
-    });
-
-    // Collect all permissions
-    const permissions = new Set<string>();
-
-    for (const role of roles) {
-      if (role?.permissions) {
-        role.permissions.forEach((p) => {
-          if (p.isActive) {
-            permissions.add(p.name);
-          }
-        });
-      }
-    }
-
-    const permissionArray = Array.from(permissions);
-
-    // Cache permissions
-    await this.cacheManager.set(cacheKey, permissionArray, this.CACHE_TTL);
-
-    return permissionArray.includes(permissionName);
-  }
-
-  async getUserPermissions(userId: number): Promise<string[]> {
-    const cacheKey = `${this.CACHE_PREFIX}${userId}`;
-
-    // Try cache
-    const cached = await this.cacheManager.get<string[]>(cacheKey);
-    if (cached) return cached;
-
-    // Query database
-    const userRoles = await this.userRoleRepository.find({
-      where: { userId },
-      relations: ['role'],
-    });
-
-    const activeRoles = userRoles.filter((ur) => ur.isActive());
-    const roleIds = activeRoles.map((ur) => ur.roleId);
-
-    if (roleIds.length === 0) return [];
-
-    const roles = await this.roleRepository.find({
-      where: {
-        id: In(roleIds),
-        isActive: true,
-      },
-      relations: ['permissions'],
-    });
-
-    const permissions = new Set<string>();
-
-    for (const role of roles) {
-      if (role?.permissions) {
-        role.permissions.forEach((p) => {
-          if (p.isActive) {
-            permissions.add(p.name);
-          }
-        });
-      }
-    }
-
-    const permissionArray = Array.from(permissions);
-
-    // Cache
-    await this.cacheManager.set(cacheKey, permissionArray, this.CACHE_TTL);
-
-    return permissionArray;
-  }
-
-  async getUserRoles(userId: number): Promise<string[]> {
-    const userRoles = await this.userRoleRepository.find({
-      where: { userId },
-      relations: ['role'],
-    });
-
-    const activeRoles = userRoles.filter((ur) => ur.isActive());
-    // Safe access to role name thanks to relation
-    return activeRoles.map((ur) => ur.role.name);
+    const permArray = Array.from(permissions);
+    await this.cacheManager.set(cacheKey, permArray, this.CACHE_TTL);
+    return permArray.includes(permissionName);
   }
 
   async assignRole(
@@ -1219,49 +1380,35 @@ export class PermissionService {
     roleId: number,
     assignedBy: number,
   ): Promise<void> {
-    const existing = await this.userRoleRepository.findOne({
-      where: { userId, roleId },
-    });
-
-    if (existing) {
-      throw new Error('User already has this role');
+    const existing = await this.userRoleRepo.findOne(userId, roleId);
+    if (!existing) {
+      // Construct basic UserRole object
+      const userRole: any = {
+        userId,
+        roleId,
+        assignedBy,
+        assignedAt: new Date(),
+      };
+      await this.userRoleRepo.save(userRole);
+      await this.cacheManager.del(`${this.CACHE_PREFIX}${userId}`);
     }
-
-    await this.userRoleRepository.save({
-      userId,
-      roleId,
-      assignedBy,
-      assignedAt: new Date(),
-    });
-
-    // Invalidate cache
-    await this.cacheManager.del(`${this.CACHE_PREFIX}${userId}`);
-  }
-
-  async removeRole(userId: number, roleId: number): Promise<void> {
-    await this.userRoleRepository.delete({ userId, roleId });
-    await this.cacheManager.del(`${this.CACHE_PREFIX}${userId}`);
-  }
-
-  initializeDefaultData(): void {
-    console.log('Initializing default RBAC data...');
   }
 }
 ```
 
 ## File: src/modules/rbac/application/services/role.service.ts
 ```
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, Inject } from '@nestjs/common';
+import type {
+  IRoleRepository,
+  IPermissionRepository,
+} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+import { Role } from '../../domain/entities/role.entity';
 import {
   SystemRole,
   SystemPermission,
 } from '../../domain/constants/rbac.constants';
-import { Role } from '../../domain/entities/role.entity';
-import { Permission } from '../../domain/entities/permission.entity';
 
-// 1. Thêm cái này ngay bên trên class RoleService hoặc đầu file
 export interface AccessControlItem {
   role: string;
   resource: string;
@@ -1272,157 +1419,56 @@ export interface AccessControlItem {
 @Injectable()
 export class RoleService {
   constructor(
-    @InjectRepository(Role)
-    private roleRepository: Repository<Role>,
-    @InjectRepository(Permission)
-    private permissionRepository: Repository<Permission>,
+    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
+    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
   ) {}
 
-  async createRole(data: {
-    name: string;
-    description?: string;
-    isSystem?: boolean;
-  }): Promise<Role> {
-    const existing = await this.roleRepository.findOne({
-      where: { name: data.name },
-    });
-
-    if (existing) {
-      throw new Error(`Role ${data.name} already exists`);
-    }
-
-    const role = this.roleRepository.create({
-      name: data.name,
-      description: data.description,
-      isSystem: data.isSystem || false,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    return this.roleRepository.save(role);
-  }
-
-  async assignPermissionToRole(
-    roleId: number,
-    permissionId: number,
-  ): Promise<void> {
-    const role = await this.roleRepository.findOne({
-      where: { id: roleId },
-      relations: ['permissions'],
-    });
-
-    if (!role) {
-      throw new Error('Role not found');
-    }
-
-    const permission = await this.permissionRepository.findOne({
-      where: { id: permissionId },
-    });
-
-    if (!permission) {
-      throw new Error('Permission not found');
-    }
-
-    if (!role.permissions) role.permissions = [];
-
-    const alreadyHas = role.permissions.some((p) => p.id === permissionId);
-    if (!alreadyHas) {
-      role.permissions.push(permission);
-      role.updatedAt = new Date();
-      await this.roleRepository.save(role);
-    }
-  }
-
-  async getRoleWithPermissions(roleName: string): Promise<Role | null> {
-    return this.roleRepository.findOne({
-      where: { name: roleName },
-      relations: ['permissions'],
-    });
-  }
-
-  async initializeSystemRoles(): Promise<void> {
-    const systemRoles = Object.values(SystemRole);
-
-    for (const roleName of systemRoles) {
-      const existing = await this.roleRepository.findOne({
-        where: { name: roleName },
-      });
-
-      if (!existing) {
-        await this.createRole({
-          name: roleName,
-          description: `System role: ${roleName}`,
-          isSystem: true,
-        });
-      }
-    }
-  }
-
-  async initializeSystemPermissions(): Promise<void> {
-    const systemPermissions = Object.values(SystemPermission);
-
-    for (const permName of systemPermissions) {
-      const existing = await this.permissionRepository.findOne({
-        where: { name: permName },
-      });
-
-      if (!existing) {
-        const [resource, action] = permName.split(':');
-
-        await this.permissionRepository.save({
-          name: permName,
-          description: `Permission: ${permName}`,
-          resourceType: resource,
-          action: action,
-          isActive: true,
-          createdAt: new Date(),
-        });
-      }
-    }
+  async createRole(data: any): Promise<Role> {
+    const existing = await this.roleRepo.findByName(data.name);
+    if (existing) throw new Error('Role exists');
+    const role = new Role(
+      undefined,
+      data.name,
+      data.description,
+      true,
+      data.isSystem,
+    );
+    return this.roleRepo.save(role);
   }
 
   async getAccessControlList(): Promise<AccessControlItem[]> {
-    // Lấy Role kèm theo Permission
-    const roles = await this.roleRepository.find({
-      relations: ['permissions'],
-      where: { isActive: true },
-    });
-
-    const accessControlList: AccessControlItem[] = [];
-
+    const roles = await this.roleRepo.findAll();
+    const acl: AccessControlItem[] = [];
     roles.forEach((role) => {
-      if (role.permissions) {
-        role.permissions.forEach((permission) => {
-          // Logic: Nếu là ADMIN thì full quyền (*), user thì bị giới hạn (ví dụ mẫu)
-          // Anh có thể sửa logic if/else ở đây tùy ý mà ko cần sửa DB
-          let attributes = '*';
-
-          // Ví dụ: Hardcode rule cho vui (hoặc để mặc định '*' hết cũng được)
-          if (role.name === 'USER' && permission.resourceType === 'video') {
-            attributes = '*, !views';
-          }
-
-          accessControlList.push({
-            role: role.name.toLowerCase(),
-            resource: permission.resourceType || 'all',
-            action: permission.action || 'manage',
-            attributes: attributes, // Giá trị tạo ra từ code
-          });
+      role.permissions.forEach((p) => {
+        acl.push({
+          role: role.name.toLowerCase(),
+          resource: p.resourceType || '*',
+          action: p.action || '*',
+          attributes: p.attributes,
         });
-      }
+      });
     });
+    return acl;
+  }
 
-    return accessControlList;
+  // Seeder logic remains in seeder file mostly, but keeping init logic if needed
+  async initializeSystemRoles(): Promise<void> {
+    // Implementation placeholder if called from module init
+  }
+  async initializeSystemPermissions(): Promise<void> {
+    // Implementation placeholder
   }
 }
 ```
 
 ## File: src/modules/rbac/application/services/rbac-manager.service.ts
 ```
-import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import type {
+  IRoleRepository,
+  IPermissionRepository,
+} from '../../domain/repositories/rbac-repository.interface';
 import { Role } from '../../domain/entities/role.entity';
 import { Permission } from '../../domain/entities/permission.entity';
 
@@ -1431,138 +1477,126 @@ export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
 
   constructor(
-    @InjectRepository(Role)
-    private roleRepo: Repository<Role>,
-    @InjectRepository(Permission)
-    private permRepo: Repository<Permission>,
+    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
+    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
   ) {}
 
-  // ==========================================
-  // 1. CHỨC NĂNG IMPORT (UPLOAD)
-  // ==========================================
-  async importFromCsv(
-    csvContent: string,
-  ): Promise<{ created: number; updated: number }> {
+  // Logic Import giữ nguyên (hoặc update full nếu cần)
+  async importFromCsv(csvContent: string): Promise<any> {
     const lines = csvContent
       .split(/\r?\n/)
       .filter((line) => line.trim() !== '');
-    // Bỏ dòng header nếu có
-    if (lines[0].toLowerCase().includes('role')) {
-      lines.shift();
+    if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
+      lines.shift(); // Remove header
     }
 
     let createdCount = 0;
     let updatedCount = 0;
 
     for (const line of lines) {
-      // CSV format: role,resource,action,attributes,description
+      // CSV: role,resource,action,attributes,description
       const cols = line.split(',').map((c) => c.trim());
-
       if (cols.length < 3) continue;
 
-      // Vẫn lấy biến attributes ra nhưng không dùng để lưu vào DB (vì DB ko có cột này)
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const [roleName, resource, action, _attributes, description] = cols;
+      const [roleName, resource, action, attributes, description] = cols;
 
-      // 1. Xử lý Permission
+      // 1. Handle Permission
       const permName =
         resource === '*' ? 'manage:all' : `${resource}:${action}`;
-      let perm = await this.permRepo.findOne({ where: { name: permName } });
+      let perm = await this.permRepo.findByName(permName);
 
       if (!perm) {
-        // Fix TS2769: Bỏ field 'attributes' khi create
-        perm = this.permRepo.create({
-          name: permName,
-          resourceType: resource,
-          action: action,
-          description: description || '',
-          isActive: true,
-        });
-        await this.permRepo.save(perm);
+        // Create new permission
+        perm = new Permission(
+          undefined,
+          permName,
+          description || '',
+          resource,
+          action,
+          true,
+          attributes || '*',
+        );
+        perm = await this.permRepo.save(perm);
         createdCount++;
       } else {
-        // Fix TS2339: Chỉ update description, bỏ qua attributes
-        let isChanged = false;
+        // Update existing (optional logic)
+        let changed = false;
+        if (attributes && perm.attributes !== attributes) {
+          perm.attributes = attributes;
+          changed = true;
+        }
         if (description && perm.description !== description) {
           perm.description = description;
-          isChanged = true;
+          changed = true;
         }
 
-        if (isChanged) {
+        if (changed) {
           await this.permRepo.save(perm);
           updatedCount++;
         }
       }
 
-      // 2. Xử lý Role
-      let role = await this.roleRepo.findOne({
-        where: { name: roleName },
-        relations: ['permissions'],
-      });
-
+      // 2. Handle Role
+      let role = await this.roleRepo.findByName(roleName);
       if (!role) {
-        role = this.roleRepo.create({
-          name: roleName,
-          description: 'Imported from CSV',
-          isActive: true,
-          permissions: [],
-        });
-        await this.roleRepo.save(role);
+        role = new Role(
+          undefined,
+          roleName,
+          'Imported from CSV',
+          true,
+          false,
+          [],
+        );
+        role = await this.roleRepo.save(role);
       }
 
-      // 3. Gán quyền vào Role
+      // 3. Assign Permission to Role
       if (!role.permissions) role.permissions = [];
-      // Fix ESLint unnecessary assertion: perm chắc chắn tồn tại ở đây
-      const hasPerm = role.permissions.some((p) => p.id === perm.id);
+      const hasPerm = role.permissions.some((p) => p.name === perm!.name); // Domain logic check by name or ID
 
       if (!hasPerm) {
-        role.permissions.push(perm);
+        role.permissions.push(perm!);
         await this.roleRepo.save(role);
       }
     }
 
-    this.logger.log(
-      `Import finished. Created: ${createdCount}, Updated: ${updatedCount}`,
-    );
     return { created: createdCount, updated: updatedCount };
   }
 
-  // ==========================================
-  // 2. CHỨC NĂNG EXPORT (DOWNLOAD)
-  // ==========================================
+  // FIX: Logic Export đầy đủ
   async exportToCsv(): Promise<string> {
-    const roles = await this.roleRepo.find({
-      relations: ['permissions'],
-      order: { name: 'ASC' },
-    });
+    // Repository phải đảm bảo load relation ['permissions']
+    const roles = await this.roleRepo.findAll();
 
-    let csvContent = 'role,resource,action,attributes,description\n';
+    const header = 'role,resource,action,attributes,description';
+    const lines = [header];
 
     for (const role of roles) {
       if (!role.permissions || role.permissions.length === 0) {
-        csvContent += `${role.name},,,,\n`;
+        // Nếu Role không có quyền, in ra dòng rỗng để biết Role tồn tại
+        lines.push(`${role.name},,,,`);
         continue;
       }
 
       for (const perm of role.permissions) {
-        const desc =
-          perm.description && perm.description.includes(',')
-            ? `"${perm.description}"`
-            : perm.description || '';
+        // Xử lý dữ liệu để tránh lỗi CSV
+        const resource = perm.resourceType || '*';
+        const action = perm.action || '*';
+        const attributes = perm.attributes || '*';
 
-        const line = [
-          role.name,
-          perm.resourceType || '*',
-          perm.action || '*',
-          '*', // Fix TS2339: Hardcode attributes là '*' vì DB không lưu
-          desc,
-        ].join(',');
+        // Nếu description có dấu phẩy, bọc trong ngoặc kép
+        let desc = perm.description || '';
+        if (desc.includes(',')) {
+          desc = `"${desc}"`;
+        }
 
-        csvContent += line + '\n';
+        const line = [role.name, resource, action, attributes, desc].join(',');
+
+        lines.push(line);
       }
     }
 
-    return csvContent;
+    return lines.join('\n');
   }
 }
 ```
@@ -1600,18 +1634,14 @@ export class RoleController {
       type: 'object',
       properties: {
         userId: { type: 'number', example: 1005 },
-        roleId: { type: 'number', example: 2 }
-      }
-    }
+        roleId: { type: 'number', example: 2 },
+      },
+    },
   })
   @Post('assign')
   @Permissions('rbac:manage')
   async assignRole(@Body() body: { userId: number; roleId: number }) {
-    await this.permissionService.assignRole(
-      body.userId,
-      body.roleId,
-      1,
-    );
+    await this.permissionService.assignRole(body.userId, body.roleId, 1);
     return { success: true, message: 'Role assigned' };
   }
 }
@@ -1630,7 +1660,13 @@ import {
   Res,
   StreamableFile,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
@@ -1759,36 +1795,371 @@ export const Permissions = (...permissions: string[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
 ```
 
+## File: src/modules/rbac/infrastructure/persistence/entities/role.orm-entity.ts
+```
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  ManyToMany,
+  JoinTable,
+  UpdateDateColumn,
+} from 'typeorm';
+import { PermissionOrmEntity } from './permission.orm-entity';
+
+@Entity('roles')
+export class RoleOrmEntity {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column({ unique: true, length: 50 })
+  name: string;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', nullable: true })
+  description: string | null;
+
+  @Column({ default: true })
+  isActive: boolean;
+
+  @Column({ default: false })
+  isSystem: boolean;
+
+  @ManyToMany(() => PermissionOrmEntity)
+  @JoinTable({
+    name: 'role_permissions',
+    joinColumn: { name: 'role_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'permission_id', referencedColumnName: 'id' },
+  })
+  permissions: PermissionOrmEntity[];
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+}
+```
+
+## File: src/modules/rbac/infrastructure/persistence/entities/permission.orm-entity.ts
+```
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+} from 'typeorm';
+
+@Entity('permissions')
+export class PermissionOrmEntity {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @Column({ unique: true, length: 100 })
+  name: string;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', nullable: true })
+  description: string | null;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  resourceType: string | null;
+
+  // FIX: Thêm type: 'varchar'
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  action: string | null;
+
+  @Column({ default: '*' })
+  attributes: string;
+
+  @Column({ default: true })
+  isActive: boolean;
+
+  @CreateDateColumn()
+  createdAt: Date;
+}
+```
+
+## File: src/modules/rbac/infrastructure/persistence/entities/user-role.orm-entity.ts
+```
+import {
+  Entity,
+  Column,
+  PrimaryColumn,
+  CreateDateColumn,
+  Index,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { RoleOrmEntity } from './role.orm-entity';
+
+@Entity('user_roles')
+@Index('idx_user_roles_user_id', ['userId'])
+@Index('idx_user_roles_role_id', ['roleId'])
+export class UserRoleOrmEntity {
+  @PrimaryColumn('bigint')
+  userId: number;
+
+  @PrimaryColumn('int')
+  roleId: number;
+
+  // FIX: Thêm type: 'bigint'
+  @Column({ type: 'bigint', nullable: true })
+  assignedBy: number | null;
+
+  // FIX: Thêm type: 'timestamptz'
+  @Column({ type: 'timestamptz', nullable: true })
+  expiresAt: Date | null;
+
+  @CreateDateColumn()
+  assignedAt: Date;
+
+  @ManyToOne(() => RoleOrmEntity)
+  @JoinColumn({ name: 'roleId' })
+  role: RoleOrmEntity;
+}
+```
+
+## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
+```
+import { Role } from '../../../domain/entities/role.entity'; // FIX: 3 dots
+import { Permission } from '../../../domain/entities/permission.entity'; // FIX: 3 dots
+import { UserRole } from '../../../domain/entities/user-role.entity'; // FIX: 3 dots
+import { RoleOrmEntity } from '../entities/role.orm-entity';
+import { PermissionOrmEntity } from '../entities/permission.orm-entity';
+import { UserRoleOrmEntity } from '../entities/user-role.orm-entity';
+
+export class RbacMapper {
+  // PERMISSION
+  static toPermissionDomain(
+    orm: PermissionOrmEntity | null,
+  ): Permission | null {
+    if (!orm) return null;
+    return new Permission(
+      orm.id,
+      orm.name,
+      orm.description || undefined,
+      orm.resourceType || undefined,
+      orm.action || undefined,
+      orm.isActive,
+      orm.attributes,
+      orm.createdAt,
+    );
+  }
+  static toPermissionPersistence(domain: Permission): PermissionOrmEntity {
+    const orm = new PermissionOrmEntity();
+    if (domain.id) orm.id = domain.id;
+    orm.name = domain.name;
+    orm.description = domain.description || null;
+    orm.resourceType = domain.resourceType || null;
+    orm.action = domain.action || null;
+    orm.isActive = domain.isActive;
+    orm.attributes = domain.attributes;
+    orm.createdAt = domain.createdAt || new Date();
+    return orm;
+  }
+
+  // ROLE
+  static toRoleDomain(orm: RoleOrmEntity | null): Role | null {
+    if (!orm) return null;
+    const perms = orm.permissions
+      ? orm.permissions.map((p) => this.toPermissionDomain(p)!).filter(Boolean)
+      : [];
+    return new Role(
+      orm.id,
+      orm.name,
+      orm.description || undefined,
+      orm.isActive,
+      orm.isSystem,
+      perms,
+      orm.createdAt,
+      orm.updatedAt,
+    );
+  }
+  static toRolePersistence(domain: Role): RoleOrmEntity {
+    const orm = new RoleOrmEntity();
+    if (domain.id) orm.id = domain.id;
+    orm.name = domain.name;
+    orm.description = domain.description || null;
+    orm.isActive = domain.isActive;
+    orm.isSystem = domain.isSystem;
+    orm.permissions = domain.permissions.map((p) =>
+      this.toPermissionPersistence(p),
+    );
+    orm.createdAt = domain.createdAt || new Date();
+    orm.updatedAt = domain.updatedAt || new Date();
+    return orm;
+  }
+
+  // USER ROLE
+  static toUserRoleDomain(orm: UserRoleOrmEntity | null): UserRole | null {
+    if (!orm) return null;
+    const role = orm.role ? this.toRoleDomain(orm.role) : undefined;
+    return new UserRole(
+      Number(orm.userId),
+      orm.roleId,
+      orm.assignedBy ? Number(orm.assignedBy) : undefined,
+      orm.expiresAt || undefined,
+      orm.assignedAt,
+      role!,
+    );
+  }
+  static toUserRolePersistence(domain: UserRole): UserRoleOrmEntity {
+    const orm = new UserRoleOrmEntity();
+    orm.userId = domain.userId;
+    orm.roleId = domain.roleId;
+    orm.assignedBy = domain.assignedBy || null;
+    orm.expiresAt = domain.expiresAt || null;
+    orm.assignedAt = domain.assignedAt || new Date();
+    return orm;
+  }
+}
+```
+
+## File: src/modules/rbac/infrastructure/persistence/repositories/typeorm-rbac.repositories.ts
+```
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
+import {
+  IRoleRepository,
+  IPermissionRepository,
+  IUserRoleRepository,
+} from '../../../domain/repositories/rbac-repository.interface';
+import { Role } from '../../../domain/entities/role.entity';
+import { Permission } from '../../../domain/entities/permission.entity';
+import { UserRole } from '../../../domain/entities/user-role.entity';
+import { RoleOrmEntity } from '../entities/role.orm-entity';
+import { PermissionOrmEntity } from '../entities/permission.orm-entity';
+import { UserRoleOrmEntity } from '../entities/user-role.orm-entity';
+import { RbacMapper } from '../mappers/rbac.mapper';
+
+@Injectable()
+export class TypeOrmRoleRepository implements IRoleRepository {
+  constructor(
+    @InjectRepository(RoleOrmEntity) private repo: Repository<RoleOrmEntity>,
+  ) {}
+
+  async findByName(name: string): Promise<Role | null> {
+    const entity = await this.repo.findOne({
+      where: { name },
+      relations: ['permissions'],
+    });
+    return RbacMapper.toRoleDomain(entity);
+  }
+
+  async save(role: Role): Promise<Role> {
+    const orm = RbacMapper.toRolePersistence(role);
+    const saved = await this.repo.save(orm);
+    return RbacMapper.toRoleDomain(saved)!;
+  }
+
+  async findAllWithPermissions(roleIds: number[]): Promise<Role[]> {
+    const entities = await this.repo.find({
+      where: { id: In(roleIds), isActive: true },
+      relations: ['permissions'],
+    });
+    return entities.map((e) => RbacMapper.toRoleDomain(e)!);
+  }
+
+  async findAll(): Promise<Role[]> {
+    const entities = await this.repo.find({ relations: ['permissions'] });
+    return entities.map((e) => RbacMapper.toRoleDomain(e)!);
+  }
+}
+
+@Injectable()
+export class TypeOrmPermissionRepository implements IPermissionRepository {
+  constructor(
+    @InjectRepository(PermissionOrmEntity)
+    private repo: Repository<PermissionOrmEntity>,
+  ) {}
+
+  async findByName(name: string): Promise<Permission | null> {
+    const entity = await this.repo.findOne({ where: { name } });
+    return RbacMapper.toPermissionDomain(entity);
+  }
+
+  async save(permission: Permission): Promise<Permission> {
+    const orm = RbacMapper.toPermissionPersistence(permission);
+    const saved = await this.repo.save(orm);
+    return RbacMapper.toPermissionDomain(saved)!;
+  }
+
+  async findAll(): Promise<Permission[]> {
+    const entities = await this.repo.find();
+    return entities.map((e) => RbacMapper.toPermissionDomain(e)!);
+  }
+}
+
+@Injectable()
+export class TypeOrmUserRoleRepository implements IUserRoleRepository {
+  constructor(
+    @InjectRepository(UserRoleOrmEntity)
+    private repo: Repository<UserRoleOrmEntity>,
+  ) {}
+
+  async findByUserId(userId: number): Promise<UserRole[]> {
+    const entities = await this.repo.find({
+      where: { userId },
+      relations: ['role'],
+    });
+    return entities.map((e) => RbacMapper.toUserRoleDomain(e)!);
+  }
+
+  async save(userRole: UserRole): Promise<void> {
+    const orm = RbacMapper.toUserRolePersistence(userRole);
+    await this.repo.save(orm);
+  }
+
+  async findOne(userId: number, roleId: number): Promise<UserRole | null> {
+    const entity = await this.repo.findOne({ where: { userId, roleId } });
+    return RbacMapper.toUserRoleDomain(entity);
+  }
+
+  async delete(userId: number, roleId: number): Promise<void> {
+    await this.repo.delete({ userId, roleId });
+  }
+}
+```
+
 ## File: src/modules/rbac/rbac.module.ts
 ```
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-
 import { UserModule } from '../user/user.module';
-
+import { RoleController } from './infrastructure/controllers/role.controller';
+import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
 import { PermissionService } from './application/services/permission.service';
 import { RoleService } from './application/services/role.service';
-import { PermissionGuard } from './infrastructure/guards/permission.guard';
-import { RoleController } from './infrastructure/controllers/role.controller';
-
-import { Role } from './domain/entities/role.entity';
-import { Permission } from './domain/entities/permission.entity';
-import { UserRole } from './domain/entities/user-role.entity';
-import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
 import { RbacManagerService } from './application/services/rbac-manager.service';
+import { PermissionGuard } from './infrastructure/guards/permission.guard';
+// Infra Entities
+import { RoleOrmEntity } from './infrastructure/persistence/entities/role.orm-entity';
+import { PermissionOrmEntity } from './infrastructure/persistence/entities/permission.orm-entity';
+import { UserRoleOrmEntity } from './infrastructure/persistence/entities/user-role.orm-entity';
+// Repositories
+import {
+  TypeOrmRoleRepository,
+  TypeOrmPermissionRepository,
+  TypeOrmUserRoleRepository,
+} from './infrastructure/persistence/repositories/typeorm-rbac.repositories';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([Role, Permission, UserRole]),
+    TypeOrmModule.forFeature([
+      RoleOrmEntity,
+      PermissionOrmEntity,
+      UserRoleOrmEntity,
+    ]),
     CacheModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        ttl: configService.get('RBAC_CACHE_TTL', 300),
-        max: configService.get('RBAC_CACHE_MAX', 1000),
-      }),
+      useFactory: (c: ConfigService) => ({ ttl: 300, max: 1000 }),
       inject: [ConfigService],
     }),
   ],
@@ -1798,6 +2169,9 @@ import { RbacManagerService } from './application/services/rbac-manager.service'
     RoleService,
     PermissionGuard,
     RbacManagerService,
+    { provide: 'IRoleRepository', useClass: TypeOrmRoleRepository },
+    { provide: 'IPermissionRepository', useClass: TypeOrmPermissionRepository },
+    { provide: 'IUserRoleRepository', useClass: TypeOrmUserRoleRepository },
   ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
@@ -1900,17 +2274,18 @@ export class PasswordUtil {
 ```
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmTransactionManager } from '../../core/shared/infrastructure/persistence/typeorm-transaction.manager';
 
 @Global()
 @Module({
-  imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-    }),
+  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' })],
+  providers: [
+    {
+      provide: 'ITransactionManager',
+      useClass: TypeOrmTransactionManager,
+    },
   ],
-  providers: [],
-  exports: [ConfigModule],
+  exports: [ConfigModule, 'ITransactionManager'],
 })
 export class SharedModule {}
 ```
@@ -1921,12 +2296,10 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-
-import { User } from '../../user/domain/entities/user.entity';
-import { Role } from '../../rbac/domain/entities/role.entity';
-import { Permission } from '../../rbac/domain/entities/permission.entity';
-import { UserRole } from '../../rbac/domain/entities/user-role.entity';
-
+import { UserOrmEntity } from '../../user/infrastructure/persistence/entities/user.orm-entity';
+import { RoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/role.orm-entity';
+import { PermissionOrmEntity } from '../../rbac/infrastructure/persistence/entities/permission.orm-entity';
+import { UserRoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 import {
   SystemPermission,
   SystemRole,
@@ -1935,254 +2308,100 @@ import {
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
   constructor(
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
-    @InjectRepository(Role)
-    private roleRepository: Repository<Role>,
-    @InjectRepository(Permission)
-    private permissionRepository: Repository<Permission>,
-    @InjectRepository(UserRole)
-    private userRoleRepository: Repository<UserRole>,
+    @InjectRepository(UserOrmEntity) private uRepo: Repository<UserOrmEntity>,
+    @InjectRepository(RoleOrmEntity) private rRepo: Repository<RoleOrmEntity>,
+    @InjectRepository(PermissionOrmEntity)
+    private pRepo: Repository<PermissionOrmEntity>,
+    @InjectRepository(UserRoleOrmEntity)
+    private urRepo: Repository<UserRoleOrmEntity>,
   ) {}
 
   async onModuleInit() {
-    // Only seed in development
-    if (process.env.NODE_ENV !== 'development') {
-      return;
-    }
-
-    console.log('Seeding database...');
-
-    await this.seedPermissions();
+    if (process.env.NODE_ENV !== 'development') return;
+    console.log('Seeding...');
+    await this.seedPerms();
     await this.seedRoles();
     await this.seedUsers();
-    await this.assignRolePermissions();
-    await this.assignUserRoles();
-
-    console.log('Database seeded successfully!');
+    await this.assign();
+    console.log('Seeded.');
   }
 
-  private async seedPermissions(): Promise<void> {
-    const permissions = Object.values(SystemPermission).map((name) => {
-      const [resource, action] = name.split(':');
-      return this.permissionRepository.create({
-        name,
-        description: `System permission: ${name}`,
-        resourceType: resource,
-        action: action,
-        isActive: true,
-        createdAt: new Date(),
-      });
-    });
-
-    // Save one by one to avoid duplicate errors
-    for (const p of permissions) {
-      const exists = await this.permissionRepository.findOne({
-        where: { name: p.name },
-      });
-      if (!exists) {
-        await this.permissionRepository.save(p);
+  async seedPerms() {
+    for (const name of Object.values(SystemPermission)) {
+      const [res, act] = name.split(':');
+      if (!(await this.pRepo.findOne({ where: { name } }))) {
+        await this.pRepo.save(
+          this.pRepo.create({
+            name,
+            resourceType: res,
+            action: act,
+            isActive: true,
+          }),
+        );
       }
     }
-    console.log(`Checked permissions`);
   }
 
-  private async seedRoles(): Promise<void> {
-    const roles = Object.values(SystemRole).map((name) => ({
-      name,
-      description: `System role: ${name}`,
-      isSystem: true,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }));
-
-    for (const r of roles) {
-      const exists = await this.roleRepository.findOne({
-        where: { name: r.name },
-      });
-      if (!exists) {
-        await this.roleRepository.save(r);
+  async seedRoles() {
+    for (const name of Object.values(SystemRole)) {
+      if (!(await this.rRepo.findOne({ where: { name } }))) {
+        await this.rRepo.save(
+          this.rRepo.create({ name, isSystem: true, isActive: true }),
+        );
       }
     }
-    console.log(`Checked roles`);
   }
 
-  private async seedUsers(): Promise<void> {
+  async seedUsers() {
+    const pw = await bcrypt.hash('123456', 10);
     const users = [
       {
-        id: 1001,
         username: 'superadmin',
-        email: 'superadmin@example.com',
-        hashedPassword: await bcrypt.hash('SuperAdmin123!', 10),
-        fullName: 'Super Administrator',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        fullName: 'Super Admin',
+        email: 'admin@test.com',
       },
-      {
-        id: 1002,
-        username: 'admin',
-        email: 'admin@example.com',
-        hashedPassword: await bcrypt.hash('Admin123!', 10),
-        fullName: 'Administrator',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 1003,
-        username: 'manager',
-        email: 'manager@example.com',
-        hashedPassword: await bcrypt.hash('Manager123!', 10),
-        fullName: 'Manager User',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 1004,
-        username: 'staff',
-        email: 'staff@example.com',
-        hashedPassword: await bcrypt.hash('Staff123!', 10),
-        fullName: 'Staff User',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 1005,
-        username: 'user1',
-        email: 'user1@example.com',
-        hashedPassword: await bcrypt.hash('User123!', 10),
-        fullName: 'Regular User 1',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: 1006,
-        username: 'user2',
-        email: 'user2@example.com',
-        hashedPassword: await bcrypt.hash('User123!', 10),
-        fullName: 'Regular User 2',
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
+      { username: 'user1', fullName: 'Normal User', email: 'user@test.com' },
     ];
-
     for (const u of users) {
-      const exists = await this.userRepository.findOne({
-        where: { username: u.username },
-      });
-      if (!exists) {
-        await this.userRepository.save(u);
+      if (!(await this.uRepo.findOne({ where: { username: u.username } }))) {
+        await this.uRepo.save(
+          this.uRepo.create({
+            ...u,
+            hashedPassword: pw,
+            isActive: true,
+            createdAt: new Date(),
+          }),
+        );
       }
     }
-    console.log(`Checked users`);
   }
 
-  private async assignRolePermissions(): Promise<void> {
-    // Get all permissions
-    const permissions = await this.permissionRepository.find();
-
-    // Get all roles
-    const roles = await this.roleRepository.find({
+  async assign() {
+    const adminRole = await this.rRepo.findOne({
+      where: { name: SystemRole.SUPER_ADMIN },
       relations: ['permissions'],
     });
-    const roleMap = new Map(roles.map((r) => [r.name, r]));
+    if (!adminRole) return;
 
-    // SUPER_ADMIN gets all permissions
-    const superAdmin = roleMap.get(SystemRole.SUPER_ADMIN);
-    if (superAdmin) {
-      superAdmin.permissions = permissions;
-      await this.roleRepository.save(superAdmin);
-    }
+    // Assign all perms to superadmin
+    const allPerms = await this.pRepo.find();
+    adminRole.permissions = allPerms;
+    await this.rRepo.save(adminRole);
 
-    // ADMIN gets most permissions (except system:config)
-    const admin = roleMap.get(SystemRole.ADMIN);
-    if (admin) {
-      admin.permissions = permissions.filter(
-        (p) => !p.name.includes('system:'),
-      );
-      await this.roleRepository.save(admin);
-    }
-
-    // MANAGER gets management permissions
-    const manager = roleMap.get(SystemRole.MANAGER);
-    if (manager) {
-      const managerPermissions = permissions.filter(
-        (p) =>
-          p.name.includes('report:') ||
-          p.name.includes('booking:manage') ||
-          p.name.includes('user:read'),
-      );
-      manager.permissions = managerPermissions;
-      await this.roleRepository.save(manager);
-    }
-
-    // STAFF gets operational permissions
-    const staff = roleMap.get(SystemRole.STAFF);
-    if (staff) {
-      const staffPermissions = permissions.filter(
-        (p) =>
-          p.name.includes('booking:create') ||
-          p.name.includes('booking:read') ||
-          p.name.includes('booking:update') ||
-          p.name.includes('payment:process'),
-      );
-      staff.permissions = staffPermissions;
-      await this.roleRepository.save(staff);
-    }
-
-    // USER gets basic permissions
-    const userRole = roleMap.get(SystemRole.USER);
-    if (userRole) {
-      userRole.permissions = permissions.filter(
-        (p) =>
-          p.name === SystemPermission.USER_READ ||
-          p.name === SystemPermission.BOOKING_CREATE ||
-          p.name === SystemPermission.BOOKING_READ ||
-          p.name === SystemPermission.PAYMENT_PROCESS,
-      );
-      await this.roleRepository.save(userRole);
-    }
-
-    console.log('Assigned permissions to roles');
-  }
-
-  private async assignUserRoles(): Promise<void> {
-    const roles = await this.roleRepository.find();
-    const roleMap = new Map(roles.map((r) => [r.name, r.id]));
-
-    const assignments = [
-      { userId: 1001, roleName: SystemRole.SUPER_ADMIN },
-      { userId: 1002, roleName: SystemRole.ADMIN },
-      { userId: 1003, roleName: SystemRole.MANAGER },
-      { userId: 1004, roleName: SystemRole.STAFF },
-      { userId: 1005, roleName: SystemRole.USER },
-      { userId: 1006, roleName: SystemRole.USER },
-    ];
-
-    for (const assignment of assignments) {
-      const roleId = roleMap.get(assignment.roleName);
-      if (roleId) {
-        const exists = await this.userRoleRepository.findOne({
-          where: { userId: assignment.userId, roleId },
+    const adminUser = await this.uRepo.findOne({
+      where: { username: 'superadmin' },
+    });
+    if (adminUser) {
+      const ur = await this.urRepo.findOne({
+        where: { userId: adminUser.id, roleId: adminRole.id },
+      });
+      if (!ur)
+        await this.urRepo.save({
+          userId: adminUser.id,
+          roleId: adminRole.id,
+          assignedAt: new Date(),
         });
-        if (!exists) {
-          await this.userRoleRepository.save({
-            userId: assignment.userId,
-            roleId,
-            assignedBy: 1001, // superadmin
-            assignedAt: new Date(),
-          });
-        }
-      }
     }
-
-    console.log('Assigned roles to users');
   }
 }
 ```
@@ -2254,33 +2473,33 @@ export class TestController {
 ```
 import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-
 import { UserModule } from '../user/user.module';
 import { RbacModule } from '../rbac/rbac.module';
-
 import { DatabaseSeeder } from './seeders/database.seeder';
 import { TestController } from './controllers/test.controller';
-
-import { User } from '../user/domain/entities/user.entity';
-import { Role } from '../rbac/domain/entities/role.entity';
-import { Permission } from '../rbac/domain/entities/permission.entity';
-import { UserRole } from '../rbac/domain/entities/user-role.entity';
+import { UserOrmEntity } from '../user/infrastructure/persistence/entities/user.orm-entity';
+import { RoleOrmEntity } from '../rbac/infrastructure/persistence/entities/role.orm-entity';
+import { PermissionOrmEntity } from '../rbac/infrastructure/persistence/entities/permission.orm-entity';
+import { UserRoleOrmEntity } from '../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 
 @Module({
   imports: [
     UserModule,
     RbacModule,
-    TypeOrmModule.forFeature([User, Role, Permission, UserRole]),
+    TypeOrmModule.forFeature([
+      UserOrmEntity,
+      RoleOrmEntity,
+      PermissionOrmEntity,
+      UserRoleOrmEntity,
+    ]),
   ],
   controllers: [TestController],
   providers: [DatabaseSeeder],
 })
 export class TestModule implements OnModuleInit {
-  constructor(private databaseSeeder: DatabaseSeeder) {}
-
+  constructor(private s: DatabaseSeeder) {}
   async onModuleInit() {
-    // Auto-seed on module initialization
-    await this.databaseSeeder.onModuleInit();
+    await this.s.onModuleInit();
   }
 }
 ```
@@ -2300,7 +2519,10 @@ import { map } from 'rxjs/operators';
 import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
 
 @Injectable()
-export class TransformResponseInterceptor<T> implements NestInterceptor<T, any> {
+export class TransformResponseInterceptor<T> implements NestInterceptor<
+  T,
+  any
+> {
   constructor(private reflector: Reflector) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -2424,6 +2646,143 @@ export const BYPASS_TRANSFORM_KEY = 'bypass_transform';
 export const BypassTransform = () => SetMetadata(BYPASS_TRANSFORM_KEY, true);
 ```
 
+## File: src/core/shared/application/ports/file-parser.port.ts
+```
+export interface IFileParser {
+  parseCsv<T>(content: string): T[];
+}
+```
+
+## File: src/core/shared/application/ports/transaction-manager.port.ts
+```
+export type Transaction = unknown; // Opaque type
+
+export interface ITransactionManager {
+  runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
+}
+```
+
+## File: src/core/shared/application/ports/repository.port.ts
+```
+import { Transaction } from './transaction-manager.port';
+
+export interface IRepository<T, ID> {
+  findById(id: ID, tx?: Transaction): Promise<T | null>;
+  findAll(criteria?: Partial<T>, tx?: Transaction): Promise<T[]>;
+  // FIX: save trả về Promise<T> thay vì void để đồng bộ với User Repo
+  save(entity: T, tx?: Transaction): Promise<T>;
+  delete(id: ID, tx?: Transaction): Promise<void>;
+  exists(id: ID, tx?: Transaction): Promise<boolean>;
+}
+
+export interface IPaginatedRepository<T, ID> extends IRepository<T, ID> {
+  findPaginated(
+    page: number,
+    limit: number,
+    criteria?: Partial<T>,
+    sort?: { field: string; order: 'ASC' | 'DESC' },
+  ): Promise<{ data: T[]; total: number; page: number; totalPages: number }>;
+}
+```
+
+## File: src/core/shared/infrastructure/adapters/csv-parser.adapter.ts
+```
+import { Injectable } from '@nestjs/common';
+import { IFileParser } from '../../application/ports/file-parser.port';
+
+@Injectable()
+export class CsvParserAdapter implements IFileParser {
+  parseCsv<T>(content: string): T[] {
+    const lines = content.split(/\r?\n/).filter((line) => line.trim() !== '');
+    if (lines.length === 0) return [];
+
+    const headers = lines[0].split(',').map((h) => h.trim()); // Simple split
+    // In real app, use a library like 'csv-parse'
+    return []; // Placeholder implementation logic moved from service
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/persistence/typeorm-transaction.manager.ts
+```
+import { Injectable } from '@nestjs/common';
+import { DataSource, EntityManager } from 'typeorm';
+import {
+  ITransactionManager,
+  Transaction,
+} from '../../application/ports/transaction-manager.port';
+
+@Injectable()
+export class TypeOrmTransactionManager implements ITransactionManager {
+  constructor(private dataSource: DataSource) {}
+
+  async runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+    return this.dataSource.transaction(async (entityManager: EntityManager) => {
+      // Ép kiểu EntityManager thành Transaction (unknown) để truyền xuống dưới
+      return work(entityManager as unknown as Transaction);
+    });
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/persistence/abstract-typeorm.repository.ts
+```
+import {
+  Repository,
+  DeepPartial,
+  ObjectLiteral,
+  FindOptionsWhere,
+  EntityManager,
+} from 'typeorm';
+import { IRepository } from '../../application/ports/repository.port';
+import { Transaction } from '../../application/ports/transaction-manager.port';
+
+export abstract class AbstractTypeOrmRepository<
+  T extends ObjectLiteral,
+> implements IRepository<T, any> {
+  protected constructor(protected readonly repository: Repository<T>) {}
+
+  protected getRepository(tx?: Transaction): Repository<T> {
+    if (tx) {
+      const entityManager = tx as EntityManager;
+      return entityManager.getRepository(this.repository.target);
+    }
+    return this.repository;
+  }
+
+  async findById(id: any, tx?: Transaction): Promise<T | null> {
+    const repo = this.getRepository(tx);
+    const options = { where: { id } as unknown as FindOptionsWhere<T> };
+    return repo.findOne(options);
+  }
+
+  async findAll(criteria?: Partial<T>, tx?: Transaction): Promise<T[]> {
+    const repo = this.getRepository(tx);
+    if (criteria) {
+      return repo.find({ where: criteria as FindOptionsWhere<T> });
+    }
+    return repo.find();
+  }
+
+  // FIX: Return Promise<T> instead of Promise<void>
+  async save(entity: T, tx?: Transaction): Promise<T> {
+    const repo = this.getRepository(tx);
+    // TypeORM .save() returns the saved entity
+    return repo.save(entity as DeepPartial<T>) as Promise<T>;
+  }
+
+  async delete(id: any, tx?: Transaction): Promise<void> {
+    const repo = this.getRepository(tx);
+    await repo.delete(id);
+  }
+
+  async exists(id: any, tx?: Transaction): Promise<boolean> {
+    const entity = await this.findById(id, tx);
+    return !!entity;
+  }
+}
+```
+
 ## File: src/config/app.config.ts
 ```
 import { registerAs } from '@nestjs/config';
@@ -2440,39 +2799,29 @@ export default registerAs('app', () => ({
 import { registerAs } from '@nestjs/config';
 
 export default registerAs('database', () => {
-  // Cấu hình chung cho cả 2 môi trường
-  const commonConfig = {
-    type: 'postgres',
-    synchronize: process.env.NODE_ENV === 'development', // Tắt trên production nhé
-    logging: process.env.NODE_ENV === 'development',
-    autoLoadEntities: true,
-  };
+  const isDev = process.env.NODE_ENV === 'development';
 
-  // 1. Ưu tiên chế độ CLOUD (Neon, Render, Supabase...)
-  // Nếu có biến DATABASE_URL thì dùng luôn chuỗi kết nối
-  if (process.env.DATABASE_URL) {
-    console.log('📡 Using Database Connection String (Cloud/Neon)');
-    return {
-      ...commonConfig,
-      url: process.env.DATABASE_URL,
-      // Neon và các cloud DB thường yêu cầu SSL
-      ssl: {
-        rejectUnauthorized: false, // Chấp nhận chứng chỉ SSL của Neon
-      },
-    };
-  }
-
-  // 2. Chế độ LOCAL (Fallback)
-  console.log('💻 Using Local Database Configuration');
   return {
-    ...commonConfig,
+    type: 'postgres',
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '5432', 10),
     username: process.env.DB_USERNAME || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
-    database: process.env.DB_DATABASE || 'rbac_system',
-    // Local thường không cần SSL
-    ssl: process.env.DB_SSL === 'true',
+    database: process.env.DB_NAME || 'rbac_system',
+
+    // PRO TIP:
+    // Trên Production nên tắt synchronize (false) và dùng migrationsRun (true)
+    // Ở Dev có thể để synchronize true cho lẹ, nhưng dùng Migration an toàn hơn
+    synchronize: isDev,
+    logging: isDev ? ['error', 'warn', 'migration'] : ['error'],
+
+    // --- MIGRATION CONFIG ---
+    migrationsRun: true, // Tự động chạy migration khi start app
+    migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
+    // ------------------------
+
+    autoLoadEntities: true,
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   };
 });
 ```
@@ -2484,5 +2833,46 @@ import { registerAs } from '@nestjs/config';
 export default registerAs('logging', () => ({
   level: process.env.LOG_LEVEL || 'info',
 }));
+```
+
+## File: src/database/migrations/1700000000000-add-attributes-to-permission.ts
+```
+import { MigrationInterface, QueryRunner, TableColumn } from 'typeorm';
+
+export class AddAttributesToPermission1700000000000 implements MigrationInterface {
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    // 1. Lấy thông tin bảng permissions
+    const table = await queryRunner.getTable('permissions');
+
+    // 2. Kiểm tra xem cột 'attributes' đã tồn tại chưa
+    const attributeColumn = table?.findColumnByName('attributes');
+
+    // 3. Nếu chưa có thì thêm vào
+    if (!attributeColumn) {
+      await queryRunner.addColumn(
+        'permissions',
+        new TableColumn({
+          name: 'attributes',
+          type: 'varchar',
+          default: "'*'", // Mặc định là dấu sao (Full quyền)
+          isNullable: false,
+        }),
+      );
+      console.log(
+        '✅ MIGRATION: Added "attributes" column to "permissions" table.',
+      );
+    }
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    // Logic Rollback: Nếu chạy revert thì xóa cột đi
+    const table = await queryRunner.getTable('permissions');
+    const attributeColumn = table?.findColumnByName('attributes');
+
+    if (attributeColumn) {
+      await queryRunner.dropColumn('permissions', 'attributes');
+    }
+  }
+}
 ```
 

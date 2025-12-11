@@ -2,30 +2,35 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-
 import { UserModule } from '../user/user.module';
-
+import { RoleController } from './infrastructure/controllers/role.controller';
+import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
 import { PermissionService } from './application/services/permission.service';
 import { RoleService } from './application/services/role.service';
-import { PermissionGuard } from './infrastructure/guards/permission.guard';
-import { RoleController } from './infrastructure/controllers/role.controller';
-
-import { Role } from './domain/entities/role.entity';
-import { Permission } from './domain/entities/permission.entity';
-import { UserRole } from './domain/entities/user-role.entity';
-import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
 import { RbacManagerService } from './application/services/rbac-manager.service';
+import { PermissionGuard } from './infrastructure/guards/permission.guard';
+// Infra Entities
+import { RoleOrmEntity } from './infrastructure/persistence/entities/role.orm-entity';
+import { PermissionOrmEntity } from './infrastructure/persistence/entities/permission.orm-entity';
+import { UserRoleOrmEntity } from './infrastructure/persistence/entities/user-role.orm-entity';
+// Repositories
+import {
+  TypeOrmRoleRepository,
+  TypeOrmPermissionRepository,
+  TypeOrmUserRoleRepository,
+} from './infrastructure/persistence/repositories/typeorm-rbac.repositories';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([Role, Permission, UserRole]),
+    TypeOrmModule.forFeature([
+      RoleOrmEntity,
+      PermissionOrmEntity,
+      UserRoleOrmEntity,
+    ]),
     CacheModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        ttl: configService.get('RBAC_CACHE_TTL', 300),
-        max: configService.get('RBAC_CACHE_MAX', 1000),
-      }),
+      useFactory: (c: ConfigService) => ({ ttl: 300, max: 1000 }),
       inject: [ConfigService],
     }),
   ],
@@ -35,6 +40,9 @@ import { RbacManagerService } from './application/services/rbac-manager.service'
     RoleService,
     PermissionGuard,
     RbacManagerService,
+    { provide: 'IRoleRepository', useClass: TypeOrmRoleRepository },
+    { provide: 'IPermissionRepository', useClass: TypeOrmPermissionRepository },
+    { provide: 'IUserRoleRepository', useClass: TypeOrmUserRoleRepository },
   ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })

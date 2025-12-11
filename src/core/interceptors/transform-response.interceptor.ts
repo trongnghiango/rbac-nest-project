@@ -11,7 +11,10 @@ import { map } from 'rxjs/operators';
 import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
 
 @Injectable()
-export class TransformResponseInterceptor<T> implements NestInterceptor<T, any> {
+export class TransformResponseInterceptor<T> implements NestInterceptor<
+  T,
+  any
+> {
   constructor(private reflector: Reflector) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {

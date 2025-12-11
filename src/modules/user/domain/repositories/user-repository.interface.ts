@@ -1,12 +1,10 @@
+import { IRepository } from '../../../../core/shared/application/ports/repository.port';
 import { User } from '../entities/user.entity';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
-export interface IUserRepository {
-  findById(id: number): Promise<User | null>;
-  findByUsername(username: string): Promise<User | null>;
-  findByEmail(email: string): Promise<User | null>;
-  findAllActive(): Promise<User[]>;
-  save(user: User): Promise<User>;
-  update(id: number, data: Partial<User>): Promise<User>;
-  delete(id: number): Promise<void>;
-  count(): Promise<number>;
+export interface IUserRepository extends IRepository<User, number> {
+  findByUsername(username: string, tx?: Transaction): Promise<User | null>;
+  findByEmail(email: string, tx?: Transaction): Promise<User | null>;
+  // Overwrite save to return User (Abstract return void, but we need ID back)
+  save(user: User, tx?: Transaction): Promise<User>;
 }

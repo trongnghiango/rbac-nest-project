@@ -29,18 +29,14 @@ export class RoleController {
       type: 'object',
       properties: {
         userId: { type: 'number', example: 1005 },
-        roleId: { type: 'number', example: 2 }
-      }
-    }
+        roleId: { type: 'number', example: 2 },
+      },
+    },
   })
   @Post('assign')
   @Permissions('rbac:manage')
   async assignRole(@Body() body: { userId: number; roleId: number }) {
-    await this.permissionService.assignRole(
-      body.userId,
-      body.roleId,
-      1,
-    );
+    await this.permissionService.assignRole(body.userId, body.roleId, 1);
     return { success: true, message: 'Role assigned' };
   }
 }

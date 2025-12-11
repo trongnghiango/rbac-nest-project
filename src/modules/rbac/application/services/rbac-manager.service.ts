@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import type {
+  IRoleRepository,
+  IPermissionRepository,
+} from '../../domain/repositories/rbac-repository.interface';
 import { Role } from '../../domain/entities/role.entity';
 import { Permission } from '../../domain/entities/permission.entity';
 
@@ -9,137 +11,125 @@ export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
 
   constructor(
-    @InjectRepository(Role)
-    private roleRepo: Repository<Role>,
-    @InjectRepository(Permission)
-    private permRepo: Repository<Permission>,
+    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
+    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
   ) {}
 
-  // ==========================================
-  // 1. CHỨC NĂNG IMPORT (UPLOAD)
-  // ==========================================
-  async importFromCsv(
-    csvContent: string,
-  ): Promise<{ created: number; updated: number }> {
+  // Logic Import giữ nguyên (hoặc update full nếu cần)
+  async importFromCsv(csvContent: string): Promise<any> {
     const lines = csvContent
       .split(/\r?\n/)
       .filter((line) => line.trim() !== '');
-    // Bỏ dòng header nếu có
-    if (lines[0].toLowerCase().includes('role')) {
-      lines.shift();
+    if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
+      lines.shift(); // Remove header
     }
 
     let createdCount = 0;
     let updatedCount = 0;
 
     for (const line of lines) {
-      // CSV format: role,resource,action,attributes,description
+      // CSV: role,resource,action,attributes,description
       const cols = line.split(',').map((c) => c.trim());
-
       if (cols.length < 3) continue;
 
-      // Vẫn lấy biến attributes ra nhưng không dùng để lưu vào DB (vì DB ko có cột này)
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const [roleName, resource, action, _attributes, description] = cols;
+      const [roleName, resource, action, attributes, description] = cols;
 
-      // 1. Xử lý Permission
+      // 1. Handle Permission
       const permName =
         resource === '*' ? 'manage:all' : `${resource}:${action}`;
-      let perm = await this.permRepo.findOne({ where: { name: permName } });
+      let perm = await this.permRepo.findByName(permName);
 
       if (!perm) {
-        // Fix TS2769: Bỏ field 'attributes' khi create
-        perm = this.permRepo.create({
-          name: permName,
-          resourceType: resource,
-          action: action,
-          description: description || '',
-          isActive: true,
-        });
-        await this.permRepo.save(perm);
+        // Create new permission
+        perm = new Permission(
+          undefined,
+          permName,
+          description || '',
+          resource,
+          action,
+          true,
+          attributes || '*',
+        );
+        perm = await this.permRepo.save(perm);
         createdCount++;
       } else {
-        // Fix TS2339: Chỉ update description, bỏ qua attributes
-        let isChanged = false;
+        // Update existing (optional logic)
+        let changed = false;
+        if (attributes && perm.attributes !== attributes) {
+          perm.attributes = attributes;
+          changed = true;
+        }
         if (description && perm.description !== description) {
           perm.description = description;
-          isChanged = true;
+          changed = true;
         }
 
-        if (isChanged) {
+        if (changed) {
           await this.permRepo.save(perm);
           updatedCount++;
         }
       }
 
-      // 2. Xử lý Role
-      let role = await this.roleRepo.findOne({
-        where: { name: roleName },
-        relations: ['permissions'],
-      });
-
+      // 2. Handle Role
+      let role = await this.roleRepo.findByName(roleName);
       if (!role) {
-        role = this.roleRepo.create({
-          name: roleName,
-          description: 'Imported from CSV',
-          isActive: true,
-          permissions: [],
-        });
-        await this.roleRepo.save(role);
+        role = new Role(
+          undefined,
+          roleName,
+          'Imported from CSV',
+          true,
+          false,
+          [],
+        );
+        role = await this.roleRepo.save(role);
       }
 
-      // 3. Gán quyền vào Role
+      // 3. Assign Permission to Role
       if (!role.permissions) role.permissions = [];
-      // Fix ESLint unnecessary assertion: perm chắc chắn tồn tại ở đây
-      const hasPerm = role.permissions.some((p) => p.id === perm.id);
+      const hasPerm = role.permissions.some((p) => p.name === perm!.name); // Domain logic check by name or ID
 
       if (!hasPerm) {
-        role.permissions.push(perm);
+        role.permissions.push(perm!);
         await this.roleRepo.save(role);
       }
     }
 
-    this.logger.log(
-      `Import finished. Created: ${createdCount}, Updated: ${updatedCount}`,
-    );
     return { created: createdCount, updated: updatedCount };
   }
 
-  // ==========================================
-  // 2. CHỨC NĂNG EXPORT (DOWNLOAD)
-  // ==========================================
+  // FIX: Logic Export đầy đủ
   async exportToCsv(): Promise<string> {
-    const roles = await this.roleRepo.find({
-      relations: ['permissions'],
-      order: { name: 'ASC' },
-    });
+    // Repository phải đảm bảo load relation ['permissions']
+    const roles = await this.roleRepo.findAll();
 
-    let csvContent = 'role,resource,action,attributes,description\n';
+    const header = 'role,resource,action,attributes,description';
+    const lines = [header];
 
     for (const role of roles) {
       if (!role.permissions || role.permissions.length === 0) {
-        csvContent += `${role.name},,,,\n`;
+        // Nếu Role không có quyền, in ra dòng rỗng để biết Role tồn tại
+        lines.push(`${role.name},,,,`);
         continue;
       }
 
       for (const perm of role.permissions) {
-        const desc =
-          perm.description && perm.description.includes(',')
-            ? `"${perm.description}"`
-            : perm.description || '';
+        // Xử lý dữ liệu để tránh lỗi CSV
+        const resource = perm.resourceType || '*';
+        const action = perm.action || '*';
+        const attributes = perm.attributes || '*';
 
-        const line = [
-          role.name,
-          perm.resourceType || '*',
-          perm.action || '*',
-          '*', // Fix TS2339: Hardcode attributes là '*' vì DB không lưu
-          desc,
-        ].join(',');
+        // Nếu description có dấu phẩy, bọc trong ngoặc kép
+        let desc = perm.description || '';
+        if (desc.includes(',')) {
+          desc = `"${desc}"`;
+        }
 
-        csvContent += line + '\n';
+        const line = [role.name, resource, action, attributes, desc].join(',');
+
+        lines.push(line);
       }
     }
 
-    return csvContent;
+    return lines.join('\n');
   }
 }

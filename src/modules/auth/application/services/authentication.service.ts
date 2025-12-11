@@ -1,32 +1,50 @@
-import { Injectable, Inject, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  UnauthorizedException,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm'; // Import thêm cái này
-import { Repository } from 'typeorm';               // Import thêm cái này
 import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
+import type { ISessionRepository } from '../../domain/repositories/session-repository.interface';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../../user/domain/entities/user.entity';
-import { Session } from '../../domain/entities/session.entity'; // Import Session Entity
+import { Session } from '../../domain/entities/session.entity';
 import { JwtPayload } from '../../../shared/types/common.types';
+import type { ITransactionManager } from '../../../../core/shared/application/ports/transaction-manager.port'; // FIX: import type
 
 @Injectable()
 export class AuthenticationService {
   constructor(
     @Inject('IUserRepository') private userRepository: IUserRepository,
-    // Inject thêm Repository của Session
-    @InjectRepository(Session) private sessionRepository: Repository<Session>,
+    @Inject('ISessionRepository') private sessionRepository: ISessionRepository,
+    @Inject('ITransactionManager') private txManager: ITransactionManager,
     private jwtService: JwtService,
   ) {}
 
-  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string }): Promise<{ accessToken: string; user: any }> {
+  async login(credentials: {
+    username: string;
+    password: string;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<any> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
-    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
-    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
+    if (!user || !user.isActive)
+      throw new UnauthorizedException('Invalid credentials');
+    // Access getter directly (domain encapsulation)
+    if (!user.hashedPassword)
+      throw new UnauthorizedException('Password not set');
 
-    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
+    const isValid = await PasswordUtil.compare(
+      credentials.password,
+      user.hashedPassword,
+    );
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
 
-    // 1. Tạo JWT Access Token
+    if (!user.id) throw new InternalServerErrorException('User ID is missing');
+
     const payload: JwtPayload = {
       sub: user.id,
       username: user.username,
@@ -34,21 +52,20 @@ export class AuthenticationService {
     };
     const accessToken = this.jwtService.sign(payload);
 
-    // 2. LƯU SESSION VÀO DB (Kích hoạt bảng sessions)
-    // Tính thời gian hết hạn (ví dụ 1 ngày)
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 1);
 
-    const session = this.sessionRepository.create({
-      userId: user.id,
-      token: accessToken, // Hoặc lưu Refresh Token nếu dùng cơ chế Refresh
-      ipAddress: credentials.ip || 'unknown',
-      userAgent: credentials.userAgent || 'unknown',
-      expiresAt: expiresAt,
-      createdAt: new Date(),
-    });
+    const session = new Session(
+      undefined,
+      user.id,
+      accessToken,
+      expiresAt,
+      credentials.ip,
+      credentials.userAgent,
+      new Date(),
+    );
 
-    await this.sessionRepository.save(session);
+    await this.sessionRepository.create(session);
 
     return {
       accessToken,
@@ -56,49 +73,62 @@ export class AuthenticationService {
     };
   }
 
-  // ... (Các hàm validateUser, register giữ nguyên như cũ)
-  async validateUser(payload: JwtPayload): Promise<ReturnType<User['toJSON']> | null> {
+  async validateUser(
+    payload: JwtPayload,
+  ): Promise<ReturnType<User['toJSON']> | null> {
     const user = await this.userRepository.findById(payload.sub);
-
-    // NÂNG CAO: Có thể check thêm session trong DB xem còn tồn tại không
-    // Nếu admin đã xóa session thì dù token còn hạn cũng trả về null -> Đá user ra
-
     if (!user || !user.isActive) return null;
     return user.toJSON();
   }
 
-  async register(data: any): Promise<{ accessToken: string; user: any }> {
+  async register(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
     const hashedPassword = await PasswordUtil.hash(data.password);
-    const user: any = {
-      id: data.id,
-      username: data.username,
-      email: data.email,
-      hashedPassword: hashedPassword,
-      fullName: data.fullName,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
 
-    const savedUser = await this.userRepository.save(user);
+    const newUser = new User(
+      undefined,
+      data.username,
+      data.email,
+      hashedPassword,
+      data.fullName,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      new Date(),
+      new Date(),
+    );
 
-    // Khi register xong cũng tạo session luôn
-    const payload = { sub: savedUser.id, username: savedUser.username, roles: [] };
-    const accessToken = this.jwtService.sign(payload);
+    return this.txManager.runInTransaction(async (tx) => {
+      const savedUser = await this.userRepository.save(newUser, tx);
+      if (!savedUser.id)
+        throw new InternalServerErrorException('Failed to generate User ID');
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
+      const payload: JwtPayload = {
+        sub: savedUser.id,
+        username: savedUser.username,
+        roles: [],
+      };
+      const accessToken = this.jwtService.sign(payload);
 
-    await this.sessionRepository.save({
-        userId: savedUser.id,
-        token: accessToken,
-        expiresAt: expiresAt,
-        createdAt: new Date()
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 1);
+
+      const session = new Session(
+        undefined,
+        savedUser.id,
+        accessToken,
+        expiresAt,
+        undefined,
+        undefined,
+        new Date(),
+      );
+
+      await this.sessionRepository.create(session, tx);
+
+      return { accessToken, user: savedUser.toJSON() };
     });
-
-    return { accessToken, user: savedUser.toJSON() };
   }
 }

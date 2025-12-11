@@ -1,31 +1,31 @@
 import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-
 import { UserModule } from '../user/user.module';
 import { RbacModule } from '../rbac/rbac.module';
-
 import { DatabaseSeeder } from './seeders/database.seeder';
 import { TestController } from './controllers/test.controller';
-
-import { User } from '../user/domain/entities/user.entity';
-import { Role } from '../rbac/domain/entities/role.entity';
-import { Permission } from '../rbac/domain/entities/permission.entity';
-import { UserRole } from '../rbac/domain/entities/user-role.entity';
+import { UserOrmEntity } from '../user/infrastructure/persistence/entities/user.orm-entity';
+import { RoleOrmEntity } from '../rbac/infrastructure/persistence/entities/role.orm-entity';
+import { PermissionOrmEntity } from '../rbac/infrastructure/persistence/entities/permission.orm-entity';
+import { UserRoleOrmEntity } from '../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 
 @Module({
   imports: [
     UserModule,
     RbacModule,
-    TypeOrmModule.forFeature([User, Role, Permission, UserRole]),
+    TypeOrmModule.forFeature([
+      UserOrmEntity,
+      RoleOrmEntity,
+      PermissionOrmEntity,
+      UserRoleOrmEntity,
+    ]),
   ],
   controllers: [TestController],
   providers: [DatabaseSeeder],
 })
 export class TestModule implements OnModuleInit {
-  constructor(private databaseSeeder: DatabaseSeeder) {}
-
+  constructor(private s: DatabaseSeeder) {}
   async onModuleInit() {
-    // Auto-seed on module initialization
-    await this.databaseSeeder.onModuleInit();
+    await this.s.onModuleInit();
   }
 }

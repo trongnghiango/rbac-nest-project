@@ -7,7 +7,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
 
-  const prefix = config.get('app.apiPrefix', 'api');
+  const prefix: string = config.get('app.apiPrefix', 'api');
   app.setGlobalPrefix(prefix);
 
   app.enableCors();
@@ -29,12 +29,14 @@ async function bootstrap() {
   });
   // -----------------------------
 
-  const port = config.get('app.port', 3000);
+  const port: number = config.get('app.port', 3000);
   await app.listen(port);
 
   console.log(`🚀 API is running on: http://localhost:${port}/${prefix}`);
   console.log(`📚 Swagger Docs:      http://localhost:${port}/docs`);
-  console.log(`📊 Health check:      http://localhost:${port}/${prefix}/test/health`);
+  console.log(
+    `📊 Health check:      http://localhost:${port}/${prefix}/test/health`,
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access

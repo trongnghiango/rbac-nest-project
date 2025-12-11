@@ -14,7 +14,13 @@ export class UserService {
     @Inject('IUserRepository') private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: any): Promise<any> {
+  async createUser(data: {
+    id: number;
+    username: string;
+    email?: string;
+    password?: string;
+    fullName: string;
+  }): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) {
       throw new BadRequestException('User already exists');
@@ -23,19 +29,27 @@ export class UserService {
     let hashedPassword;
     if (data.password) {
       if (!PasswordUtil.validateStrength(data.password)) {
-        throw new BadRequestException('Password is too weak');
+        throw new BadRequestException(
+          'Password does not meet strength requirements',
+        );
       }
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    const newUser = new User();
-    Object.assign(newUser, {
-      ...data,
+    // FIX: Sử dụng Constructor chuẩn của Domain
+    const newUser = new User(
+      data.id,
+      data.username,
+      data.email,
       hashedPassword,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+      data.fullName,
+      true, // isActive
+      undefined, // phoneNumber
+      undefined, // avatarUrl
+      undefined, // profile
+      new Date(), // createdAt
+      new Date(), // updatedAt
+    );
 
     const user = await this.userRepository.save(newUser);
     return user.toJSON();
@@ -45,7 +59,6 @@ export class UserService {
     username: string,
     pass: string,
   ): Promise<User | null> {
-    // Keep internal logic as is, exceptions handled in AuthService
     const user = await this.userRepository.findByUsername(username);
     if (!user || !user.isActive || !user.hashedPassword) return null;
     const isValid = await PasswordUtil.compare(pass, user.hashedPassword);
@@ -55,8 +68,7 @@ export class UserService {
   async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(id);
     if (!user) {
-      // FIX: Throw NotFoundException
-      throw new NotFoundException(`User with ID ${id} not found`);
+      throw new NotFoundException('User not found');
     }
     return user.toJSON();
   }
@@ -80,6 +92,7 @@ export class UserService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
     user.deactivate();
     await this.userRepository.save(user);
   }

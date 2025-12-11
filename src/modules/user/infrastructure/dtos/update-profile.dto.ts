@@ -1,4 +1,10 @@
-import { IsString, IsOptional, IsUrl, IsEnum, ValidateNested } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsUrl,
+  IsEnum,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -10,10 +16,13 @@ class SocialLinksDto {
 
 class SettingsDto {
   @ApiPropertyOptional({ enum: ['dark', 'light'] })
-  @IsOptional() @IsEnum(['dark', 'light']) theme: 'dark' | 'light';
+  @IsOptional()
+  @IsEnum(['dark', 'light'])
+  theme: 'dark' | 'light';
 
   @ApiPropertyOptional()
-  @IsOptional() notifications: boolean;
+  @IsOptional()
+  notifications: boolean;
 }
 
 export class UpdateProfileDto {
