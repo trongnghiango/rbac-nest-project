@@ -1,3 +1,15 @@
+#!/bin/bash
+
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+
+log "🚀 UPDATING DATABASE CONFIGURATION FOR HYBRID (LOCAL/CLOUD)..."
+
+# Cập nhật file config database
+cat > src/config/database.config.ts << 'EOF'
 import { registerAs } from '@nestjs/config';
 
 export default registerAs('database', () => {
@@ -36,3 +48,6 @@ export default registerAs('database', () => {
     ssl: process.env.DB_SSL === 'true',
   };
 });
+EOF
+
+log "✅ Database config updated successfully!"

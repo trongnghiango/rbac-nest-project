@@ -13,6 +13,8 @@ import { RoleController } from './infrastructure/controllers/role.controller';
 import { Role } from './domain/entities/role.entity';
 import { Permission } from './domain/entities/permission.entity';
 import { UserRole } from './domain/entities/user-role.entity';
+import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
+import { RbacManagerService } from './application/services/rbac-manager.service';
 
 @Module({
   imports: [
@@ -27,8 +29,13 @@ import { UserRole } from './domain/entities/user-role.entity';
       inject: [ConfigService],
     }),
   ],
-  controllers: [RoleController],
-  providers: [PermissionService, RoleService, PermissionGuard],
+  controllers: [RoleController, RbacManagerController],
+  providers: [
+    PermissionService,
+    RoleService,
+    PermissionGuard,
+    RbacManagerService,
+  ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
 export class RbacModule {}

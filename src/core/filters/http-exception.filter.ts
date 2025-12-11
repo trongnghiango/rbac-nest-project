@@ -24,14 +24,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const responseBody = {
       success: false,
       statusCode: status,
-      message: typeof exceptionResponse === 'string' ? exceptionResponse : 'Error',
+      message:
+        typeof exceptionResponse === 'string' ? exceptionResponse : 'Error',
       errors: errorMsg || null,
       path: request.url,
       timestamp: new Date().toISOString(),
     };
 
     if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
-      responseBody.message = exceptionResponse['error'] || exceptionResponse['message'];
+      responseBody.message =
+        exceptionResponse['error'] || exceptionResponse['message'];
       responseBody.errors = exceptionResponse['message'];
     }
 
