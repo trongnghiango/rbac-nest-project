@@ -1,31 +1,32 @@
+import { InferSelectModel } from 'drizzle-orm';
 import { Session } from '../../../domain/entities/session.entity';
-import { SessionOrmEntity } from '../entities/session.orm-entity';
+import { sessions } from '../../../../../database/schema';
+
+type SessionRecord = InferSelectModel<typeof sessions>;
 
 export class SessionMapper {
-  static toDomain(orm: SessionOrmEntity | null): Session | null {
-    if (!orm) return null;
+  static toDomain(raw: SessionRecord | null): Session | null {
+    if (!raw) return null;
     return new Session(
-      orm.id,
-      Number(orm.userId),
-      orm.token,
-      orm.expiresAt,
-      orm.ipAddress || undefined, // Null -> Undefined
-      orm.userAgent || undefined,
-      orm.createdAt,
+      raw.id,
+      Number(raw.userId),
+      raw.token,
+      raw.expiresAt,
+      raw.ipAddress || undefined,
+      raw.userAgent || undefined,
+      raw.createdAt || undefined,
     );
   }
 
-  static toPersistence(domain: Session): SessionOrmEntity {
-    const orm = new SessionOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.userId = domain.userId;
-    orm.token = domain.token;
-    orm.expiresAt = domain.expiresAt;
-    // FIX: Convert undefined -> null
-    orm.ipAddress = domain.ipAddress || null;
-    orm.userAgent = domain.userAgent || null;
-
-    orm.createdAt = domain.createdAt || new Date();
-    return orm;
+  static toPersistence(domain: Session) {
+    return {
+      id: domain.id, // UUID thì có thể truyền vào hoặc để DB tự gen
+      userId: domain.userId,
+      token: domain.token,
+      expiresAt: domain.expiresAt,
+      ipAddress: domain.ipAddress || null,
+      userAgent: domain.userAgent || null,
+      createdAt: domain.createdAt || new Date(),
+    };
   }
 }

@@ -1,21 +1,25 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { TypeOrmTransactionManager } from '../../core/shared/infrastructure/persistence/typeorm-transaction.manager';
 import { InMemoryEventBus } from '../../core/shared/infrastructure/adapters/in-memory-event-bus.adapter';
+import { DrizzleTransactionManager } from '../../core/shared/infrastructure/persistence/drizzle-transaction.manager';
+import { DrizzleModule } from '../../database/drizzle.module';
 
 @Global()
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' })],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    DrizzleModule,
+  ],
   providers: [
-    {
-      provide: 'ITransactionManager',
-      useClass: TypeOrmTransactionManager,
-    },
     {
       provide: 'IEventBus',
       useClass: InMemoryEventBus,
-    }
+    },
+    {
+      provide: 'ITransactionManager',
+      useClass: DrizzleTransactionManager,
+    },
   ],
-  exports: [ConfigModule, 'ITransactionManager', 'IEventBus'],
+  exports: [ConfigModule, 'IEventBus', 'ITransactionManager'],
 })
 export class SharedModule {}

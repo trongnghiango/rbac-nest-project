@@ -1,7 +1,6 @@
 ## File: src/bootstrap/app.module.ts
 ```
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 
@@ -11,6 +10,8 @@ import loggingConfig from '../config/logging.config';
 
 import { CoreModule } from '../core/core.module';
 import { SharedModule } from '../modules/shared/shared.module';
+import { DrizzleModule } from '../database/drizzle.module'; // NEW
+
 import { UserModule } from '../modules/user/user.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { RbacModule } from '../modules/rbac/rbac.module';
@@ -25,18 +26,7 @@ import { TestModule } from '../modules/test/test.module';
     }),
     CoreModule,
     SharedModule,
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: (config: ConfigService) => {
-        const dbConfig = config.get('database');
-        return {
-          ...dbConfig,
-          // Load cả Entities và Migrations
-          entities: [__dirname + '/../**/*.orm-entity{.ts,.js}'],
-        };
-      },
-      inject: [ConfigService],
-    }),
+    DrizzleModule, // Thay thế TypeOrmModule
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: () => ({ ttl: 300, max: 100 }),
@@ -460,119 +450,81 @@ export class RegisterDto {
 }
 ```
 
-## File: src/modules/auth/infrastructure/persistence/entities/session.orm-entity.ts
-```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  Index,
-} from 'typeorm';
-
-@Entity('sessions')
-@Index('idx_sessions_user_id', ['userId'])
-export class SessionOrmEntity {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
-
-  @Column('bigint')
-  userId: number;
-
-  @Column({ type: 'varchar' })
-  token: string;
-
-  @Column({ type: 'timestamptz' })
-  expiresAt: Date;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', nullable: true })
-  ipAddress: string | null;
-
-  @Column({ type: 'varchar', nullable: true })
-  userAgent: string | null;
-
-  @CreateDateColumn()
-  createdAt: Date;
-}
-```
-
 ## File: src/modules/auth/infrastructure/persistence/mappers/session.mapper.ts
 ```
+import { InferSelectModel } from 'drizzle-orm';
 import { Session } from '../../../domain/entities/session.entity';
-import { SessionOrmEntity } from '../entities/session.orm-entity';
+import { sessions } from '../../../../../database/schema';
+
+type SessionRecord = InferSelectModel<typeof sessions>;
 
 export class SessionMapper {
-  static toDomain(orm: SessionOrmEntity | null): Session | null {
-    if (!orm) return null;
+  static toDomain(raw: SessionRecord | null): Session | null {
+    if (!raw) return null;
     return new Session(
-      orm.id,
-      Number(orm.userId),
-      orm.token,
-      orm.expiresAt,
-      orm.ipAddress || undefined, // Null -> Undefined
-      orm.userAgent || undefined,
-      orm.createdAt,
+      raw.id,
+      Number(raw.userId),
+      raw.token,
+      raw.expiresAt,
+      raw.ipAddress || undefined,
+      raw.userAgent || undefined,
+      raw.createdAt,
     );
   }
 
-  static toPersistence(domain: Session): SessionOrmEntity {
-    const orm = new SessionOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.userId = domain.userId;
-    orm.token = domain.token;
-    orm.expiresAt = domain.expiresAt;
-    // FIX: Convert undefined -> null
-    orm.ipAddress = domain.ipAddress || null;
-    orm.userAgent = domain.userAgent || null;
-
-    orm.createdAt = domain.createdAt || new Date();
-    return orm;
+  static toPersistence(domain: Session) {
+    return {
+      id: domain.id, // UUID thì có thể truyền vào hoặc để DB tự gen
+      userId: domain.userId,
+      token: domain.token,
+      expiresAt: domain.expiresAt,
+      ipAddress: domain.ipAddress || null,
+      userAgent: domain.userAgent || null,
+      createdAt: domain.createdAt || new Date(),
+    };
   }
 }
 ```
 
-## File: src/modules/auth/infrastructure/persistence/typeorm-session.repository.ts
+## File: src/modules/auth/infrastructure/persistence/drizzle-session.repository.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { Repository, EntityManager } from 'typeorm';
-import { InjectRepository } from '@nestjs/typeorm';
+import { eq } from 'drizzle-orm';
 import { ISessionRepository } from '../../domain/repositories/session-repository.interface';
 import { Session } from '../../domain/entities/session.entity';
-import { SessionOrmEntity } from './entities/session.orm-entity';
+import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
+import { sessions } from '../../../../database/schema';
 import { SessionMapper } from './mappers/session.mapper';
 import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
-export class TypeOrmSessionRepository implements ISessionRepository {
-  constructor(
-    @InjectRepository(SessionOrmEntity)
-    private readonly repository: Repository<SessionOrmEntity>,
-  ) {}
-
-  private getRepository(tx?: Transaction): Repository<SessionOrmEntity> {
-    if (tx) {
-      const entityManager = tx as EntityManager;
-      return entityManager.getRepository(SessionOrmEntity);
-    }
-    return this.repository;
-  }
-
+export class DrizzleSessionRepository
+  extends DrizzleBaseRepository
+  implements ISessionRepository
+{
   async create(session: Session, tx?: Transaction): Promise<void> {
-    const repo = this.getRepository(tx);
-    const orm = SessionMapper.toPersistence(session);
-    await repo.save(orm);
+    const db = this.getDb(tx);
+    const data = SessionMapper.toPersistence(session);
+    // UUID thường được generate từ code hoặc DB.
+    // Nếu ID có giá trị thì insert, ko thì để default (gen_random_uuid)
+    if (data.id) {
+      await db.insert(sessions).values(data as any);
+    } else {
+      const { id, ...insertData } = data;
+      await db.insert(sessions).values(insertData);
+    }
   }
 
   async findByUserId(userId: number): Promise<Session[]> {
-    const orms = await this.repository.find({ where: { userId } });
-    return orms
-      .map(SessionMapper.toDomain)
-      .filter((s): s is Session => s !== null);
+    const results = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.userId, userId));
+    return results.map((r) => SessionMapper.toDomain(r)!);
   }
 
   async deleteByUserId(userId: number): Promise<void> {
-    await this.repository.delete({ userId });
+    await this.db.delete(sessions).where(eq(sessions.userId, userId));
   }
 }
 ```
@@ -583,26 +535,22 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
-
 import { UserModule } from '../user/user.module';
 import { AuthenticationService } from './application/services/authentication.service';
 import { JwtStrategy } from './infrastructure/strategies/jwt.strategy';
 import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
 import { AuthController } from './infrastructure/controllers/auth.controller';
-import { SessionOrmEntity } from './infrastructure/persistence/entities/session.orm-entity';
-import { TypeOrmSessionRepository } from './infrastructure/persistence/typeorm-session.repository';
+import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-session.repository';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([SessionOrmEntity]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get('JWT_SECRET') || 'super-secret-key',
-        signOptions: { expiresIn: configService.get('JWT_EXPIRES_IN', '24h') },
+      useFactory: (config: ConfigService) => ({
+        secret: config.get('JWT_SECRET') || 'secret',
+        signOptions: { expiresIn: '1d' },
       }),
       inject: [ConfigService],
     }),
@@ -612,12 +560,9 @@ import { TypeOrmSessionRepository } from './infrastructure/persistence/typeorm-s
     AuthenticationService,
     JwtStrategy,
     JwtAuthGuard,
-    {
-      provide: 'ISessionRepository',
-      useClass: TypeOrmSessionRepository,
-    },
+    { provide: 'ISessionRepository', useClass: DrizzleSessionRepository },
   ],
-  exports: [JwtAuthGuard, AuthenticationService, JwtModule, PassportModule],
+  exports: [JwtAuthGuard, AuthenticationService, JwtModule],
 })
 export class AuthModule {}
 ```
@@ -858,189 +803,138 @@ export class UserService {
 }
 ```
 
-## File: src/modules/user/infrastructure/persistence/typeorm-user.repository.ts
+## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
+```
+import { InferSelectModel } from 'drizzle-orm';
+import { User } from '../../../domain/entities/user.entity';
+import { users } from '../../../../../database/schema';
+
+// Tự động lấy Type từ Schema Definition
+type UserRecord = InferSelectModel<typeof users>;
+
+export class UserMapper {
+  static toDomain(raw: UserRecord | null): User | null {
+    if (!raw) return null;
+
+    return new User(
+      raw.id,
+      raw.username,
+      raw.email || undefined,
+      raw.hashedPassword || undefined,
+      raw.fullName || undefined,
+      raw.isActive || false,
+      raw.phoneNumber || undefined,
+      raw.avatarUrl || undefined,
+      (raw.profile as any) || undefined, // JSONB cần cast nhẹ hoặc định nghĩa type riêng
+      raw.createdAt || undefined,
+      raw.updatedAt || undefined,
+    );
+  }
+
+  static toPersistence(domain: User) {
+    return {
+      id: domain.id, // Có thể undefined
+      username: domain.username,
+      email: domain.email || null,
+      hashedPassword: domain.hashedPassword || null,
+      fullName: domain.fullName || null,
+      isActive: domain.isActive,
+      phoneNumber: domain.phoneNumber || null,
+      avatarUrl: domain.avatarUrl || null,
+      profile: domain.profile || null,
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
+  }
+}
+```
+
+## File: src/modules/user/infrastructure/persistence/drizzle-user.repository.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { Repository, EntityManager } from 'typeorm';
-import { InjectRepository } from '@nestjs/typeorm';
+import { eq } from 'drizzle-orm';
 import { IUserRepository } from '../../domain/repositories/user-repository.interface';
 import { User } from '../../domain/entities/user.entity';
-import { UserOrmEntity } from './entities/user.orm-entity';
+import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
+import { users } from '../../../../database/schema';
 import { UserMapper } from './mappers/user.mapper';
 import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
-export class TypeOrmUserRepository implements IUserRepository {
-  constructor(
-    @InjectRepository(UserOrmEntity)
-    private readonly repository: Repository<UserOrmEntity>,
-  ) {}
-
-  // Helper để lấy đúng Repo (có Transaction hoặc không)
-  private getRepository(tx?: Transaction): Repository<UserOrmEntity> {
-    if (tx) {
-      const entityManager = tx as EntityManager;
-      return entityManager.getRepository(UserOrmEntity);
-    }
-    return this.repository;
-  }
-
+export class DrizzleUserRepository
+  extends DrizzleBaseRepository
+  implements IUserRepository
+{
   async findById(id: number, tx?: Transaction): Promise<User | null> {
-    const repo = this.getRepository(tx);
-    const entity = await repo.findOne({ where: { id } });
-    return UserMapper.toDomain(entity);
+    const db = this.getDb(tx);
+    const result = await db.select().from(users).where(eq(users.id, id));
+    return UserMapper.toDomain(result[0]);
   }
 
   async findByUsername(
     username: string,
     tx?: Transaction,
   ): Promise<User | null> {
-    const repo = this.getRepository(tx);
-    const entity = await repo.findOne({ where: { username } });
-    return UserMapper.toDomain(entity);
+    const db = this.getDb(tx);
+    const result = await db
+      .select()
+      .from(users)
+      .where(eq(users.username, username));
+    return UserMapper.toDomain(result[0]);
   }
 
   async findByEmail(email: string, tx?: Transaction): Promise<User | null> {
-    const repo = this.getRepository(tx);
-    const entity = await repo.findOne({ where: { email } });
-    return UserMapper.toDomain(entity);
+    const db = this.getDb(tx);
+    const result = await db.select().from(users).where(eq(users.email, email));
+    return UserMapper.toDomain(result[0]);
   }
 
   async findAllActive(): Promise<User[]> {
-    const entities = await this.repository.find({
-      where: { isActive: true },
-      order: { createdAt: 'DESC' },
-    });
-    return entities
-      .map((entity) => UserMapper.toDomain(entity))
-      .filter((u): u is User => u !== null);
-  }
-
-  // Bắt buộc phải implement do IRepository yêu cầu
-  async findAll(criteria?: Partial<User>): Promise<User[]> {
-    // Basic implementation
-    return this.findAllActive();
+    const result = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.isActive, true));
+    return result.map((u) => UserMapper.toDomain(u)!);
   }
 
   async save(user: User, tx?: Transaction): Promise<User> {
-    const repo = this.getRepository(tx);
-    const ormEntity = UserMapper.toPersistence(user);
-    const saved = await repo.save(ormEntity);
-    return UserMapper.toDomain(saved)!;
-  }
+    const db = this.getDb(tx);
+    const data = UserMapper.toPersistence(user);
 
-  async update(id: number, data: Partial<User>): Promise<User> {
-    await this.repository.update(id, data as any);
-    const updated = await this.findById(id);
-    if (!updated) throw new Error('User not found');
-    return updated;
-  }
-
-  async delete(id: number): Promise<void> {
-    await this.repository.delete(id);
-  }
-
-  async exists(id: number): Promise<boolean> {
-    const user = await this.findById(id);
-    return !!user;
-  }
-
-  async count(): Promise<number> {
-    return this.repository.count();
-  }
-}
-```
-
-## File: src/modules/user/infrastructure/persistence/entities/user.orm-entity.ts
-```
-import {
-  Entity,
-  Column,
-  PrimaryColumn,
-  CreateDateColumn,
-  UpdateDateColumn,
-} from 'typeorm';
-import type { UserProfile } from '../../../domain/types/user-profile.type';
-
-@Entity('users')
-export class UserOrmEntity {
-  @PrimaryColumn('bigint')
-  id: number;
-
-  @Column({ unique: true })
-  username: string;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', unique: true, nullable: true })
-  email: string | null;
-
-  @Column({ type: 'varchar', nullable: true })
-  hashedPassword: string | null;
-
-  @Column({ type: 'varchar', nullable: true })
-  fullName: string | null;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @Column({ type: 'varchar', nullable: true })
-  phoneNumber: string | null;
-
-  @Column({ type: 'varchar', nullable: true })
-  avatarUrl: string | null;
-
-  @Column({ type: 'jsonb', nullable: true })
-  profile: UserProfile | null;
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
-```
-
-## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
-```
-import { User } from '../../../domain/entities/user.entity';
-import { UserOrmEntity } from '../entities/user.orm-entity';
-
-export class UserMapper {
-  static toDomain(ormEntity: UserOrmEntity | null): User | null {
-    if (!ormEntity) return null;
-
-    return new User(
-      Number(ormEntity.id),
-      ormEntity.username,
-      ormEntity.email || undefined,
-      ormEntity.hashedPassword || undefined,
-      ormEntity.fullName || undefined,
-      ormEntity.isActive,
-      ormEntity.phoneNumber || undefined,
-      ormEntity.avatarUrl || undefined,
-      ormEntity.profile || undefined,
-      ormEntity.createdAt,
-      ormEntity.updatedAt,
-    );
-  }
-
-  static toPersistence(domainEntity: User): UserOrmEntity {
-    const ormEntity = new UserOrmEntity();
-    if (domainEntity.id !== undefined) {
-      ormEntity.id = domainEntity.id;
+    let result;
+    if (data.id) {
+      // UPDATE: Chỉ update khi có ID
+      result = await db
+        .update(users)
+        .set(data)
+        .where(eq(users.id, data.id))
+        .returning();
+    } else {
+      // INSERT: Loại bỏ ID để Postgres tự sinh (Serial)
+      // Tránh lỗi lệch sequence
+      const { id, ...insertData } = data;
+      result = await db.insert(users).values(insertData).returning();
     }
-    ormEntity.username = domainEntity.username;
-    ormEntity.email = domainEntity.email || null;
-    ormEntity.hashedPassword = domainEntity.hashedPassword || null;
-    ormEntity.fullName = domainEntity.fullName || null;
-    ormEntity.isActive = domainEntity.isActive;
-    ormEntity.phoneNumber = domainEntity.phoneNumber || null;
-    ormEntity.avatarUrl = domainEntity.avatarUrl || null;
-    ormEntity.profile = domainEntity.profile || null;
 
-    ormEntity.createdAt = domainEntity.createdAt || new Date();
-    ormEntity.updatedAt = domainEntity.updatedAt || new Date();
-    return ormEntity;
+    return UserMapper.toDomain(result[0])!;
+  }
+
+  async findAll(): Promise<User[]> {
+    return [];
+  }
+  async update(): Promise<User> {
+    throw new Error('Use save');
+  }
+  async delete(id: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(users).where(eq(users.id, id));
+  }
+  async exists(id: number, tx?: Transaction): Promise<boolean> {
+    const u = await this.findById(id, tx);
+    return !!u;
+  }
+  async count(): Promise<number> {
+    return 0;
   }
 }
 ```
@@ -1158,20 +1052,18 @@ export class UpdateProfileDto {
 ## File: src/modules/user/user.module.ts
 ```
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserService } from './application/services/user.service';
-import { TypeOrmUserRepository } from './infrastructure/persistence/typeorm-user.repository';
 import { UserController } from './infrastructure/controllers/user.controller';
-import { UserOrmEntity } from './infrastructure/persistence/entities/user.orm-entity';
+import { DrizzleUserRepository } from './infrastructure/persistence/drizzle-user.repository';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([UserOrmEntity])], // Import ORM Entity here, NOT Domain Entity
+  imports: [], // Không cần TypeOrmModule nữa
   controllers: [UserController],
   providers: [
     UserService,
     {
       provide: 'IUserRepository',
-      useClass: TypeOrmUserRepository,
+      useClass: DrizzleUserRepository,
     },
   ],
   exports: [UserService, 'IUserRepository'],
@@ -1249,25 +1141,30 @@ export class UserRole {
 import { Role } from '../entities/role.entity';
 import { Permission } from '../entities/permission.entity';
 import { UserRole } from '../entities/user-role.entity';
+import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
 
 export interface IRoleRepository {
-  findByName(name: string): Promise<Role | null>;
-  save(role: Role): Promise<Role>;
-  findAllWithPermissions(roleIds: number[]): Promise<Role[]>;
-  findAll(): Promise<Role[]>;
+  findByName(name: string, tx?: Transaction): Promise<Role | null>;
+  save(role: Role, tx?: Transaction): Promise<Role>;
+  findAllWithPermissions(roleIds: number[], tx?: Transaction): Promise<Role[]>;
+  findAll(tx?: Transaction): Promise<Role[]>;
 }
 
 export interface IPermissionRepository {
-  findByName(name: string): Promise<Permission | null>;
-  save(permission: Permission): Promise<Permission>;
-  findAll(): Promise<Permission[]>;
+  findByName(name: string, tx?: Transaction): Promise<Permission | null>;
+  save(permission: Permission, tx?: Transaction): Promise<Permission>;
+  findAll(tx?: Transaction): Promise<Permission[]>;
 }
 
 export interface IUserRoleRepository {
-  findByUserId(userId: number): Promise<UserRole[]>;
-  save(userRole: UserRole): Promise<void>;
-  findOne(userId: number, roleId: number): Promise<UserRole | null>;
-  delete(userId: number, roleId: number): Promise<void>;
+  findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]>;
+  save(userRole: UserRole, tx?: Transaction): Promise<void>;
+  findOne(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<UserRole | null>;
+  delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
 }
 ```
 
@@ -1795,234 +1692,131 @@ export const Permissions = (...permissions: string[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
 ```
 
-## File: src/modules/rbac/infrastructure/persistence/entities/role.orm-entity.ts
-```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  ManyToMany,
-  JoinTable,
-  UpdateDateColumn,
-} from 'typeorm';
-import { PermissionOrmEntity } from './permission.orm-entity';
-
-@Entity('roles')
-export class RoleOrmEntity {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ unique: true, length: 50 })
-  name: string;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', nullable: true })
-  description: string | null;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @Column({ default: false })
-  isSystem: boolean;
-
-  @ManyToMany(() => PermissionOrmEntity)
-  @JoinTable({
-    name: 'role_permissions',
-    joinColumn: { name: 'role_id', referencedColumnName: 'id' },
-    inverseJoinColumn: { name: 'permission_id', referencedColumnName: 'id' },
-  })
-  permissions: PermissionOrmEntity[];
-
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
-```
-
-## File: src/modules/rbac/infrastructure/persistence/entities/permission.orm-entity.ts
-```
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-} from 'typeorm';
-
-@Entity('permissions')
-export class PermissionOrmEntity {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column({ unique: true, length: 100 })
-  name: string;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', nullable: true })
-  description: string | null;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  resourceType: string | null;
-
-  // FIX: Thêm type: 'varchar'
-  @Column({ type: 'varchar', length: 50, nullable: true })
-  action: string | null;
-
-  @Column({ default: '*' })
-  attributes: string;
-
-  @Column({ default: true })
-  isActive: boolean;
-
-  @CreateDateColumn()
-  createdAt: Date;
-}
-```
-
-## File: src/modules/rbac/infrastructure/persistence/entities/user-role.orm-entity.ts
-```
-import {
-  Entity,
-  Column,
-  PrimaryColumn,
-  CreateDateColumn,
-  Index,
-  ManyToOne,
-  JoinColumn,
-} from 'typeorm';
-import { RoleOrmEntity } from './role.orm-entity';
-
-@Entity('user_roles')
-@Index('idx_user_roles_user_id', ['userId'])
-@Index('idx_user_roles_role_id', ['roleId'])
-export class UserRoleOrmEntity {
-  @PrimaryColumn('bigint')
-  userId: number;
-
-  @PrimaryColumn('int')
-  roleId: number;
-
-  // FIX: Thêm type: 'bigint'
-  @Column({ type: 'bigint', nullable: true })
-  assignedBy: number | null;
-
-  // FIX: Thêm type: 'timestamptz'
-  @Column({ type: 'timestamptz', nullable: true })
-  expiresAt: Date | null;
-
-  @CreateDateColumn()
-  assignedAt: Date;
-
-  @ManyToOne(() => RoleOrmEntity)
-  @JoinColumn({ name: 'roleId' })
-  role: RoleOrmEntity;
-}
-```
-
 ## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
 ```
-import { Role } from '../../../domain/entities/role.entity'; // FIX: 3 dots
-import { Permission } from '../../../domain/entities/permission.entity'; // FIX: 3 dots
-import { UserRole } from '../../../domain/entities/user-role.entity'; // FIX: 3 dots
-import { RoleOrmEntity } from '../entities/role.orm-entity';
-import { PermissionOrmEntity } from '../entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../entities/user-role.orm-entity';
+import { InferSelectModel } from 'drizzle-orm';
+import { Role } from '../../../domain/entities/role.entity';
+import { Permission } from '../../../domain/entities/permission.entity';
+import { UserRole } from '../../../domain/entities/user-role.entity';
+import { roles, permissions, userRoles } from '../../../../../database/schema';
+
+// Định nghĩa Type dựa trên Schema
+type RoleRecord = InferSelectModel<typeof roles>;
+type PermissionRecord = InferSelectModel<typeof permissions>;
+type UserRoleRecord = InferSelectModel<typeof userRoles>;
+
+// Type phức tạp cho Relation (Kết quả trả về từ db.query...)
+type RoleWithPermissions = RoleRecord & {
+  permissions: { permission: PermissionRecord }[];
+};
+type UserRoleWithRole = UserRoleRecord & {
+  role: RoleRecord;
+};
 
 export class RbacMapper {
   // PERMISSION
-  static toPermissionDomain(
-    orm: PermissionOrmEntity | null,
-  ): Permission | null {
-    if (!orm) return null;
+  static toPermissionDomain(raw: PermissionRecord | null): Permission | null {
+    if (!raw) return null;
     return new Permission(
-      orm.id,
-      orm.name,
-      orm.description || undefined,
-      orm.resourceType || undefined,
-      orm.action || undefined,
-      orm.isActive,
-      orm.attributes,
-      orm.createdAt,
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.resourceType || undefined,
+      raw.action || undefined,
+      raw.isActive || false,
+      raw.attributes || '*',
+      raw.createdAt || undefined,
     );
-  }
-  static toPermissionPersistence(domain: Permission): PermissionOrmEntity {
-    const orm = new PermissionOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.name = domain.name;
-    orm.description = domain.description || null;
-    orm.resourceType = domain.resourceType || null;
-    orm.action = domain.action || null;
-    orm.isActive = domain.isActive;
-    orm.attributes = domain.attributes;
-    orm.createdAt = domain.createdAt || new Date();
-    return orm;
   }
 
-  // ROLE
-  static toRoleDomain(orm: RoleOrmEntity | null): Role | null {
-    if (!orm) return null;
-    const perms = orm.permissions
-      ? orm.permissions.map((p) => this.toPermissionDomain(p)!).filter(Boolean)
-      : [];
+  static toPermissionPersistence(domain: Permission) {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      resourceType: domain.resourceType || null,
+      action: domain.action || null,
+      isActive: domain.isActive,
+      attributes: domain.attributes,
+      createdAt: domain.createdAt || new Date(),
+    };
+  }
+
+  // ROLE (Handle Relation Type Safety)
+  static toRoleDomain(
+    raw: RoleWithPermissions | RoleRecord | null,
+  ): Role | null {
+    if (!raw) return null;
+
+    // Check if it has nested permissions
+    let perms: Permission[] = [];
+    if ('permissions' in raw && Array.isArray(raw.permissions)) {
+      perms = raw.permissions
+        .map((rp) => this.toPermissionDomain(rp.permission)!)
+        .filter(Boolean);
+    }
+
     return new Role(
-      orm.id,
-      orm.name,
-      orm.description || undefined,
-      orm.isActive,
-      orm.isSystem,
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.isActive || false,
+      raw.isSystem || false,
       perms,
-      orm.createdAt,
-      orm.updatedAt,
+      raw.createdAt || undefined,
+      raw.updatedAt || undefined,
     );
   }
-  static toRolePersistence(domain: Role): RoleOrmEntity {
-    const orm = new RoleOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.name = domain.name;
-    orm.description = domain.description || null;
-    orm.isActive = domain.isActive;
-    orm.isSystem = domain.isSystem;
-    orm.permissions = domain.permissions.map((p) =>
-      this.toPermissionPersistence(p),
-    );
-    orm.createdAt = domain.createdAt || new Date();
-    orm.updatedAt = domain.updatedAt || new Date();
-    return orm;
+
+  static toRolePersistence(domain: Role) {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      isActive: domain.isActive,
+      isSystem: domain.isSystem,
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
   }
 
   // USER ROLE
-  static toUserRoleDomain(orm: UserRoleOrmEntity | null): UserRole | null {
-    if (!orm) return null;
-    const role = orm.role ? this.toRoleDomain(orm.role) : undefined;
+  static toUserRoleDomain(
+    raw: UserRoleWithRole | UserRoleRecord | null,
+  ): UserRole | null {
+    if (!raw) return null;
+
+    let role;
+    if ('role' in raw && raw.role) {
+      role = this.toRoleDomain(raw.role);
+    }
+
     return new UserRole(
-      Number(orm.userId),
-      orm.roleId,
-      orm.assignedBy ? Number(orm.assignedBy) : undefined,
-      orm.expiresAt || undefined,
-      orm.assignedAt,
+      Number(raw.userId),
+      raw.roleId,
+      raw.assignedBy ? Number(raw.assignedBy) : undefined,
+      raw.expiresAt || undefined,
+      raw.assignedAt || undefined,
       role!,
     );
   }
-  static toUserRolePersistence(domain: UserRole): UserRoleOrmEntity {
-    const orm = new UserRoleOrmEntity();
-    orm.userId = domain.userId;
-    orm.roleId = domain.roleId;
-    orm.assignedBy = domain.assignedBy || null;
-    orm.expiresAt = domain.expiresAt || null;
-    orm.assignedAt = domain.assignedAt || new Date();
-    return orm;
+
+  static toUserRolePersistence(domain: UserRole) {
+    return {
+      userId: domain.userId,
+      roleId: domain.roleId,
+      assignedBy: domain.assignedBy || null,
+      expiresAt: domain.expiresAt || null,
+      assignedAt: domain.assignedAt || new Date(),
+    };
   }
 }
 ```
 
-## File: src/modules/rbac/infrastructure/persistence/repositories/typeorm-rbac.repositories.ts
+## File: src/modules/rbac/infrastructure/persistence/repositories/drizzle-rbac.repositories.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { eq, inArray, and } from 'drizzle-orm';
 import {
   IRoleRepository,
   IPermissionRepository,
@@ -2031,96 +1825,194 @@ import {
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
-import { RoleOrmEntity } from '../entities/role.orm-entity';
-import { PermissionOrmEntity } from '../entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../entities/user-role.orm-entity';
+import { DrizzleBaseRepository } from '../../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
+import {
+  roles,
+  permissions,
+  userRoles,
+  rolePermissions,
+} from '../../../../../database/schema';
 import { RbacMapper } from '../mappers/rbac.mapper';
+import { Transaction } from '../../../../../core/shared/application/ports/transaction-manager.port';
 
+// --- ROLE REPOSITORY ---
 @Injectable()
-export class TypeOrmRoleRepository implements IRoleRepository {
-  constructor(
-    @InjectRepository(RoleOrmEntity) private repo: Repository<RoleOrmEntity>,
-  ) {}
-
-  async findByName(name: string): Promise<Role | null> {
-    const entity = await this.repo.findOne({
-      where: { name },
-      relations: ['permissions'],
+export class DrizzleRoleRepository
+  extends DrizzleBaseRepository
+  implements IRoleRepository
+{
+  async findByName(name: string, tx?: Transaction): Promise<Role | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.roles.findFirst({
+      where: eq(roles.name, name),
+      with: {
+        permissions: {
+          with: { permission: true },
+        },
+      },
     });
-    return RbacMapper.toRoleDomain(entity);
+
+    return result ? RbacMapper.toRoleDomain(result as any) : null;
   }
 
-  async save(role: Role): Promise<Role> {
-    const orm = RbacMapper.toRolePersistence(role);
-    const saved = await this.repo.save(orm);
-    return RbacMapper.toRoleDomain(saved)!;
-  }
+  async save(role: Role, tx?: Transaction): Promise<Role> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toRolePersistence(role);
 
-  async findAllWithPermissions(roleIds: number[]): Promise<Role[]> {
-    const entities = await this.repo.find({
-      where: { id: In(roleIds), isActive: true },
-      relations: ['permissions'],
+    return await db.transaction(async (trx) => {
+      let savedRoleId: number;
+
+      // SAFE UPSERT LOGIC
+      if (data.id) {
+        await trx.update(roles).set(data).where(eq(roles.id, data.id));
+        savedRoleId = data.id;
+      } else {
+        const { id, ...insertData } = data;
+        const res = await trx
+          .insert(roles)
+          .values(insertData)
+          .returning({ id: roles.id });
+        savedRoleId = res[0].id;
+      }
+
+      // Handle Permissions Relation
+      if (role.permissions && role.permissions.length > 0) {
+        await trx
+          .delete(rolePermissions)
+          .where(eq(rolePermissions.roleId, savedRoleId));
+
+        const permInserts = role.permissions.map((p) => ({
+          roleId: savedRoleId,
+          permissionId: p.id!,
+        }));
+
+        if (permInserts.length > 0) {
+          await trx.insert(rolePermissions).values(permInserts);
+        }
+      }
+
+      // Return full object by refetching
+      const finalRole = await this.findByName(
+        role.name,
+        trx as unknown as Transaction,
+      );
+      return finalRole!;
     });
-    return entities.map((e) => RbacMapper.toRoleDomain(e)!);
   }
 
-  async findAll(): Promise<Role[]> {
-    const entities = await this.repo.find({ relations: ['permissions'] });
-    return entities.map((e) => RbacMapper.toRoleDomain(e)!);
+  async findAllWithPermissions(
+    roleIds: number[],
+    tx?: Transaction,
+  ): Promise<Role[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      where: inArray(roles.id, roleIds),
+      with: { permissions: { with: { permission: true } } },
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
+
+  async findAll(tx?: Transaction): Promise<Role[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      with: { permissions: { with: { permission: true } } },
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
   }
 }
 
+// --- PERMISSION REPOSITORY ---
 @Injectable()
-export class TypeOrmPermissionRepository implements IPermissionRepository {
-  constructor(
-    @InjectRepository(PermissionOrmEntity)
-    private repo: Repository<PermissionOrmEntity>,
-  ) {}
-
-  async findByName(name: string): Promise<Permission | null> {
-    const entity = await this.repo.findOne({ where: { name } });
-    return RbacMapper.toPermissionDomain(entity);
+export class DrizzlePermissionRepository
+  extends DrizzleBaseRepository
+  implements IPermissionRepository
+{
+  async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select()
+      .from(permissions)
+      .where(eq(permissions.name, name));
+    return RbacMapper.toPermissionDomain(result[0]);
   }
 
-  async save(permission: Permission): Promise<Permission> {
-    const orm = RbacMapper.toPermissionPersistence(permission);
-    const saved = await this.repo.save(orm);
-    return RbacMapper.toPermissionDomain(saved)!;
+  async save(permission: Permission, tx?: Transaction): Promise<Permission> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toPermissionPersistence(permission);
+
+    let result;
+    if (data.id) {
+      result = await db
+        .update(permissions)
+        .set(data)
+        .where(eq(permissions.id, data.id))
+        .returning();
+    } else {
+      const { id, ...insertData } = data;
+      result = await db.insert(permissions).values(insertData).returning();
+    }
+
+    return RbacMapper.toPermissionDomain(result[0])!;
   }
 
-  async findAll(): Promise<Permission[]> {
-    const entities = await this.repo.find();
-    return entities.map((e) => RbacMapper.toPermissionDomain(e)!);
+  async findAll(tx?: Transaction): Promise<Permission[]> {
+    const db = this.getDb(tx);
+    const results = await db.select().from(permissions);
+    return results.map((r) => RbacMapper.toPermissionDomain(r)!);
   }
 }
 
+// --- USER ROLE REPOSITORY ---
 @Injectable()
-export class TypeOrmUserRoleRepository implements IUserRoleRepository {
-  constructor(
-    @InjectRepository(UserRoleOrmEntity)
-    private repo: Repository<UserRoleOrmEntity>,
-  ) {}
-
-  async findByUserId(userId: number): Promise<UserRole[]> {
-    const entities = await this.repo.find({
-      where: { userId },
-      relations: ['role'],
+export class DrizzleUserRoleRepository
+  extends DrizzleBaseRepository
+  implements IUserRoleRepository
+{
+  async findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.userRoles.findMany({
+      where: eq(userRoles.userId, userId),
+      with: { role: true },
     });
-    return entities.map((e) => RbacMapper.toUserRoleDomain(e)!);
+    return results.map((r) => RbacMapper.toUserRoleDomain(r as any)!);
   }
 
-  async save(userRole: UserRole): Promise<void> {
-    const orm = RbacMapper.toUserRolePersistence(userRole);
-    await this.repo.save(orm);
+  async save(userRole: UserRole, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toUserRolePersistence(userRole);
+
+    // Manual Upsert for Composite Key
+    await db
+      .insert(userRoles)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [userRoles.userId, userRoles.roleId],
+        set: { expiresAt: data.expiresAt, assignedBy: data.assignedBy },
+      });
   }
 
-  async findOne(userId: number, roleId: number): Promise<UserRole | null> {
-    const entity = await this.repo.findOne({ where: { userId, roleId } });
-    return RbacMapper.toUserRoleDomain(entity);
+  async findOne(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<UserRole | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.userRoles.findFirst({
+      where: and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)),
+      with: { role: true },
+    });
+    return result ? RbacMapper.toUserRoleDomain(result as any) : null;
   }
 
-  async delete(userId: number, roleId: number): Promise<void> {
-    await this.repo.delete({ userId, roleId });
+  async delete(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    await db
+      .delete(userRoles)
+      .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
 }
 ```
@@ -2128,7 +2020,6 @@ export class TypeOrmUserRoleRepository implements IUserRoleRepository {
 ## File: src/modules/rbac/rbac.module.ts
 ```
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UserModule } from '../user/user.module';
@@ -2138,25 +2029,16 @@ import { PermissionService } from './application/services/permission.service';
 import { RoleService } from './application/services/role.service';
 import { RbacManagerService } from './application/services/rbac-manager.service';
 import { PermissionGuard } from './infrastructure/guards/permission.guard';
-// Infra Entities
-import { RoleOrmEntity } from './infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from './infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from './infrastructure/persistence/entities/user-role.orm-entity';
-// Repositories
+// Drizzle Repositories
 import {
-  TypeOrmRoleRepository,
-  TypeOrmPermissionRepository,
-  TypeOrmUserRoleRepository,
-} from './infrastructure/persistence/repositories/typeorm-rbac.repositories';
+  DrizzleRoleRepository,
+  DrizzlePermissionRepository,
+  DrizzleUserRoleRepository,
+} from './infrastructure/persistence/repositories/drizzle-rbac.repositories';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([
-      RoleOrmEntity,
-      PermissionOrmEntity,
-      UserRoleOrmEntity,
-    ]),
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (c: ConfigService) => ({ ttl: 300, max: 1000 }),
@@ -2169,9 +2051,9 @@ import {
     RoleService,
     PermissionGuard,
     RbacManagerService,
-    { provide: 'IRoleRepository', useClass: TypeOrmRoleRepository },
-    { provide: 'IPermissionRepository', useClass: TypeOrmPermissionRepository },
-    { provide: 'IUserRoleRepository', useClass: TypeOrmUserRoleRepository },
+    { provide: 'IRoleRepository', useClass: DrizzleRoleRepository },
+    { provide: 'IPermissionRepository', useClass: DrizzlePermissionRepository },
+    { provide: 'IUserRoleRepository', useClass: DrizzleUserRoleRepository },
   ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
@@ -2274,32 +2156,39 @@ export class PasswordUtil {
 ```
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { TypeOrmTransactionManager } from '../../core/shared/infrastructure/persistence/typeorm-transaction.manager';
+import { InMemoryEventBus } from '../../core/shared/infrastructure/adapters/in-memory-event-bus.adapter';
+import { DrizzleTransactionManager } from '../../core/shared/infrastructure/persistence/drizzle-transaction.manager';
+import { DrizzleModule } from '../../database/drizzle.module';
 
 @Global()
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' })],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    DrizzleModule,
+  ],
   providers: [
     {
+      provide: 'IEventBus',
+      useClass: InMemoryEventBus,
+    },
+    {
       provide: 'ITransactionManager',
-      useClass: TypeOrmTransactionManager,
+      useClass: DrizzleTransactionManager,
     },
   ],
-  exports: [ConfigModule, 'ITransactionManager'],
+  exports: [ConfigModule, 'IEventBus', 'ITransactionManager'],
 })
 export class SharedModule {}
 ```
 
 ## File: src/modules/test/seeders/database.seeder.ts
 ```
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, OnModuleInit, Inject } from '@nestjs/common';
+import { DRIZZLE } from '../../../database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '../../../database/schema';
+import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
-import { UserOrmEntity } from '../../user/infrastructure/persistence/entities/user.orm-entity';
-import { RoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from '../../rbac/infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 import {
   SystemPermission,
   SystemRole,
@@ -2307,53 +2196,59 @@ import {
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
-  constructor(
-    @InjectRepository(UserOrmEntity) private uRepo: Repository<UserOrmEntity>,
-    @InjectRepository(RoleOrmEntity) private rRepo: Repository<RoleOrmEntity>,
-    @InjectRepository(PermissionOrmEntity)
-    private pRepo: Repository<PermissionOrmEntity>,
-    @InjectRepository(UserRoleOrmEntity)
-    private urRepo: Repository<UserRoleOrmEntity>,
-  ) {}
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
 
   async onModuleInit() {
     if (process.env.NODE_ENV !== 'development') return;
-    console.log('Seeding...');
-    await this.seedPerms();
+    console.log('🌱 Seeding database (Drizzle)...');
+
+    await this.seedPermissions();
     await this.seedRoles();
     await this.seedUsers();
-    await this.assign();
-    console.log('Seeded.');
+    await this.assignPermissionsToRoles();
+    await this.assignRolesToUsers();
+
+    console.log('✅ Database seeded successfully!');
   }
 
-  async seedPerms() {
+  private async seedPermissions() {
     for (const name of Object.values(SystemPermission)) {
       const [res, act] = name.split(':');
-      if (!(await this.pRepo.findOne({ where: { name } }))) {
-        await this.pRepo.save(
-          this.pRepo.create({
-            name,
-            resourceType: res,
-            action: act,
-            isActive: true,
-          }),
-        );
+      const exists = await this.db.query.permissions.findFirst({
+        where: eq(schema.permissions.name, name),
+      });
+      if (!exists) {
+        await this.db.insert(schema.permissions).values({
+          name,
+          resourceType: res,
+          action: act,
+          isActive: true,
+          description: `System permission: ${name}`,
+        });
       }
     }
+    console.log(' - Permissions checked');
   }
 
-  async seedRoles() {
+  private async seedRoles() {
     for (const name of Object.values(SystemRole)) {
-      if (!(await this.rRepo.findOne({ where: { name } }))) {
-        await this.rRepo.save(
-          this.rRepo.create({ name, isSystem: true, isActive: true }),
-        );
+      const exists = await this.db.query.roles.findFirst({
+        where: eq(schema.roles.name, name),
+      });
+      if (!exists) {
+        await this.db.insert(schema.roles).values({
+          name,
+          description: `System role: ${name}`,
+          isSystem: true,
+          isActive: true,
+        });
       }
     }
+    console.log(' - Roles checked');
   }
 
-  async seedUsers() {
-    const pw = await bcrypt.hash('123456', 10);
+  private async seedUsers() {
+    const password = await bcrypt.hash('123456', 10);
     const users = [
       {
         username: 'superadmin',
@@ -2362,46 +2257,58 @@ export class DatabaseSeeder implements OnModuleInit {
       },
       { username: 'user1', fullName: 'Normal User', email: 'user@test.com' },
     ];
+
     for (const u of users) {
-      if (!(await this.uRepo.findOne({ where: { username: u.username } }))) {
-        await this.uRepo.save(
-          this.uRepo.create({
-            ...u,
-            hashedPassword: pw,
-            isActive: true,
-            createdAt: new Date(),
-          }),
-        );
+      const exists = await this.db.query.users.findFirst({
+        where: eq(schema.users.username, u.username),
+      });
+      if (!exists) {
+        await this.db.insert(schema.users).values({
+          ...u,
+          hashedPassword: password,
+          isActive: true,
+        });
       }
     }
+    console.log(' - Users checked');
   }
 
-  async assign() {
-    const adminRole = await this.rRepo.findOne({
-      where: { name: SystemRole.SUPER_ADMIN },
-      relations: ['permissions'],
+  private async assignPermissionsToRoles() {
+    // 1. Get Admin Role
+    const adminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
     });
     if (!adminRole) return;
 
-    // Assign all perms to superadmin
-    const allPerms = await this.pRepo.find();
-    adminRole.permissions = allPerms;
-    await this.rRepo.save(adminRole);
+    // 2. Get All Permissions
+    const allPerms = await this.db.select().from(schema.permissions);
 
-    const adminUser = await this.uRepo.findOne({
-      where: { username: 'superadmin' },
-    });
-    if (adminUser) {
-      const ur = await this.urRepo.findOne({
-        where: { userId: adminUser.id, roleId: adminRole.id },
-      });
-      if (!ur)
-        await this.urRepo.save({
-          userId: adminUser.id,
-          roleId: adminRole.id,
-          assignedAt: new Date(),
-        });
+    // 3. Insert into role_permissions (Ignore duplicates)
+    for (const perm of allPerms) {
+      await this.db
+        .insert(schema.rolePermissions)
+        .values({ roleId: adminRole.id, permissionId: perm.id })
+        .onConflictDoNothing()
+        .catch(() => {}); // Catch duplicate key error silently
     }
+    console.log(' - Admin permissions assigned');
+  }
+
+  private async assignRolesToUsers() {
+    const adminUser = await this.db.query.users.findFirst({
+      where: eq(schema.users.username, 'superadmin'),
+    });
+    const adminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
+    });
+
+    if (adminUser && adminRole) {
+      await this.db
+        .insert(schema.userRoles)
+        .values({ userId: adminUser.id, roleId: adminRole.id })
+        .onConflictDoNothing();
+    }
+    console.log(' - Admin role assigned');
   }
 }
 ```
@@ -2472,26 +2379,15 @@ export class TestController {
 ## File: src/modules/test/test.module.ts
 ```
 import { Module, OnModuleInit } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { UserModule } from '../user/user.module';
-import { RbacModule } from '../rbac/rbac.module';
+import { RbacModule } from '../rbac/rbac.module'; // Import RBAC
 import { DatabaseSeeder } from './seeders/database.seeder';
 import { TestController } from './controllers/test.controller';
-import { UserOrmEntity } from '../user/infrastructure/persistence/entities/user.orm-entity';
-import { RoleOrmEntity } from '../rbac/infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from '../rbac/infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 
 @Module({
   imports: [
     UserModule,
-    RbacModule,
-    TypeOrmModule.forFeature([
-      UserOrmEntity,
-      RoleOrmEntity,
-      PermissionOrmEntity,
-      UserRoleOrmEntity,
-    ]),
+    RbacModule, // <--- QUAN TRỌNG: Cần thiết cho PermissionGuard
   ],
   controllers: [TestController],
   providers: [DatabaseSeeder],
@@ -2685,6 +2581,21 @@ export interface IPaginatedRepository<T, ID> extends IRepository<T, ID> {
 }
 ```
 
+## File: src/core/shared/application/ports/event-bus.port.ts
+```
+import { IDomainEvent } from '../../domain/events/domain-event.interface';
+
+export interface IEventBus {
+  publish<T extends IDomainEvent>(event: T): Promise<void>;
+  publishAll(events: IDomainEvent[]): Promise<void>;
+  subscribe<T extends IDomainEvent>(
+    eventName: string,
+    handler: (event: T) => Promise<void>,
+  ): void;
+  unsubscribe(eventName: string, handler: Function): void;
+}
+```
+
 ## File: src/core/shared/infrastructure/adapters/csv-parser.adapter.ts
 ```
 import { Injectable } from '@nestjs/common';
@@ -2703,83 +2614,163 @@ export class CsvParserAdapter implements IFileParser {
 }
 ```
 
-## File: src/core/shared/infrastructure/persistence/typeorm-transaction.manager.ts
+## File: src/core/shared/infrastructure/adapters/in-memory-event-bus.adapter.ts
 ```
-import { Injectable } from '@nestjs/common';
-import { DataSource, EntityManager } from 'typeorm';
+import { Injectable, Logger } from '@nestjs/common';
+import { IEventBus } from '../../application/ports/event-bus.port'; // ../../ trỏ về src/core/shared
+import { IDomainEvent } from '../../domain/events/domain-event.interface';
+
+@Injectable()
+export class InMemoryEventBus implements IEventBus {
+  private readonly logger = new Logger(InMemoryEventBus.name);
+  private handlers = new Map<string, Function[]>();
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    const eventName = event.eventName;
+    const handlers = this.handlers.get(eventName);
+
+    if (handlers) {
+      this.logger.debug(`Publishing event: ${eventName}`);
+      await Promise.all(handlers.map((handler) => handler(event)));
+    }
+  }
+
+  async publishAll(events: IDomainEvent[]): Promise<void> {
+    await Promise.all(events.map((event) => this.publish(event)));
+  }
+
+  subscribe<T extends IDomainEvent>(
+    eventName: string,
+    handler: (event: T) => Promise<void>,
+  ): void {
+    if (!this.handlers.has(eventName)) {
+      this.handlers.set(eventName, []);
+    }
+    this.handlers.get(eventName)?.push(handler);
+  }
+
+  unsubscribe(eventName: string, handler: Function): void {
+    const handlers = this.handlers.get(eventName);
+    if (handlers) {
+      const index = handlers.indexOf(handler);
+      if (index > -1) {
+        handlers.splice(index, 1);
+      }
+    }
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/persistence/drizzle-base.repository.ts
+```
+import { Inject, Injectable } from '@nestjs/common';
+import { DRIZZLE } from '../../../../database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '../../../../database/schema';
+import { Transaction } from '../../application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleBaseRepository {
+  constructor(
+    @Inject(DRIZZLE) protected readonly db: NodePgDatabase<typeof schema>,
+  ) {}
+
+  // Helper để lấy DB Context
+  protected getDb(tx?: Transaction): NodePgDatabase<typeof schema> {
+    return tx ? (tx as NodePgDatabase<typeof schema>) : this.db;
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/persistence/drizzle-transaction.manager.ts
+```
+import { Inject, Injectable } from '@nestjs/common';
 import {
   ITransactionManager,
   Transaction,
 } from '../../application/ports/transaction-manager.port';
+// FIX PATH: 4 cấp ../ để về src, sau đó vào database
+import { DRIZZLE } from '../../../../database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '../../../../database/schema';
 
 @Injectable()
-export class TypeOrmTransactionManager implements ITransactionManager {
-  constructor(private dataSource: DataSource) {}
+export class DrizzleTransactionManager implements ITransactionManager {
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
 
   async runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
-    return this.dataSource.transaction(async (entityManager: EntityManager) => {
-      // Ép kiểu EntityManager thành Transaction (unknown) để truyền xuống dưới
-      return work(entityManager as unknown as Transaction);
+    return this.db.transaction(async (tx) => {
+      return work(tx as unknown as Transaction);
     });
   }
 }
 ```
 
-## File: src/core/shared/infrastructure/persistence/abstract-typeorm.repository.ts
+## File: src/core/shared/domain/value-objects/money.vo.ts
 ```
-import {
-  Repository,
-  DeepPartial,
-  ObjectLiteral,
-  FindOptionsWhere,
-  EntityManager,
-} from 'typeorm';
-import { IRepository } from '../../application/ports/repository.port';
-import { Transaction } from '../../application/ports/transaction-manager.port';
+export class InvalidMoneyException extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
 
-export abstract class AbstractTypeOrmRepository<
-  T extends ObjectLiteral,
-> implements IRepository<T, any> {
-  protected constructor(protected readonly repository: Repository<T>) {}
-
-  protected getRepository(tx?: Transaction): Repository<T> {
-    if (tx) {
-      const entityManager = tx as EntityManager;
-      return entityManager.getRepository(this.repository.target);
+export class Money {
+  constructor(
+    private readonly amount: number,
+    private readonly currency: string = 'VND',
+  ) {
+    if (amount < 0) {
+      throw new InvalidMoneyException('Amount cannot be negative');
     }
-    return this.repository;
-  }
-
-  async findById(id: any, tx?: Transaction): Promise<T | null> {
-    const repo = this.getRepository(tx);
-    const options = { where: { id } as unknown as FindOptionsWhere<T> };
-    return repo.findOne(options);
-  }
-
-  async findAll(criteria?: Partial<T>, tx?: Transaction): Promise<T[]> {
-    const repo = this.getRepository(tx);
-    if (criteria) {
-      return repo.find({ where: criteria as FindOptionsWhere<T> });
+    if (!Number.isInteger(amount)) {
+      throw new InvalidMoneyException('Amount must be an integer');
     }
-    return repo.find();
   }
 
-  // FIX: Return Promise<T> instead of Promise<void>
-  async save(entity: T, tx?: Transaction): Promise<T> {
-    const repo = this.getRepository(tx);
-    // TypeORM .save() returns the saved entity
-    return repo.save(entity as DeepPartial<T>) as Promise<T>;
+  add(other: Money): Money {
+    this.validateSameCurrency(other);
+    return new Money(this.amount + other.amount, this.currency);
   }
 
-  async delete(id: any, tx?: Transaction): Promise<void> {
-    const repo = this.getRepository(tx);
-    await repo.delete(id);
+  subtract(other: Money): Money {
+    this.validateSameCurrency(other);
+    if (other.amount > this.amount) {
+      throw new InvalidMoneyException('Insufficient funds');
+    }
+    return new Money(this.amount - other.amount, this.currency);
   }
 
-  async exists(id: any, tx?: Transaction): Promise<boolean> {
-    const entity = await this.findById(id, tx);
-    return !!entity;
+  multiply(factor: number): Money {
+    return new Money(Math.round(this.amount * factor), this.currency);
   }
+
+  getAmount(): number {
+    return this.amount;
+  }
+
+  getCurrency(): string {
+    return this.currency;
+  }
+
+  equals(other: Money): boolean {
+    return this.amount === other.amount && this.currency === other.currency;
+  }
+
+  private validateSameCurrency(other: Money): void {
+    if (this.currency !== other.currency) {
+      throw new InvalidMoneyException('Currencies must match');
+    }
+  }
+}
+```
+
+## File: src/core/shared/domain/events/domain-event.interface.ts
+```
+export interface IDomainEvent {
+  readonly aggregateId: string;
+  readonly eventName: string;
+  readonly occurredAt: Date;
+  readonly payload: Record<string, any>;
 }
 ```
 
@@ -2799,29 +2790,18 @@ export default registerAs('app', () => ({
 import { registerAs } from '@nestjs/config';
 
 export default registerAs('database', () => {
-  const isDev = process.env.NODE_ENV === 'development';
+  // Ưu tiên Connection String (Cloud)
+  if (process.env.DATABASE_URL) {
+    return { url: process.env.DATABASE_URL };
+  }
 
+  // Fallback Local
   return {
-    type: 'postgres',
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '5432', 10),
     username: process.env.DB_USERNAME || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     database: process.env.DB_NAME || 'rbac_system',
-
-    // PRO TIP:
-    // Trên Production nên tắt synchronize (false) và dùng migrationsRun (true)
-    // Ở Dev có thể để synchronize true cho lẹ, nhưng dùng Migration an toàn hơn
-    synchronize: isDev,
-    logging: isDev ? ['error', 'warn', 'migration'] : ['error'],
-
-    // --- MIGRATION CONFIG ---
-    migrationsRun: true, // Tự động chạy migration khi start app
-    migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
-    // ------------------------
-
-    autoLoadEntities: true,
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   };
 });
 ```
@@ -2835,44 +2815,208 @@ export default registerAs('logging', () => ({
 }));
 ```
 
-## File: src/database/migrations/1700000000000-add-attributes-to-permission.ts
+## File: src/database/schema/index.ts
 ```
-import { MigrationInterface, QueryRunner, TableColumn } from 'typeorm';
+export * from './users.schema';
+export * from './sessions.schema';
+export * from './rbac.schema';
+```
 
-export class AddAttributesToPermission1700000000000 implements MigrationInterface {
-  public async up(queryRunner: QueryRunner): Promise<void> {
-    // 1. Lấy thông tin bảng permissions
-    const table = await queryRunner.getTable('permissions');
+## File: src/database/schema/users.schema.ts
+```
+import {
+  pgTable,
+  bigserial,
+  text,
+  boolean,
+  timestamp,
+  jsonb,
+} from 'drizzle-orm/pg-core';
 
-    // 2. Kiểm tra xem cột 'attributes' đã tồn tại chưa
-    const attributeColumn = table?.findColumnByName('attributes');
+export const users = pgTable('users', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  username: text('username').notNull().unique(),
+  email: text('email').unique(), // Nullable by default
+  hashedPassword: text('hashedPassword'),
+  fullName: text('fullName'),
+  isActive: boolean('isActive').default(true),
+  phoneNumber: text('phoneNumber'),
+  avatarUrl: text('avatarUrl'),
+  profile: jsonb('profile'),
+  createdAt: timestamp('createdAt').defaultNow(),
+  updatedAt: timestamp('updatedAt').defaultNow(),
+});
+```
 
-    // 3. Nếu chưa có thì thêm vào
-    if (!attributeColumn) {
-      await queryRunner.addColumn(
-        'permissions',
-        new TableColumn({
-          name: 'attributes',
-          type: 'varchar',
-          default: "'*'", // Mặc định là dấu sao (Full quyền)
-          isNullable: false,
-        }),
-      );
-      console.log(
-        '✅ MIGRATION: Added "attributes" column to "permissions" table.',
-      );
-    }
-  }
+## File: src/database/schema/sessions.schema.ts
+```
+import {
+  pgTable,
+  uuid,
+  bigint,
+  text,
+  timestamp,
+  index,
+} from 'drizzle-orm/pg-core';
 
-  public async down(queryRunner: QueryRunner): Promise<void> {
-    // Logic Rollback: Nếu chạy revert thì xóa cột đi
-    const table = await queryRunner.getTable('permissions');
-    const attributeColumn = table?.findColumnByName('attributes');
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: bigint('userId', { mode: 'number' }).notNull(),
+    token: text('token').notNull(),
+    expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+    ipAddress: text('ipAddress'),
+    userAgent: text('userAgent'),
+    createdAt: timestamp('createdAt').defaultNow(),
+  },
+  (table) => {
+    return {
+      userIdIdx: index('idx_sessions_user_id').on(table.userId),
+    };
+  },
+);
+```
 
-    if (attributeColumn) {
-      await queryRunner.dropColumn('permissions', 'attributes');
-    }
-  }
-}
+## File: src/database/schema/rbac.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  boolean,
+  timestamp,
+  primaryKey,
+  bigint,
+  integer,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+
+// Permissions
+export const permissions = pgTable('permissions', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  resourceType: text('resourceType'),
+  action: text('action'),
+  attributes: text('attributes').default('*'),
+  isActive: boolean('isActive').default(true),
+  createdAt: timestamp('createdAt').defaultNow(),
+});
+
+// Roles
+export const roles = pgTable('roles', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  isActive: boolean('isActive').default(true),
+  isSystem: boolean('isSystem').default(false),
+  createdAt: timestamp('createdAt').defaultNow(),
+  updatedAt: timestamp('updatedAt').defaultNow(),
+});
+
+// User Roles (Many-to-Many User-Role)
+export const userRoles = pgTable(
+  'user_roles',
+  {
+    userId: bigint('userId', { mode: 'number' }).notNull(),
+    roleId: integer('roleId')
+      .notNull()
+      .references(() => roles.id),
+    assignedBy: bigint('assignedBy', { mode: 'number' }),
+    expiresAt: timestamp('expiresAt', { withTimezone: true }),
+    assignedAt: timestamp('assignedAt').defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.roleId] }),
+  }),
+);
+
+// Role Permissions (Many-to-Many Role-Permission)
+export const rolePermissions = pgTable(
+  'role_permissions',
+  {
+    roleId: integer('role_id')
+      .notNull()
+      .references(() => roles.id),
+    permissionId: integer('permission_id')
+      .notNull()
+      .references(() => permissions.id),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.roleId, t.permissionId] }),
+  }),
+);
+
+// Relations
+export const rolesRelations = relations(roles, ({ many }) => ({
+  permissions: many(rolePermissions),
+}));
+
+export const permissionsRelations = relations(permissions, ({ many }) => ({
+  roles: many(rolePermissions),
+}));
+
+export const rolePermissionsRelations = relations(
+  rolePermissions,
+  ({ one }) => ({
+    role: one(roles, {
+      fields: [rolePermissions.roleId],
+      references: [roles.id],
+    }),
+    permission: one(permissions, {
+      fields: [rolePermissions.permissionId],
+      references: [permissions.id],
+    }),
+  }),
+);
+```
+
+## File: src/database/drizzle.provider.ts
+```
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { ConfigService } from '@nestjs/config';
+import * as schema from './schema';
+
+export const DRIZZLE = 'DRIZZLE_CONNECTION';
+
+export const drizzleProvider = {
+  provide: DRIZZLE,
+  inject: [ConfigService],
+  useFactory: async (configService: ConfigService) => {
+    const connectionString = configService.get<string>('database.url');
+
+    // Config cho cả Local và Cloud
+    const host = configService.get<string>('database.host');
+    const port = configService.get<number>('database.port');
+    const user = configService.get<string>('database.username');
+    const password = configService.get<string>('database.password');
+    const database = configService.get<string>('database.database');
+
+    const poolConfig = connectionString
+      ? { connectionString }
+      : { host, port, user, password, database };
+
+    const pool = new Pool(poolConfig);
+
+    return drizzle(pool, { schema });
+  },
+};
+```
+
+## File: src/database/drizzle.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { drizzleProvider } from './drizzle.provider';
+import { ConfigModule } from '@nestjs/config';
+
+@Global()
+@Module({
+  imports: [ConfigModule],
+  providers: [drizzleProvider],
+  exports: [drizzleProvider],
+})
+export class DrizzleModule {}
 ```
 

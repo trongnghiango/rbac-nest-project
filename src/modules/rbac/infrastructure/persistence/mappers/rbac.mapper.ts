@@ -1,92 +1,117 @@
-import { Role } from '../../../domain/entities/role.entity'; // FIX: 3 dots
-import { Permission } from '../../../domain/entities/permission.entity'; // FIX: 3 dots
-import { UserRole } from '../../../domain/entities/user-role.entity'; // FIX: 3 dots
-import { RoleOrmEntity } from '../entities/role.orm-entity';
-import { PermissionOrmEntity } from '../entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../entities/user-role.orm-entity';
+import { InferSelectModel } from 'drizzle-orm';
+import { Role } from '../../../domain/entities/role.entity';
+import { Permission } from '../../../domain/entities/permission.entity';
+import { UserRole } from '../../../domain/entities/user-role.entity';
+import { roles, permissions, userRoles } from '../../../../../database/schema';
+
+// Định nghĩa Type dựa trên Schema
+type RoleRecord = InferSelectModel<typeof roles>;
+type PermissionRecord = InferSelectModel<typeof permissions>;
+type UserRoleRecord = InferSelectModel<typeof userRoles>;
+
+// Type phức tạp cho Relation (Kết quả trả về từ db.query...)
+type RoleWithPermissions = RoleRecord & {
+  permissions: { permission: PermissionRecord }[];
+};
+type UserRoleWithRole = UserRoleRecord & {
+  role: RoleRecord;
+};
 
 export class RbacMapper {
   // PERMISSION
-  static toPermissionDomain(
-    orm: PermissionOrmEntity | null,
-  ): Permission | null {
-    if (!orm) return null;
+  static toPermissionDomain(raw: PermissionRecord | null): Permission | null {
+    if (!raw) return null;
     return new Permission(
-      orm.id,
-      orm.name,
-      orm.description || undefined,
-      orm.resourceType || undefined,
-      orm.action || undefined,
-      orm.isActive,
-      orm.attributes,
-      orm.createdAt,
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.resourceType || undefined,
+      raw.action || undefined,
+      raw.isActive || false,
+      raw.attributes || '*',
+      raw.createdAt || undefined,
     );
-  }
-  static toPermissionPersistence(domain: Permission): PermissionOrmEntity {
-    const orm = new PermissionOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.name = domain.name;
-    orm.description = domain.description || null;
-    orm.resourceType = domain.resourceType || null;
-    orm.action = domain.action || null;
-    orm.isActive = domain.isActive;
-    orm.attributes = domain.attributes;
-    orm.createdAt = domain.createdAt || new Date();
-    return orm;
   }
 
-  // ROLE
-  static toRoleDomain(orm: RoleOrmEntity | null): Role | null {
-    if (!orm) return null;
-    const perms = orm.permissions
-      ? orm.permissions.map((p) => this.toPermissionDomain(p)!).filter(Boolean)
-      : [];
+  static toPermissionPersistence(domain: Permission) {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      resourceType: domain.resourceType || null,
+      action: domain.action || null,
+      isActive: domain.isActive,
+      attributes: domain.attributes,
+      createdAt: domain.createdAt || new Date(),
+    };
+  }
+
+  // ROLE (Handle Relation Type Safety)
+  static toRoleDomain(
+    raw: RoleWithPermissions | RoleRecord | null,
+  ): Role | null {
+    if (!raw) return null;
+
+    // Check if it has nested permissions
+    let perms: Permission[] = [];
+    if ('permissions' in raw && Array.isArray(raw.permissions)) {
+      perms = raw.permissions
+        .map((rp) => this.toPermissionDomain(rp.permission)!)
+        .filter(Boolean);
+    }
+
     return new Role(
-      orm.id,
-      orm.name,
-      orm.description || undefined,
-      orm.isActive,
-      orm.isSystem,
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.isActive || false,
+      raw.isSystem || false,
       perms,
-      orm.createdAt,
-      orm.updatedAt,
+      raw.createdAt || undefined,
+      raw.updatedAt || undefined,
     );
   }
-  static toRolePersistence(domain: Role): RoleOrmEntity {
-    const orm = new RoleOrmEntity();
-    if (domain.id) orm.id = domain.id;
-    orm.name = domain.name;
-    orm.description = domain.description || null;
-    orm.isActive = domain.isActive;
-    orm.isSystem = domain.isSystem;
-    orm.permissions = domain.permissions.map((p) =>
-      this.toPermissionPersistence(p),
-    );
-    orm.createdAt = domain.createdAt || new Date();
-    orm.updatedAt = domain.updatedAt || new Date();
-    return orm;
+
+  static toRolePersistence(domain: Role) {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      isActive: domain.isActive,
+      isSystem: domain.isSystem,
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
   }
 
   // USER ROLE
-  static toUserRoleDomain(orm: UserRoleOrmEntity | null): UserRole | null {
-    if (!orm) return null;
-    const role = orm.role ? this.toRoleDomain(orm.role) : undefined;
+  static toUserRoleDomain(
+    raw: UserRoleWithRole | UserRoleRecord | null,
+  ): UserRole | null {
+    if (!raw) return null;
+
+    let role;
+    if ('role' in raw && raw.role) {
+      role = this.toRoleDomain(raw.role);
+    }
+
     return new UserRole(
-      Number(orm.userId),
-      orm.roleId,
-      orm.assignedBy ? Number(orm.assignedBy) : undefined,
-      orm.expiresAt || undefined,
-      orm.assignedAt,
+      Number(raw.userId),
+      raw.roleId,
+      raw.assignedBy ? Number(raw.assignedBy) : undefined,
+      raw.expiresAt || undefined,
+      raw.assignedAt || undefined,
       role!,
     );
   }
-  static toUserRolePersistence(domain: UserRole): UserRoleOrmEntity {
-    const orm = new UserRoleOrmEntity();
-    orm.userId = domain.userId;
-    orm.roleId = domain.roleId;
-    orm.assignedBy = domain.assignedBy || null;
-    orm.expiresAt = domain.expiresAt || null;
-    orm.assignedAt = domain.assignedAt || new Date();
-    return orm;
+
+  static toUserRolePersistence(domain: UserRole) {
+    return {
+      userId: domain.userId,
+      roleId: domain.roleId,
+      assignedBy: domain.assignedBy || null,
+      expiresAt: domain.expiresAt || null,
+      assignedAt: domain.assignedAt || new Date(),
+    };
   }
 }

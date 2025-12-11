@@ -13,15 +13,18 @@ export class InMemoryEventBus implements IEventBus {
 
     if (handlers) {
       this.logger.debug(`Publishing event: ${eventName}`);
-      await Promise.all(handlers.map(handler => handler(event)));
+      await Promise.all(handlers.map((handler) => handler(event)));
     }
   }
 
   async publishAll(events: IDomainEvent[]): Promise<void> {
-    await Promise.all(events.map(event => this.publish(event)));
+    await Promise.all(events.map((event) => this.publish(event)));
   }
 
-  subscribe<T extends IDomainEvent>(eventName: string, handler: (event: T) => Promise<void>): void {
+  subscribe<T extends IDomainEvent>(
+    eventName: string,
+    handler: (event: T) => Promise<void>,
+  ): void {
     if (!this.handlers.has(eventName)) {
       this.handlers.set(eventName, []);
     }

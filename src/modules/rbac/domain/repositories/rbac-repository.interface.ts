@@ -19,6 +19,10 @@ export interface IPermissionRepository {
 export interface IUserRoleRepository {
   findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]>;
   save(userRole: UserRole, tx?: Transaction): Promise<void>;
-  findOne(userId: number, roleId: number, tx?: Transaction): Promise<UserRole | null>;
+  findOne(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<UserRole | null>;
   delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
 }

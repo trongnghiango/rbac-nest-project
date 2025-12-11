@@ -1,11 +1,9 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, OnModuleInit, Inject } from '@nestjs/common';
+import { DRIZZLE } from '../../../database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '../../../database/schema';
+import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
-import { UserOrmEntity } from '../../user/infrastructure/persistence/entities/user.orm-entity';
-import { RoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from '../../rbac/infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 import {
   SystemPermission,
   SystemRole,
@@ -13,53 +11,59 @@ import {
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
-  constructor(
-    @InjectRepository(UserOrmEntity) private uRepo: Repository<UserOrmEntity>,
-    @InjectRepository(RoleOrmEntity) private rRepo: Repository<RoleOrmEntity>,
-    @InjectRepository(PermissionOrmEntity)
-    private pRepo: Repository<PermissionOrmEntity>,
-    @InjectRepository(UserRoleOrmEntity)
-    private urRepo: Repository<UserRoleOrmEntity>,
-  ) {}
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
 
   async onModuleInit() {
     if (process.env.NODE_ENV !== 'development') return;
-    console.log('Seeding...');
-    await this.seedPerms();
+    console.log('🌱 Seeding database (Drizzle)...');
+
+    await this.seedPermissions();
     await this.seedRoles();
     await this.seedUsers();
-    await this.assign();
-    console.log('Seeded.');
+    await this.assignPermissionsToRoles();
+    await this.assignRolesToUsers();
+
+    console.log('✅ Database seeded successfully!');
   }
 
-  async seedPerms() {
+  private async seedPermissions() {
     for (const name of Object.values(SystemPermission)) {
       const [res, act] = name.split(':');
-      if (!(await this.pRepo.findOne({ where: { name } }))) {
-        await this.pRepo.save(
-          this.pRepo.create({
-            name,
-            resourceType: res,
-            action: act,
-            isActive: true,
-          }),
-        );
+      const exists = await this.db.query.permissions.findFirst({
+        where: eq(schema.permissions.name, name),
+      });
+      if (!exists) {
+        await this.db.insert(schema.permissions).values({
+          name,
+          resourceType: res,
+          action: act,
+          isActive: true,
+          description: `System permission: ${name}`,
+        });
       }
     }
+    console.log(' - Permissions checked');
   }
 
-  async seedRoles() {
+  private async seedRoles() {
     for (const name of Object.values(SystemRole)) {
-      if (!(await this.rRepo.findOne({ where: { name } }))) {
-        await this.rRepo.save(
-          this.rRepo.create({ name, isSystem: true, isActive: true }),
-        );
+      const exists = await this.db.query.roles.findFirst({
+        where: eq(schema.roles.name, name),
+      });
+      if (!exists) {
+        await this.db.insert(schema.roles).values({
+          name,
+          description: `System role: ${name}`,
+          isSystem: true,
+          isActive: true,
+        });
       }
     }
+    console.log(' - Roles checked');
   }
 
-  async seedUsers() {
-    const pw = await bcrypt.hash('123456', 10);
+  private async seedUsers() {
+    const password = await bcrypt.hash('123456', 10);
     const users = [
       {
         username: 'superadmin',
@@ -68,45 +72,57 @@ export class DatabaseSeeder implements OnModuleInit {
       },
       { username: 'user1', fullName: 'Normal User', email: 'user@test.com' },
     ];
+
     for (const u of users) {
-      if (!(await this.uRepo.findOne({ where: { username: u.username } }))) {
-        await this.uRepo.save(
-          this.uRepo.create({
-            ...u,
-            hashedPassword: pw,
-            isActive: true,
-            createdAt: new Date(),
-          }),
-        );
+      const exists = await this.db.query.users.findFirst({
+        where: eq(schema.users.username, u.username),
+      });
+      if (!exists) {
+        await this.db.insert(schema.users).values({
+          ...u,
+          hashedPassword: password,
+          isActive: true,
+        });
       }
     }
+    console.log(' - Users checked');
   }
 
-  async assign() {
-    const adminRole = await this.rRepo.findOne({
-      where: { name: SystemRole.SUPER_ADMIN },
-      relations: ['permissions'],
+  private async assignPermissionsToRoles() {
+    // 1. Get Admin Role
+    const adminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
     });
     if (!adminRole) return;
 
-    // Assign all perms to superadmin
-    const allPerms = await this.pRepo.find();
-    adminRole.permissions = allPerms;
-    await this.rRepo.save(adminRole);
+    // 2. Get All Permissions
+    const allPerms = await this.db.select().from(schema.permissions);
 
-    const adminUser = await this.uRepo.findOne({
-      where: { username: 'superadmin' },
-    });
-    if (adminUser) {
-      const ur = await this.urRepo.findOne({
-        where: { userId: adminUser.id, roleId: adminRole.id },
-      });
-      if (!ur)
-        await this.urRepo.save({
-          userId: adminUser.id,
-          roleId: adminRole.id,
-          assignedAt: new Date(),
-        });
+    // 3. Insert into role_permissions (Ignore duplicates)
+    for (const perm of allPerms) {
+      await this.db
+        .insert(schema.rolePermissions)
+        .values({ roleId: adminRole.id, permissionId: perm.id })
+        .onConflictDoNothing()
+        .catch(() => {}); // Catch duplicate key error silently
     }
+    console.log(' - Admin permissions assigned');
+  }
+
+  private async assignRolesToUsers() {
+    const adminUser = await this.db.query.users.findFirst({
+      where: eq(schema.users.username, 'superadmin'),
+    });
+    const adminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
+    });
+
+    if (adminUser && adminRole) {
+      await this.db
+        .insert(schema.userRoles)
+        .values({ userId: adminUser.id, roleId: adminRole.id })
+        .onConflictDoNothing();
+    }
+    console.log(' - Admin role assigned');
   }
 }

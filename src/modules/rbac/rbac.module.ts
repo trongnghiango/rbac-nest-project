@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UserModule } from '../user/user.module';
@@ -9,25 +8,16 @@ import { PermissionService } from './application/services/permission.service';
 import { RoleService } from './application/services/role.service';
 import { RbacManagerService } from './application/services/rbac-manager.service';
 import { PermissionGuard } from './infrastructure/guards/permission.guard';
-// Infra Entities
-import { RoleOrmEntity } from './infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from './infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from './infrastructure/persistence/entities/user-role.orm-entity';
-// Repositories
+// Drizzle Repositories
 import {
-  TypeOrmRoleRepository,
-  TypeOrmPermissionRepository,
-  TypeOrmUserRoleRepository,
-} from './infrastructure/persistence/repositories/typeorm-rbac.repositories';
+  DrizzleRoleRepository,
+  DrizzlePermissionRepository,
+  DrizzleUserRoleRepository,
+} from './infrastructure/persistence/repositories/drizzle-rbac.repositories';
 
 @Module({
   imports: [
     UserModule,
-    TypeOrmModule.forFeature([
-      RoleOrmEntity,
-      PermissionOrmEntity,
-      UserRoleOrmEntity,
-    ]),
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (c: ConfigService) => ({ ttl: 300, max: 1000 }),
@@ -40,9 +30,9 @@ import {
     RoleService,
     PermissionGuard,
     RbacManagerService,
-    { provide: 'IRoleRepository', useClass: TypeOrmRoleRepository },
-    { provide: 'IPermissionRepository', useClass: TypeOrmPermissionRepository },
-    { provide: 'IUserRoleRepository', useClass: TypeOrmUserRoleRepository },
+    { provide: 'IRoleRepository', useClass: DrizzleRoleRepository },
+    { provide: 'IPermissionRepository', useClass: DrizzlePermissionRepository },
+    { provide: 'IUserRoleRepository', useClass: DrizzleUserRoleRepository },
   ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
