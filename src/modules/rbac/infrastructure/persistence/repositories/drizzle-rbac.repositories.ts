@@ -1,24 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import { eq, inArray, and } from 'drizzle-orm';
+// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
   IUserRoleRepository,
-} from '../../../domain/repositories/rbac-repository.interface';
+} from '../../../domain/repositories/rbac.repository';
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
-import { DrizzleBaseRepository } from '../../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import {
   roles,
   permissions,
   userRoles,
   rolePermissions,
-} from '../../../../../database/schema';
+} from '@database/schema';
 import { RbacMapper } from '../mappers/rbac.mapper';
-import { Transaction } from '../../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
-// --- ROLE REPOSITORY ---
 @Injectable()
 export class DrizzleRoleRepository
   extends DrizzleBaseRepository
@@ -28,13 +28,8 @@ export class DrizzleRoleRepository
     const db = this.getDb(tx);
     const result = await db.query.roles.findFirst({
       where: eq(roles.name, name),
-      with: {
-        permissions: {
-          with: { permission: true },
-        },
-      },
+      with: { permissions: { with: { permission: true } } },
     });
-
     return result ? RbacMapper.toRoleDomain(result as any) : null;
   }
 
@@ -44,13 +39,11 @@ export class DrizzleRoleRepository
 
     return await db.transaction(async (trx) => {
       let savedRoleId: number;
-
       if (data.id) {
         await trx.update(roles).set(data).where(eq(roles.id, data.id));
         savedRoleId = data.id;
       } else {
         const { id, ...insertData } = data;
-        // FIX: Cast type
         const res = await trx
           .insert(roles)
           .values(insertData as typeof roles.$inferInsert)
@@ -62,15 +55,12 @@ export class DrizzleRoleRepository
         await trx
           .delete(rolePermissions)
           .where(eq(rolePermissions.roleId, savedRoleId));
-
         const permInserts = role.permissions.map((p) => ({
           roleId: savedRoleId,
           permissionId: p.id!,
         }));
-
-        if (permInserts.length > 0) {
+        if (permInserts.length > 0)
           await trx.insert(rolePermissions).values(permInserts);
-        }
       }
 
       const finalRole = await this.findByName(
@@ -90,7 +80,6 @@ export class DrizzleRoleRepository
       where: inArray(roles.id, roleIds),
       with: { permissions: { with: { permission: true } } },
     });
-
     return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
   }
 
@@ -103,7 +92,6 @@ export class DrizzleRoleRepository
   }
 }
 
-// --- PERMISSION REPOSITORY ---
 @Injectable()
 export class DrizzlePermissionRepository
   extends DrizzleBaseRepository
@@ -121,7 +109,6 @@ export class DrizzlePermissionRepository
   async save(permission: Permission, tx?: Transaction): Promise<Permission> {
     const db = this.getDb(tx);
     const data = RbacMapper.toPermissionPersistence(permission);
-
     let result;
     if (data.id) {
       result = await db
@@ -131,13 +118,11 @@ export class DrizzlePermissionRepository
         .returning();
     } else {
       const { id, ...insertData } = data;
-      // FIX: Cast type
       result = await db
         .insert(permissions)
         .values(insertData as typeof permissions.$inferInsert)
         .returning();
     }
-
     return RbacMapper.toPermissionDomain(result[0])!;
   }
 
@@ -148,7 +133,6 @@ export class DrizzlePermissionRepository
   }
 }
 
-// --- USER ROLE REPOSITORY ---
 @Injectable()
 export class DrizzleUserRoleRepository
   extends DrizzleBaseRepository
@@ -166,8 +150,6 @@ export class DrizzleUserRoleRepository
   async save(userRole: UserRole, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
     const data = RbacMapper.toUserRolePersistence(userRole);
-
-    // FIX: Cast type
     await db
       .insert(userRoles)
       .values(data as typeof userRoles.$inferInsert)

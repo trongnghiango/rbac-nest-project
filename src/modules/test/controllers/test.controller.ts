@@ -5,8 +5,8 @@ import { Permissions } from '../../rbac/infrastructure/decorators/permission.dec
 import { Public } from '../../auth/infrastructure/decorators/public.decorator';
 import { CurrentUser } from '../../auth/infrastructure/decorators/current-user.decorator';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import type { ILogger } from '../../../core/shared/application/ports/logger.port';
-import { LOGGER_TOKEN } from '../../../core/shared/application/ports/logger.port';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 
 @Controller('test')
 @ApiBearerAuth()

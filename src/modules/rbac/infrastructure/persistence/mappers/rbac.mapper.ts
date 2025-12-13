@@ -1,12 +1,8 @@
 import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
-
-// FIX: 3 cấp ../ để về thư mục 'rbac'
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
-
-// FIX: 5 cấp ../ để về thư mục 'src' -> 'database'
-import { roles, permissions, userRoles } from '../../../../../database/schema';
+import { roles, permissions, userRoles } from '@database/schema'; // Alias
 
 type RoleSelect = InferSelectModel<typeof roles>;
 type PermissionSelect = InferSelectModel<typeof permissions>;
@@ -52,9 +48,7 @@ export class RbacMapper {
 
   static toRoleDomain(raw: RoleWithRelations | RoleSelect | null): Role | null {
     if (!raw) return null;
-
     let perms: Permission[] = [];
-    // Kiểm tra an toàn xem có permissions được join vào không
     if ('permissions' in raw && Array.isArray(raw.permissions)) {
       perms = raw.permissions
         .map((rp) => this.toPermissionDomain(rp.permission)!)
@@ -89,7 +83,6 @@ export class RbacMapper {
     raw: UserRoleWithRole | UserRoleSelect | null,
   ): UserRole | null {
     if (!raw) return null;
-
     let roleDomain;
     if ('role' in raw && raw.role) {
       roleDomain = new Role(
@@ -98,7 +91,6 @@ export class RbacMapper {
         raw.role.description || undefined,
       );
     }
-
     return new UserRole(
       Number(raw.userId),
       raw.roleId,

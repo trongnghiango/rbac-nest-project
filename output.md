@@ -1,44 +1,53 @@
 ## File: src/bootstrap/app.module.ts
 ```
-import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { CacheModule } from '@nestjs/cache-manager';
+import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 
-import databaseConfig from '../config/database.config';
-import appConfig from '../config/app.config';
-import loggingConfig from '../config/logging.config';
+import databaseConfig from '@config/database.config';
+import appConfig from '@config/app.config';
+import loggingConfig from '@config/logging.config';
+import redisConfig from '@config/redis.config'; // IMPORT CONFIG MỚI
 
-import { CoreModule } from '../core/core.module';
-import { SharedModule } from '../modules/shared/shared.module';
-import { DrizzleModule } from '../database/drizzle.module'; // NEW
+import { CoreModule } from '@core/core.module';
+import { SharedModule } from '@modules/shared/shared.module';
+import { DrizzleModule } from '@database/drizzle.module';
+import { LoggingModule } from '@modules/logging/logging.module';
+import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module'; // IMPORT MODULE MỚI
+import { RequestLoggingMiddleware } from '@api/middleware/request-logging.middleware';
 
-import { UserModule } from '../modules/user/user.module';
-import { AuthModule } from '../modules/auth/auth.module';
-import { RbacModule } from '../modules/rbac/rbac.module';
-import { TestModule } from '../modules/test/test.module';
+import { UserModule } from '@modules/user/user.module';
+import { AuthModule } from '@modules/auth/auth.module';
+import { RbacModule } from '@modules/rbac/rbac.module';
+import { TestModule } from '@modules/test/test.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [databaseConfig, appConfig, loggingConfig],
+      load: [databaseConfig, appConfig, loggingConfig, redisConfig],
     }),
     CoreModule,
     SharedModule,
-    DrizzleModule, // Thay thế TypeOrmModule
-    CacheModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: () => ({ ttl: 300, max: 100 }),
-      inject: [ConfigService],
-    }),
+    DrizzleModule,
+    LoggingModule.forRootAsync(),
+    RedisCacheModule, // ✅ Module Redis Global
+
+    // Đã xóa CacheModule cũ
+
     UserModule,
     AuthModule,
     RbacModule,
     TestModule,
   ],
 })
-export class AppModule {}
+export class AppModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(RequestLoggingMiddleware)
+      .forRoutes({ path: '(.*)', method: RequestMethod.ALL });
+  }
+}
 ```
 
 ## File: src/bootstrap/main.ts
@@ -107,10 +116,12 @@ export class Session {
 }
 ```
 
-## File: src/modules/auth/domain/repositories/session-repository.interface.ts
+## File: src/modules/auth/domain/repositories/session.repository.ts
 ```
 import { Session } from '../entities/session.entity';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+export const ISessionRepository = Symbol('ISessionRepository');
 
 export interface ISessionRepository {
   create(session: Session, tx?: Transaction): Promise<void>;
@@ -129,20 +140,20 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
-import type { ISessionRepository } from '../../domain/repositories/session-repository.interface';
-import { PasswordUtil } from '../../../shared/utils/password.util';
-import { User } from '../../../user/domain/entities/user.entity';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
+import { ISessionRepository } from '../../domain/repositories/session.repository';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '@modules/user/domain/entities/user.entity';
 import { Session } from '../../domain/entities/session.entity';
-import { JwtPayload } from '../../../shared/types/common.types';
-import type { ITransactionManager } from '../../../../core/shared/application/ports/transaction-manager.port'; // FIX: import type
+import { JwtPayload } from '@core/shared/types/common.types';
 
 @Injectable()
 export class AuthenticationService {
   constructor(
-    @Inject('IUserRepository') private userRepository: IUserRepository,
-    @Inject('ISessionRepository') private sessionRepository: ISessionRepository,
-    @Inject('ITransactionManager') private txManager: ITransactionManager,
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+    @Inject(ISessionRepository) private sessionRepository: ISessionRepository,
+    @Inject(ITransactionManager) private txManager: ITransactionManager,
     private jwtService: JwtService,
   ) {}
 
@@ -156,7 +167,6 @@ export class AuthenticationService {
 
     if (!user || !user.isActive)
       throw new UnauthorizedException('Invalid credentials');
-    // Access getter directly (domain encapsulation)
     if (!user.hashedPassword)
       throw new UnauthorizedException('Password not set');
 
@@ -367,14 +377,15 @@ import { Injectable, Inject } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
+// FIX IMPORT
+import { IUserRepository } from '../../../user/domain/repositories/user.repository';
 import { JwtPayload } from '../../../shared/types/common.types';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
-    @Inject('IUserRepository') private userRepository: IUserRepository,
+    @Inject(IUserRepository) private userRepository: IUserRepository, // FIX: Symbol
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -385,10 +396,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload) {
     const user = await this.userRepository.findById(payload.sub);
-    if (!user || !user.isActive) {
-      return null;
-    }
-
+    if (!user || !user.isActive) return null;
     return {
       id: user.id,
       username: user.username,
@@ -454,7 +462,7 @@ export class RegisterDto {
 ```
 import { InferSelectModel } from 'drizzle-orm';
 import { Session } from '../../../domain/entities/session.entity';
-import { sessions } from '../../../../../database/schema';
+import { sessions } from '@database/schema';
 
 type SessionRecord = InferSelectModel<typeof sessions>;
 
@@ -468,7 +476,7 @@ export class SessionMapper {
       raw.expiresAt,
       raw.ipAddress || undefined,
       raw.userAgent || undefined,
-      raw.createdAt,
+      raw.createdAt || undefined,
     );
   }
 
@@ -490,12 +498,13 @@ export class SessionMapper {
 ```
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { ISessionRepository } from '../../domain/repositories/session-repository.interface';
+// FIX IMPORT
+import { ISessionRepository } from '../../domain/repositories/session.repository';
 import { Session } from '../../domain/entities/session.entity';
-import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
-import { sessions } from '../../../../database/schema';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { sessions } from '@database/schema';
 import { SessionMapper } from './mappers/session.mapper';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleSessionRepository
@@ -505,13 +514,14 @@ export class DrizzleSessionRepository
   async create(session: Session, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
     const data = SessionMapper.toPersistence(session);
-    // UUID thường được generate từ code hoặc DB.
-    // Nếu ID có giá trị thì insert, ko thì để default (gen_random_uuid)
+
     if (data.id) {
       await db.insert(sessions).values(data as any);
     } else {
       const { id, ...insertData } = data;
-      await db.insert(sessions).values(insertData);
+      await db
+        .insert(sessions)
+        .values(insertData as typeof sessions.$inferInsert);
     }
   }
 
@@ -541,6 +551,7 @@ import { JwtStrategy } from './infrastructure/strategies/jwt.strategy';
 import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
 import { AuthController } from './infrastructure/controllers/auth.controller';
 import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-session.repository';
+import { ISessionRepository } from './domain/repositories/session.repository';
 
 @Module({
   imports: [
@@ -560,7 +571,7 @@ import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-s
     AuthenticationService,
     JwtStrategy,
     JwtAuthGuard,
-    { provide: 'ISessionRepository', useClass: DrizzleSessionRepository },
+    { provide: ISessionRepository, useClass: DrizzleSessionRepository },
   ],
   exports: [JwtAuthGuard, AuthenticationService, JwtModule],
 })
@@ -667,17 +678,26 @@ export class User {
 }
 ```
 
-## File: src/modules/user/domain/repositories/user-repository.interface.ts
+## File: src/modules/user/domain/repositories/user.repository.ts
 ```
-import { IRepository } from '../../../../core/shared/application/ports/repository.port';
 import { User } from '../entities/user.entity';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
-export interface IUserRepository extends IRepository<User, number> {
+// 1. Token (Runtime)
+export const IUserRepository = Symbol('IUserRepository');
+
+// 2. Interface (Compile-time)
+export interface IUserRepository {
+  findById(id: number, tx?: Transaction): Promise<User | null>;
   findByUsername(username: string, tx?: Transaction): Promise<User | null>;
   findByEmail(email: string, tx?: Transaction): Promise<User | null>;
-  // Overwrite save to return User (Abstract return void, but we need ID back)
+  findAllActive(): Promise<User[]>;
   save(user: User, tx?: Transaction): Promise<User>;
+  findAll(): Promise<User[]>;
+  update(id: number, data: Partial<User>): Promise<User>;
+  delete(id: number, tx?: Transaction): Promise<void>;
+  exists(id: number, tx?: Transaction): Promise<boolean>;
+  count(): Promise<number>;
 }
 ```
 
@@ -708,51 +728,41 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import type { IUserRepository } from '../../domain/repositories/user-repository.interface';
+// FIX IMPORT: Import cả Token và Interface
+import { IUserRepository } from '../../domain/repositories/user.repository';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
 
 @Injectable()
 export class UserService {
   constructor(
-    @Inject('IUserRepository') private userRepository: IUserRepository,
+    // FIX INJECT: Dùng Symbol IUserRepository
+    @Inject(IUserRepository) private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: {
-    id: number;
-    username: string;
-    email?: string;
-    password?: string;
-    fullName: string;
-  }): Promise<any> {
+  async createUser(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
-    if (existing) {
-      throw new BadRequestException('User already exists');
-    }
+    if (existing) throw new BadRequestException('User already exists');
 
     let hashedPassword;
     if (data.password) {
-      if (!PasswordUtil.validateStrength(data.password)) {
-        throw new BadRequestException(
-          'Password does not meet strength requirements',
-        );
-      }
+      if (!PasswordUtil.validateStrength(data.password))
+        throw new BadRequestException('Weak password');
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    // FIX: Sử dụng Constructor chuẩn của Domain
     const newUser = new User(
       data.id,
       data.username,
       data.email,
       hashedPassword,
       data.fullName,
-      true, // isActive
-      undefined, // phoneNumber
-      undefined, // avatarUrl
-      undefined, // profile
-      new Date(), // createdAt
-      new Date(), // updatedAt
+      true,
+      undefined,
+      undefined,
+      undefined,
+      new Date(),
+      new Date(),
     );
 
     const user = await this.userRepository.save(newUser);
@@ -771,9 +781,7 @@ export class UserService {
 
   async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(id);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    if (!user) throw new NotFoundException('User not found');
     return user.toJSON();
   }
 
@@ -782,9 +790,7 @@ export class UserService {
     profileData: any,
   ): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    if (!user) throw new NotFoundException('User not found');
 
     user.updateProfile(profileData);
     const updated = await this.userRepository.save(user);
@@ -793,10 +799,7 @@ export class UserService {
 
   async deactivateUser(userId: number): Promise<void> {
     const user = await this.userRepository.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
+    if (!user) throw new NotFoundException('User not found');
     user.deactivate();
     await this.userRepository.save(user);
   }
@@ -805,35 +808,35 @@ export class UserService {
 
 ## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
 ```
-import { InferSelectModel } from 'drizzle-orm';
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+// FIX PATH: 3 dots ../../../
 import { User } from '../../../domain/entities/user.entity';
-import { users } from '../../../../../database/schema';
+import { users } from '@database/schema';
 
-// Tự động lấy Type từ Schema Definition
-type UserRecord = InferSelectModel<typeof users>;
+type UserSelect = InferSelectModel<typeof users>;
+type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  static toDomain(raw: UserRecord | null): User | null {
+  static toDomain(raw: UserSelect | null): User | null {
     if (!raw) return null;
-
     return new User(
       raw.id,
       raw.username,
       raw.email || undefined,
       raw.hashedPassword || undefined,
       raw.fullName || undefined,
-      raw.isActive || false,
+      raw.isActive ?? true,
       raw.phoneNumber || undefined,
       raw.avatarUrl || undefined,
-      (raw.profile as any) || undefined, // JSONB cần cast nhẹ hoặc định nghĩa type riêng
+      (raw.profile as any) || undefined,
       raw.createdAt || undefined,
       raw.updatedAt || undefined,
     );
   }
 
-  static toPersistence(domain: User) {
+  static toPersistence(domain: User): UserInsert {
     return {
-      id: domain.id, // Có thể undefined
+      id: domain.id,
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
@@ -853,12 +856,13 @@ export class UserMapper {
 ```
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { IUserRepository } from '../../domain/repositories/user-repository.interface';
+// FIX IMPORT: Dùng file mới
+import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
-import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
-import { users } from '../../../../database/schema';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { users } from '@database/schema';
 import { UserMapper } from './mappers/user.mapper';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleUserRepository
@@ -900,22 +904,21 @@ export class DrizzleUserRepository
   async save(user: User, tx?: Transaction): Promise<User> {
     const db = this.getDb(tx);
     const data = UserMapper.toPersistence(user);
-
     let result;
+
     if (data.id) {
-      // UPDATE: Chỉ update khi có ID
       result = await db
         .update(users)
         .set(data)
         .where(eq(users.id, data.id))
         .returning();
     } else {
-      // INSERT: Loại bỏ ID để Postgres tự sinh (Serial)
-      // Tránh lỗi lệch sequence
       const { id, ...insertData } = data;
-      result = await db.insert(users).values(insertData).returning();
+      result = await db
+        .insert(users)
+        .values(insertData as typeof users.$inferInsert)
+        .returning();
     }
-
     return UserMapper.toDomain(result[0])!;
   }
 
@@ -923,7 +926,7 @@ export class DrizzleUserRepository
     return [];
   }
   async update(): Promise<User> {
-    throw new Error('Use save');
+    throw new Error('Use save instead');
   }
   async delete(id: number, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
@@ -1055,18 +1058,20 @@ import { Module } from '@nestjs/common';
 import { UserService } from './application/services/user.service';
 import { UserController } from './infrastructure/controllers/user.controller';
 import { DrizzleUserRepository } from './infrastructure/persistence/drizzle-user.repository';
+// FIX IMPORT
+import { IUserRepository } from './domain/repositories/user.repository';
 
 @Module({
-  imports: [], // Không cần TypeOrmModule nữa
+  imports: [],
   controllers: [UserController],
   providers: [
     UserService,
     {
-      provide: 'IUserRepository',
+      provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,
     },
   ],
-  exports: [UserService, 'IUserRepository'],
+  exports: [UserService, IUserRepository], // FIX: Export Symbol
 })
 export class UserModule {}
 ```
@@ -1136,13 +1141,15 @@ export class UserRole {
 }
 ```
 
-## File: src/modules/rbac/domain/repositories/rbac-repository.interface.ts
+## File: src/modules/rbac/domain/repositories/rbac.repository.ts
 ```
 import { Role } from '../entities/role.entity';
 import { Permission } from '../entities/permission.entity';
 import { UserRole } from '../entities/user-role.entity';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
+// 1. Role Repository
+export const IRoleRepository = Symbol('IRoleRepository');
 export interface IRoleRepository {
   findByName(name: string, tx?: Transaction): Promise<Role | null>;
   save(role: Role, tx?: Transaction): Promise<Role>;
@@ -1150,12 +1157,16 @@ export interface IRoleRepository {
   findAll(tx?: Transaction): Promise<Role[]>;
 }
 
+// 2. Permission Repository
+export const IPermissionRepository = Symbol('IPermissionRepository');
 export interface IPermissionRepository {
   findByName(name: string, tx?: Transaction): Promise<Permission | null>;
   save(permission: Permission, tx?: Transaction): Promise<Permission>;
   findAll(tx?: Transaction): Promise<Permission[]>;
 }
 
+// 3. User Role Repository
+export const IUserRoleRepository = Symbol('IUserRoleRepository');
 export interface IUserRoleRepository {
   findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]>;
   save(userRole: UserRole, tx?: Transaction): Promise<void>;
@@ -1225,22 +1236,22 @@ export const DEFAULT_ROLE = SystemRole.USER;
 ## File: src/modules/rbac/application/services/permission.service.ts
 ```
 import { Injectable, Inject } from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import type { Cache } from 'cache-manager';
-import type {
+import {
   IUserRoleRepository,
   IRoleRepository,
-} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+} from '../../domain/repositories/rbac.repository';
+// IMPORT Interface
+import { ICacheService } from '@core/shared/application/ports/cache.port';
 
 @Injectable()
 export class PermissionService {
-  private readonly CACHE_TTL = 300;
+  private readonly CACHE_TTL = 300; // Fallback nếu không truyền vào set()
   private readonly CACHE_PREFIX = 'rbac:permissions:';
 
   constructor(
-    @Inject('IUserRoleRepository') private userRoleRepo: IUserRoleRepository,
-    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
   ) {}
 
   async userHasPermission(
@@ -1248,16 +1259,19 @@ export class PermissionService {
     permissionName: string,
   ): Promise<boolean> {
     const cacheKey = `${this.CACHE_PREFIX}${userId}`;
-    const cached = await this.cacheManager.get<string[]>(cacheKey);
+
+    // Sử dụng abstraction layer
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
     if (cached) return cached.includes(permissionName) || cached.includes('*');
 
     const userRoles = await this.userRoleRepo.findByUserId(userId);
-    // Note: Assuming repo returns domain objects with populated role (if implemented that way)
-    // or we fetch roles separately. For simplicity assuming basic flow:
+    const activeRoles = userRoles.filter(
+      (ur) => ur.isActive() && ur.role?.isActive,
+    );
+    if (activeRoles.length === 0) return false;
 
-    if (userRoles.length === 0) return false;
-    const roleIds = userRoles.map((ur) => ur.roleId);
-
+    const roleIds = activeRoles.map((ur) => ur.roleId);
     const roles = await this.roleRepo.findAllWithPermissions(roleIds);
 
     const permissions = new Set<string>();
@@ -1268,7 +1282,12 @@ export class PermissionService {
     );
 
     const permArray = Array.from(permissions);
-    await this.cacheManager.set(cacheKey, permArray, this.CACHE_TTL);
+
+    // Cache result
+    await this.cacheService.set(cacheKey, permArray);
+    // Mặc định adapter sẽ lấy TTL từ config nếu không truyền,
+    // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
+
     return permArray.includes(permissionName);
   }
 
@@ -1279,7 +1298,6 @@ export class PermissionService {
   ): Promise<void> {
     const existing = await this.userRoleRepo.findOne(userId, roleId);
     if (!existing) {
-      // Construct basic UserRole object
       const userRole: any = {
         userId,
         roleId,
@@ -1287,7 +1305,9 @@ export class PermissionService {
         assignedAt: new Date(),
       };
       await this.userRoleRepo.save(userRole);
-      await this.cacheManager.del(`${this.CACHE_PREFIX}${userId}`);
+
+      // Invalidate cache
+      await this.cacheService.del(`${this.CACHE_PREFIX}${userId}`);
     }
   }
 }
@@ -1296,15 +1316,12 @@ export class PermissionService {
 ## File: src/modules/rbac/application/services/role.service.ts
 ```
 import { Injectable, Inject } from '@nestjs/common';
-import type {
+// FIX IMPORT
+import {
   IRoleRepository,
   IPermissionRepository,
-} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+} from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
-import {
-  SystemRole,
-  SystemPermission,
-} from '../../domain/constants/rbac.constants';
 
 export interface AccessControlItem {
   role: string;
@@ -1316,8 +1333,8 @@ export interface AccessControlItem {
 @Injectable()
 export class RoleService {
   constructor(
-    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
-    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
   ) {}
 
   async createRole(data: any): Promise<Role> {
@@ -1333,28 +1350,26 @@ export class RoleService {
     return this.roleRepo.save(role);
   }
 
+  async findAllRoles(): Promise<Role[]> {
+    return this.roleRepo.findAll();
+  }
+
   async getAccessControlList(): Promise<AccessControlItem[]> {
     const roles = await this.roleRepo.findAll();
     const acl: AccessControlItem[] = [];
     roles.forEach((role) => {
-      role.permissions.forEach((p) => {
-        acl.push({
-          role: role.name.toLowerCase(),
-          resource: p.resourceType || '*',
-          action: p.action || '*',
-          attributes: p.attributes,
+      if (role.permissions) {
+        role.permissions.forEach((p) => {
+          acl.push({
+            role: role.name.toLowerCase(),
+            resource: p.resourceType || '*',
+            action: p.action || '*',
+            attributes: p.attributes,
+          });
         });
-      });
+      }
     });
     return acl;
-  }
-
-  // Seeder logic remains in seeder file mostly, but keeping init logic if needed
-  async initializeSystemRoles(): Promise<void> {
-    // Implementation placeholder if called from module init
-  }
-  async initializeSystemPermissions(): Promise<void> {
-    // Implementation placeholder
   }
 }
 ```
@@ -1362,10 +1377,11 @@ export class RoleService {
 ## File: src/modules/rbac/application/services/rbac-manager.service.ts
 ```
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import type {
+// FIX IMPORT
+import {
   IRoleRepository,
   IPermissionRepository,
-} from '../../domain/repositories/rbac-repository.interface';
+} from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
 import { Permission } from '../../domain/entities/permission.entity';
 
@@ -1374,36 +1390,31 @@ export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
 
   constructor(
-    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
-    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
   ) {}
 
-  // Logic Import giữ nguyên (hoặc update full nếu cần)
   async importFromCsv(csvContent: string): Promise<any> {
     const lines = csvContent
       .split(/\r?\n/)
       .filter((line) => line.trim() !== '');
     if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
-      lines.shift(); // Remove header
+      lines.shift();
     }
 
     let createdCount = 0;
     let updatedCount = 0;
 
     for (const line of lines) {
-      // CSV: role,resource,action,attributes,description
       const cols = line.split(',').map((c) => c.trim());
       if (cols.length < 3) continue;
 
       const [roleName, resource, action, attributes, description] = cols;
-
-      // 1. Handle Permission
       const permName =
         resource === '*' ? 'manage:all' : `${resource}:${action}`;
-      let perm = await this.permRepo.findByName(permName);
 
+      let perm = await this.permRepo.findByName(permName);
       if (!perm) {
-        // Create new permission
         perm = new Permission(
           undefined,
           permName,
@@ -1415,25 +1426,8 @@ export class RbacManagerService {
         );
         perm = await this.permRepo.save(perm);
         createdCount++;
-      } else {
-        // Update existing (optional logic)
-        let changed = false;
-        if (attributes && perm.attributes !== attributes) {
-          perm.attributes = attributes;
-          changed = true;
-        }
-        if (description && perm.description !== description) {
-          perm.description = description;
-          changed = true;
-        }
-
-        if (changed) {
-          await this.permRepo.save(perm);
-          updatedCount++;
-        }
       }
 
-      // 2. Handle Role
       let role = await this.roleRepo.findByName(roleName);
       if (!role) {
         role = new Role(
@@ -1447,52 +1441,36 @@ export class RbacManagerService {
         role = await this.roleRepo.save(role);
       }
 
-      // 3. Assign Permission to Role
       if (!role.permissions) role.permissions = [];
-      const hasPerm = role.permissions.some((p) => p.name === perm!.name); // Domain logic check by name or ID
+      const hasPerm = role.permissions.some((p) => p.name === perm!.name);
 
       if (!hasPerm) {
         role.permissions.push(perm!);
         await this.roleRepo.save(role);
       }
     }
-
     return { created: createdCount, updated: updatedCount };
   }
 
-  // FIX: Logic Export đầy đủ
   async exportToCsv(): Promise<string> {
-    // Repository phải đảm bảo load relation ['permissions']
     const roles = await this.roleRepo.findAll();
-
     const header = 'role,resource,action,attributes,description';
     const lines = [header];
 
     for (const role of roles) {
       if (!role.permissions || role.permissions.length === 0) {
-        // Nếu Role không có quyền, in ra dòng rỗng để biết Role tồn tại
         lines.push(`${role.name},,,,`);
         continue;
       }
-
       for (const perm of role.permissions) {
-        // Xử lý dữ liệu để tránh lỗi CSV
         const resource = perm.resourceType || '*';
         const action = perm.action || '*';
         const attributes = perm.attributes || '*';
-
-        // Nếu description có dấu phẩy, bọc trong ngoặc kép
         let desc = perm.description || '';
-        if (desc.includes(',')) {
-          desc = `"${desc}"`;
-        }
-
-        const line = [role.name, resource, action, attributes, desc].join(',');
-
-        lines.push(line);
+        if (desc.includes(',')) desc = `"${desc}"`;
+        lines.push([role.name, resource, action, attributes, desc].join(','));
       }
     }
-
     return lines.join('\n');
   }
 }
@@ -1500,13 +1478,22 @@ export class RbacManagerService {
 
 ## File: src/modules/rbac/infrastructure/controllers/role.controller.ts
 ```
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, UseGuards, Inject } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiBody,
+  ApiResponse,
+} from '@nestjs/swagger';
 import { RoleService } from '../../application/services/role.service';
 import { PermissionService } from '../../application/services/permission.service';
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '../guards/permission.guard';
 import { Permissions } from '../decorators/permission.decorator';
+import { RoleResponseDto } from '../dtos/role.dto';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port'; // Import DTO
+import type { ILogger } from '@core/shared/application/ports/logger.port'; // Import DTO
 
 @ApiTags('RBAC - Roles')
 @ApiBearerAuth()
@@ -1516,13 +1503,21 @@ export class RoleController {
   constructor(
     private roleService: RoleService,
     private permissionService: PermissionService,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
   ) {}
 
-  @ApiOperation({ summary: 'Get all roles (Requires rbac:manage)' })
+  @ApiOperation({ summary: 'Get all roles with permissions' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of roles',
+    type: [RoleResponseDto],
+  })
   @Get()
   @Permissions('rbac:manage')
-  async getAllRoles() {
-    return { message: 'Get all roles' };
+  async getAllRoles(): Promise<RoleResponseDto[]> {
+    const roles = await this.roleService.findAllRoles();
+    // this.logger.info('Roles::', roles);
+    return roles.map((role) => RoleResponseDto.fromDomain(role));
   }
 
   @ApiOperation({ summary: 'Assign role to user' })
@@ -1570,7 +1565,7 @@ import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard
 import { PermissionGuard } from '../guards/permission.guard';
 import { Permissions } from '../decorators/permission.decorator';
 import { RbacManagerService } from '../../application/services/rbac-manager.service';
-import { BypassTransform } from '../../../../core/decorators/bypass-transform.decorator';
+import { BypassTransform } from '@core/decorators/bypass-transform.decorator';
 
 @ApiTags('RBAC - Import/Export')
 @ApiBearerAuth()
@@ -1694,28 +1689,26 @@ export const Permissions = (...permissions: string[]) =>
 
 ## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
 ```
-import { InferSelectModel } from 'drizzle-orm';
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
-import { roles, permissions, userRoles } from '../../../../../database/schema';
+import { roles, permissions, userRoles } from '@database/schema'; // Alias
 
-// Định nghĩa Type dựa trên Schema
-type RoleRecord = InferSelectModel<typeof roles>;
-type PermissionRecord = InferSelectModel<typeof permissions>;
-type UserRoleRecord = InferSelectModel<typeof userRoles>;
+type RoleSelect = InferSelectModel<typeof roles>;
+type PermissionSelect = InferSelectModel<typeof permissions>;
+type UserRoleSelect = InferSelectModel<typeof userRoles>;
 
-// Type phức tạp cho Relation (Kết quả trả về từ db.query...)
-type RoleWithPermissions = RoleRecord & {
-  permissions: { permission: PermissionRecord }[];
+type RoleWithRelations = RoleSelect & {
+  permissions: { permission: PermissionSelect }[];
 };
-type UserRoleWithRole = UserRoleRecord & {
-  role: RoleRecord;
+
+type UserRoleWithRole = UserRoleSelect & {
+  role: RoleSelect;
 };
 
 export class RbacMapper {
-  // PERMISSION
-  static toPermissionDomain(raw: PermissionRecord | null): Permission | null {
+  static toPermissionDomain(raw: PermissionSelect | null): Permission | null {
     if (!raw) return null;
     return new Permission(
       raw.id,
@@ -1723,13 +1716,15 @@ export class RbacMapper {
       raw.description || undefined,
       raw.resourceType || undefined,
       raw.action || undefined,
-      raw.isActive || false,
+      raw.isActive ?? true,
       raw.attributes || '*',
       raw.createdAt || undefined,
     );
   }
 
-  static toPermissionPersistence(domain: Permission) {
+  static toPermissionPersistence(
+    domain: Permission,
+  ): InferInsertModel<typeof permissions> {
     return {
       id: domain.id,
       name: domain.name,
@@ -1742,13 +1737,8 @@ export class RbacMapper {
     };
   }
 
-  // ROLE (Handle Relation Type Safety)
-  static toRoleDomain(
-    raw: RoleWithPermissions | RoleRecord | null,
-  ): Role | null {
+  static toRoleDomain(raw: RoleWithRelations | RoleSelect | null): Role | null {
     if (!raw) return null;
-
-    // Check if it has nested permissions
     let perms: Permission[] = [];
     if ('permissions' in raw && Array.isArray(raw.permissions)) {
       perms = raw.permissions
@@ -1760,15 +1750,15 @@ export class RbacMapper {
       raw.id,
       raw.name,
       raw.description || undefined,
-      raw.isActive || false,
-      raw.isSystem || false,
+      raw.isActive ?? true,
+      raw.isSystem ?? false,
       perms,
       raw.createdAt || undefined,
       raw.updatedAt || undefined,
     );
   }
 
-  static toRolePersistence(domain: Role) {
+  static toRolePersistence(domain: Role): InferInsertModel<typeof roles> {
     return {
       id: domain.id,
       name: domain.name,
@@ -1780,28 +1770,31 @@ export class RbacMapper {
     };
   }
 
-  // USER ROLE
   static toUserRoleDomain(
-    raw: UserRoleWithRole | UserRoleRecord | null,
+    raw: UserRoleWithRole | UserRoleSelect | null,
   ): UserRole | null {
     if (!raw) return null;
-
-    let role;
+    let roleDomain;
     if ('role' in raw && raw.role) {
-      role = this.toRoleDomain(raw.role);
+      roleDomain = new Role(
+        raw.role.id,
+        raw.role.name,
+        raw.role.description || undefined,
+      );
     }
-
     return new UserRole(
       Number(raw.userId),
       raw.roleId,
       raw.assignedBy ? Number(raw.assignedBy) : undefined,
       raw.expiresAt || undefined,
       raw.assignedAt || undefined,
-      role!,
+      roleDomain,
     );
   }
 
-  static toUserRolePersistence(domain: UserRole) {
+  static toUserRolePersistence(
+    domain: UserRole,
+  ): InferInsertModel<typeof userRoles> {
     return {
       userId: domain.userId,
       roleId: domain.roleId,
@@ -1817,25 +1810,25 @@ export class RbacMapper {
 ```
 import { Injectable } from '@nestjs/common';
 import { eq, inArray, and } from 'drizzle-orm';
+// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
   IUserRoleRepository,
-} from '../../../domain/repositories/rbac-repository.interface';
+} from '../../../domain/repositories/rbac.repository';
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
-import { DrizzleBaseRepository } from '../../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import {
   roles,
   permissions,
   userRoles,
   rolePermissions,
-} from '../../../../../database/schema';
+} from '@database/schema';
 import { RbacMapper } from '../mappers/rbac.mapper';
-import { Transaction } from '../../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
-// --- ROLE REPOSITORY ---
 @Injectable()
 export class DrizzleRoleRepository
   extends DrizzleBaseRepository
@@ -1845,13 +1838,8 @@ export class DrizzleRoleRepository
     const db = this.getDb(tx);
     const result = await db.query.roles.findFirst({
       where: eq(roles.name, name),
-      with: {
-        permissions: {
-          with: { permission: true },
-        },
-      },
+      with: { permissions: { with: { permission: true } } },
     });
-
     return result ? RbacMapper.toRoleDomain(result as any) : null;
   }
 
@@ -1861,8 +1849,6 @@ export class DrizzleRoleRepository
 
     return await db.transaction(async (trx) => {
       let savedRoleId: number;
-
-      // SAFE UPSERT LOGIC
       if (data.id) {
         await trx.update(roles).set(data).where(eq(roles.id, data.id));
         savedRoleId = data.id;
@@ -1870,28 +1856,23 @@ export class DrizzleRoleRepository
         const { id, ...insertData } = data;
         const res = await trx
           .insert(roles)
-          .values(insertData)
+          .values(insertData as typeof roles.$inferInsert)
           .returning({ id: roles.id });
         savedRoleId = res[0].id;
       }
 
-      // Handle Permissions Relation
       if (role.permissions && role.permissions.length > 0) {
         await trx
           .delete(rolePermissions)
           .where(eq(rolePermissions.roleId, savedRoleId));
-
         const permInserts = role.permissions.map((p) => ({
           roleId: savedRoleId,
           permissionId: p.id!,
         }));
-
-        if (permInserts.length > 0) {
+        if (permInserts.length > 0)
           await trx.insert(rolePermissions).values(permInserts);
-        }
       }
 
-      // Return full object by refetching
       const finalRole = await this.findByName(
         role.name,
         trx as unknown as Transaction,
@@ -1921,7 +1902,6 @@ export class DrizzleRoleRepository
   }
 }
 
-// --- PERMISSION REPOSITORY ---
 @Injectable()
 export class DrizzlePermissionRepository
   extends DrizzleBaseRepository
@@ -1933,13 +1913,12 @@ export class DrizzlePermissionRepository
       .select()
       .from(permissions)
       .where(eq(permissions.name, name));
-    return RbacMapper.toPermissionDomain(result[0]);
+    return result[0] ? RbacMapper.toPermissionDomain(result[0]) : null;
   }
 
   async save(permission: Permission, tx?: Transaction): Promise<Permission> {
     const db = this.getDb(tx);
     const data = RbacMapper.toPermissionPersistence(permission);
-
     let result;
     if (data.id) {
       result = await db
@@ -1949,9 +1928,11 @@ export class DrizzlePermissionRepository
         .returning();
     } else {
       const { id, ...insertData } = data;
-      result = await db.insert(permissions).values(insertData).returning();
+      result = await db
+        .insert(permissions)
+        .values(insertData as typeof permissions.$inferInsert)
+        .returning();
     }
-
     return RbacMapper.toPermissionDomain(result[0])!;
   }
 
@@ -1962,7 +1943,6 @@ export class DrizzlePermissionRepository
   }
 }
 
-// --- USER ROLE REPOSITORY ---
 @Injectable()
 export class DrizzleUserRoleRepository
   extends DrizzleBaseRepository
@@ -1980,11 +1960,9 @@ export class DrizzleUserRoleRepository
   async save(userRole: UserRole, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
     const data = RbacMapper.toUserRolePersistence(userRole);
-
-    // Manual Upsert for Composite Key
     await db
       .insert(userRoles)
-      .values(data)
+      .values(data as typeof userRoles.$inferInsert)
       .onConflictDoUpdate({
         target: [userRoles.userId, userRoles.roleId],
         set: { expiresAt: data.expiresAt, assignedBy: data.assignedBy },
@@ -2017,11 +1995,84 @@ export class DrizzleUserRoleRepository
 }
 ```
 
+## File: src/modules/rbac/infrastructure/dtos/role.dto.ts
+```
+import { ApiProperty } from '@nestjs/swagger';
+// FIX PATH: Chỉ cần 2 cấp ../
+import { Role } from '../../domain/entities/role.entity';
+import { Permission } from '../../domain/entities/permission.entity';
+
+export class PermissionDto {
+  @ApiProperty({ example: 1 })
+  id: number;
+
+  @ApiProperty({ example: 'user:create' })
+  name: string;
+
+  @ApiProperty({ example: 'Create new users' })
+  description: string;
+
+  @ApiProperty({ example: 'user' })
+  resourceType: string;
+
+  @ApiProperty({ example: 'create' })
+  action: string;
+}
+
+export class RoleResponseDto {
+  @ApiProperty({ example: 1 })
+  id: number;
+
+  @ApiProperty({ example: 'ADMIN' })
+  name: string;
+
+  @ApiProperty({ example: 'Administrator with full access' })
+  description: string;
+
+  @ApiProperty({ example: true })
+  isActive: boolean;
+
+  @ApiProperty({ example: false })
+  isSystem: boolean;
+
+  @ApiProperty({ type: [PermissionDto] })
+  permissions: PermissionDto[];
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  static fromDomain(role: Role): RoleResponseDto {
+    const dto = new RoleResponseDto();
+    dto.id = role.id!;
+    dto.name = role.name;
+    dto.description = role.description || '';
+    dto.isActive = role.isActive;
+    dto.isSystem = role.isSystem;
+    dto.createdAt = role.createdAt || new Date();
+    dto.updatedAt = role.updatedAt || new Date();
+
+    dto.permissions = role.permissions
+      ? role.permissions.map((p) => ({
+          id: p.id!,
+          name: p.name,
+          description: p.description || '',
+          resourceType: p.resourceType || '',
+          action: p.action || '',
+        }))
+      : [];
+
+    return dto;
+  }
+}
+```
+
 ## File: src/modules/rbac/rbac.module.ts
 ```
 import { Module } from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { UserModule } from '../user/user.module';
 import { RoleController } from './infrastructure/controllers/role.controller';
 import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
@@ -2029,21 +2080,21 @@ import { PermissionService } from './application/services/permission.service';
 import { RoleService } from './application/services/role.service';
 import { RbacManagerService } from './application/services/rbac-manager.service';
 import { PermissionGuard } from './infrastructure/guards/permission.guard';
-// Drizzle Repositories
 import {
   DrizzleRoleRepository,
   DrizzlePermissionRepository,
   DrizzleUserRoleRepository,
 } from './infrastructure/persistence/repositories/drizzle-rbac.repositories';
+import {
+  IRoleRepository,
+  IPermissionRepository,
+  IUserRoleRepository,
+} from './domain/repositories/rbac.repository';
 
 @Module({
   imports: [
     UserModule,
-    CacheModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: (c: ConfigService) => ({ ttl: 300, max: 1000 }),
-      inject: [ConfigService],
-    }),
+    // Không cần import CacheModule nữa vì RedisCacheModule là Global
   ],
   controllers: [RoleController, RbacManagerController],
   providers: [
@@ -2051,9 +2102,9 @@ import {
     RoleService,
     PermissionGuard,
     RbacManagerService,
-    { provide: 'IRoleRepository', useClass: DrizzleRoleRepository },
-    { provide: 'IPermissionRepository', useClass: DrizzlePermissionRepository },
-    { provide: 'IUserRoleRepository', useClass: DrizzleUserRoleRepository },
+    { provide: IRoleRepository, useClass: DrizzleRoleRepository },
+    { provide: IPermissionRepository, useClass: DrizzlePermissionRepository },
+    { provide: IUserRoleRepository, useClass: DrizzleUserRoleRepository },
   ],
   exports: [PermissionService, PermissionGuard, RoleService],
 })
@@ -2156,9 +2207,11 @@ export class PasswordUtil {
 ```
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { InMemoryEventBus } from '../../core/shared/infrastructure/adapters/in-memory-event-bus.adapter';
-import { DrizzleTransactionManager } from '../../core/shared/infrastructure/persistence/drizzle-transaction.manager';
-import { DrizzleModule } from '../../database/drizzle.module';
+import { InMemoryEventBus } from '@core/shared/infrastructure/adapters/in-memory-event-bus.adapter';
+import { DrizzleTransactionManager } from '@core/shared/infrastructure/persistence/drizzle-transaction.manager';
+import { DrizzleModule } from '@database/drizzle.module';
+// FIX IMPORT
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 
 @Global()
 @Module({
@@ -2172,11 +2225,11 @@ import { DrizzleModule } from '../../database/drizzle.module';
       useClass: InMemoryEventBus,
     },
     {
-      provide: 'ITransactionManager',
+      provide: ITransactionManager, // FIX: Use Symbol Token
       useClass: DrizzleTransactionManager,
     },
   ],
-  exports: [ConfigModule, 'IEventBus', 'ITransactionManager'],
+  exports: [ConfigModule, 'IEventBus', ITransactionManager], // FIX: Export Symbol Token
 })
 export class SharedModule {}
 ```
@@ -2184,9 +2237,9 @@ export class SharedModule {}
 ## File: src/modules/test/seeders/database.seeder.ts
 ```
 import { Injectable, OnModuleInit, Inject } from '@nestjs/common';
-import { DRIZZLE } from '../../../database/drizzle.provider';
+import { DRIZZLE } from '@database/drizzle.provider';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '../../../database/schema';
+import * as schema from '@database/schema';
 import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
 import {
@@ -2315,18 +2368,25 @@ export class DatabaseSeeder implements OnModuleInit {
 
 ## File: src/modules/test/controllers/test.controller.ts
 ```
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../rbac/infrastructure/guards/permission.guard';
 import { Permissions } from '../../rbac/infrastructure/decorators/permission.decorator';
 import { Public } from '../../auth/infrastructure/decorators/public.decorator';
 import { CurrentUser } from '../../auth/infrastructure/decorators/current-user.decorator';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 
 @Controller('test')
+@ApiBearerAuth()
 export class TestController {
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) {}
+
   @Public()
   @Get('health')
   healthCheck() {
+    this.logger.info('ciquan');
     return {
       status: 'OK',
       timestamp: new Date(),
@@ -2400,6 +2460,273 @@ export class TestModule implements OnModuleInit {
 }
 ```
 
+## File: src/modules/logging/infrastructure/winston/winston.factory.ts
+```
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as winston from 'winston';
+
+// FIX: Dùng require để tránh lỗi "is not a constructor" do xung đột ES Module/CommonJS
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const DailyRotateFile = require('winston-daily-rotate-file');
+
+@Injectable()
+export class WinstonFactory {
+  constructor(private configService: ConfigService) {}
+
+  createLogger(): winston.Logger {
+    const logLevel = this.configService.get('logging.level') || 'info';
+    const appName = this.configService.get('app.name') || 'SERVER';
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // 1. MASKER
+    const sensitiveKeys = [
+      'password',
+      'token',
+      'authorization',
+      'secret',
+      'creditCard',
+      'cvv',
+    ];
+    const masker = winston.format((info) => {
+      const maskDeep = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        Object.keys(obj).forEach((key) => {
+          if (sensitiveKeys.some((k) => key.toLowerCase().includes(k))) {
+            obj[key] = '***MASKED***';
+          } else if (typeof obj[key] === 'object') {
+            maskDeep(obj[key]);
+          }
+        });
+      };
+      const splat = (info as any)[Symbol.for('splat')];
+      if (splat) maskDeep(splat);
+      maskDeep(info);
+      return info;
+    });
+
+    // 2. CONSOLE FORMAT
+    const consoleFormat = winston.format.printf((info) => {
+      const tsVal = info.timestamp || new Date().toISOString();
+      const { level, message, context, requestId, label, timestamp, ...meta } =
+        info;
+
+      const cDim = '\x1b[2m';
+      const cReset = '\x1b[0m';
+      const cCyan = '\x1b[36m';
+      const cYellow = '\x1b[33m';
+
+      const splatSymbol = Symbol.for('splat');
+      const splat = (info as any)[splatSymbol];
+      let finalMeta = { ...meta };
+      if (Array.isArray(splat)) {
+        const splatObj = splat.find(
+          (item: any) => typeof item === 'object' && item !== null,
+        );
+        if (splatObj) Object.assign(finalMeta, splatObj);
+      }
+
+      delete (finalMeta as any).level;
+      delete (finalMeta as any).message;
+      delete (finalMeta as any).timestamp;
+      delete (finalMeta as any).service;
+
+      let metaStr = '';
+      if (Object.keys(finalMeta).length) {
+        const jsonStr = JSON.stringify(finalMeta);
+        if (jsonStr.length < 150) {
+          metaStr = ` ${cDim}${jsonStr}${cReset}`;
+        } else {
+          metaStr = `\n${cDim}${JSON.stringify(finalMeta, null, 2)}${cReset}`;
+        }
+      }
+
+      const timeDisplay = `${cDim}[${tsVal}]${cReset}`;
+      const levelDisplay = level;
+      const contextVal = context || label || appName;
+      const contextDisplay = `${cYellow}[${contextVal}]${cReset}`;
+      const requestDisplay = requestId ? `${cCyan}[${requestId}]${cReset}` : '';
+
+      return `${timeDisplay} ${levelDisplay} ${contextDisplay} ${requestDisplay} ${message}${metaStr}`;
+    });
+
+    // 3. TRANSPORTS
+    const transports: winston.transport[] = [
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.info.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '14d',
+        level: 'info',
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          masker(),
+          winston.format.json(),
+        ),
+      }),
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.error.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '30d',
+        level: 'error',
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          masker(),
+          winston.format.json(),
+        ),
+      }),
+    ];
+
+    if (isProduction) {
+      transports.push(
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.timestamp(),
+            masker(),
+            winston.format.json(),
+          ),
+        }),
+      );
+    } else {
+      transports.push(
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.timestamp({ format: 'HH:mm:ss' }),
+            masker(),
+            winston.format.colorize({ all: true }),
+            consoleFormat,
+          ),
+        }),
+      );
+    }
+
+    return winston.createLogger({
+      level: logLevel,
+      defaultMeta: { service: appName },
+      transports,
+      exitOnError: false,
+    });
+  }
+}
+```
+
+## File: src/modules/logging/infrastructure/winston/winston-logger.adapter.ts
+```
+import { Injectable, Inject, Scope } from '@nestjs/common';
+import * as winston from 'winston';
+import {
+  ILogger,
+  LogContext,
+} from '@core/shared/application/ports/logger.port';
+import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
+
+// CHUYỂN VỀ DEFAULT SCOPE (SINGLETON) - TỐT CHO HIỆU NĂNG
+@Injectable()
+export class WinstonLoggerAdapter implements ILogger {
+  private context: LogContext = {};
+
+  constructor(
+    @Inject('WINSTON_LOGGER') private readonly winstonLogger: winston.Logger,
+  ) {}
+
+  // Hàm này tự động lấy RequestID từ "túi thần kỳ" ALS
+  private getTraceInfo() {
+    return {
+      requestId: RequestContextService.getRequestId(),
+      // Có thể lấy thêm userId nếu lưu vào ALS sau bước Auth
+    };
+  }
+
+  debug(message: string, context?: LogContext): void {
+    this.log('debug', message, context);
+  }
+
+  info(message: string, context?: LogContext): void {
+    this.log('info', message, context);
+  }
+
+  warn(message: string, context?: LogContext): void {
+    this.log('warn', message, context);
+  }
+
+  error(message: string, error?: Error, context?: LogContext): void {
+    const errorMetadata = error
+      ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+        }
+      : undefined;
+
+    // Merge error metadata vào context để in ra JSON đẹp
+    this.log('error', message, { ...context, ...errorMetadata });
+  }
+
+  withContext(context: LogContext): ILogger {
+    // Tạo logger con, vẫn giữ bản chất singleton nhưng merge context tĩnh
+    const child = new WinstonLoggerAdapter(this.winstonLogger);
+    child.context = { ...this.context, ...context };
+    return child;
+  }
+
+  createChildLogger(module: string): ILogger {
+    return this.withContext({ label: module });
+  }
+
+  private log(level: string, message: string, context?: LogContext): void {
+    // Merge 3 nguồn context:
+    // 1. Context tĩnh của class (this.context)
+    // 2. Trace Info động từ ALS (requestId)
+    // 3. Context truyền vào hàm log
+
+    this.winstonLogger.log(level, message, {
+      ...this.context,
+      ...this.getTraceInfo(), // Tự động inject RequestID
+      ...context,
+    });
+  }
+}
+```
+
+## File: src/modules/logging/logging.module.ts
+```
+import { Module, DynamicModule, Global } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { WinstonFactory } from './infrastructure/winston/winston.factory';
+import { WinstonLoggerAdapter } from './infrastructure/winston/winston-logger.adapter';
+// Import Token
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+
+@Global()
+@Module({})
+export class LoggingModule {
+  static forRootAsync(): DynamicModule {
+    return {
+      module: LoggingModule,
+      imports: [ConfigModule],
+      providers: [
+        WinstonFactory,
+        {
+          provide: 'WINSTON_LOGGER', // Cái này nội bộ module, để string cũng tạm được
+          useFactory: (factory: WinstonFactory) => factory.createLogger(),
+          inject: [WinstonFactory],
+        },
+        {
+          provide: LOGGER_TOKEN, // ✅ Dùng Token Constant
+          useClass: WinstonLoggerAdapter,
+        },
+      ],
+      exports: [LOGGER_TOKEN], // ✅ Export bằng Token
+    };
+  }
+}
+```
+
 ## File: src/core/interceptors/transform-response.interceptor.ts
 ```
 import {
@@ -2412,43 +2739,60 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
+import { Response } from 'express'; // Nhớ import Response từ express
 import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
+
+// 1. Định nghĩa Interface cho object trả về để kiểm soát kiểu dữ liệu
+export interface AppResponse<T> {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  result: T;
+}
 
 @Injectable()
 export class TransformResponseInterceptor<T> implements NestInterceptor<
   T,
-  any
+  AppResponse<T> | StreamableFile
 > {
   constructor(private reflector: Reflector) {}
 
-  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    // 1. Check xem có gắn cờ Bypass không
+  intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<AppResponse<T> | StreamableFile> {
     const bypass = this.reflector.get<boolean>(
       BYPASS_TRANSFORM_KEY,
       context.getHandler(),
     );
 
     if (bypass) {
-      return next.handle();
+      return next.handle() as Observable<AppResponse<T> | StreamableFile>;
     }
 
-    // 2. Logic bọc JSON bình thường
     return next.handle().pipe(
-      map((data) => {
-        // Double check: Nếu data là StreamableFile thì cũng không bọc
+      // FIX LỖI Ở ĐÂY:
+      // Thay vì map((data) => ...), ta khai báo map((data: T) => ...)
+      // TypeScript sẽ hiểu data có kiểu T, không phải any.
+      map((data: T) => {
+        // Double check: Nếu data là StreamableFile thì return luôn
         if (data instanceof StreamableFile) {
           return data;
         }
 
+        // Lấy Response object từ Express để lấy statusCode chính xác
+        const response = context.switchToHttp().getResponse<Response>();
+        const status = response.statusCode;
+
         return {
           success: true,
-          statusCode: context.switchToHttp().getResponse().statusCode,
+          statusCode: status,
           message:
             this.reflector.get<string>(
               'response_message',
               context.getHandler(),
             ) || 'Success',
-          result: data,
+          result: data, // Lúc này việc gán data (T) vào result là an toàn
         };
       }),
     );
@@ -2467,6 +2811,23 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
+// 1. Định nghĩa Interface cho cấu trúc lỗi mặc định của NestJS
+interface NestErrorResponse {
+  statusCode: number;
+  message: string | string[];
+  error: string;
+}
+
+// 2. Định nghĩa Interface cho cấu trúc response trả về client
+interface ApiResponse {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  errors: string | string[] | null;
+  path: string;
+  timestamp: string;
+}
+
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: HttpException, host: ArgumentsHost) {
@@ -2478,60 +2839,50 @@ export class HttpExceptionFilter implements ExceptionFilter {
       ? exception.getStatus()
       : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    const exceptionResponse: any = exception.getResponse();
-    const errorMsg = exceptionResponse.message;
+    // 3. Lấy response gốc (có thể là string hoặc object)
+    const exceptionResponse = exception.getResponse();
 
-    const responseBody = {
+    // 4. Khởi tạo giá trị mặc định
+    let message = 'Error';
+    let errors: string | string[] | null = null;
+
+    // 5. Xử lý Logic Type-Safe
+    if (typeof exceptionResponse === 'string') {
+      // Trường hợp 1: throw new BadRequestException('Lỗi gì đó')
+      message = exceptionResponse;
+    } else if (
+      typeof exceptionResponse === 'object' &&
+      exceptionResponse !== null
+    ) {
+      // Trường hợp 2: Lỗi từ class-validator hoặc NestJS chuẩn
+      // Ép kiểu an toàn về Interface đã định nghĩa
+      const responseObj = exceptionResponse as NestErrorResponse;
+
+      // Logic cũ của bạn: Ưu tiên lấy 'error' làm message chính (VD: "Bad Request")
+      // Nếu không có 'error', lấy 'message' (nếu nó là string)
+      if (responseObj.error) {
+        message = responseObj.error;
+      } else if (typeof responseObj.message === 'string') {
+        message = responseObj.message;
+      }
+
+      // 'errors' chứa chi tiết (VD: mảng các field validate sai)
+      errors = responseObj.message || null;
+    }
+
+    // 6. Tạo response body theo Interface chuẩn
+    const responseBody: ApiResponse = {
       success: false,
       statusCode: status,
-      message:
-        typeof exceptionResponse === 'string' ? exceptionResponse : 'Error',
-      errors: errorMsg || null,
+      message: message,
+      errors: errors,
       path: request.url,
       timestamp: new Date().toISOString(),
     };
 
-    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
-      responseBody.message =
-        exceptionResponse['error'] || exceptionResponse['message'];
-      responseBody.errors = exceptionResponse['message'];
-    }
-
     response.status(status).json(responseBody);
   }
 }
-```
-
-## File: src/core/core.module.ts
-```
-import { Module } from '@nestjs/common';
-import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-
-import { TransformResponseInterceptor } from './interceptors/transform-response.interceptor';
-import { HttpExceptionFilter } from './filters/http-exception.filter';
-
-@Module({
-  providers: [
-    {
-      provide: APP_PIPE,
-      useValue: new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    },
-    {
-      provide: APP_INTERCEPTOR,
-      useClass: TransformResponseInterceptor,
-    },
-    {
-      provide: APP_FILTER,
-      useClass: HttpExceptionFilter,
-    },
-  ],
-})
-export class CoreModule {}
 ```
 
 ## File: src/core/decorators/bypass-transform.decorator.ts
@@ -2553,6 +2904,10 @@ export interface IFileParser {
 ```
 export type Transaction = unknown; // Opaque type
 
+// 1. Token (Runtime Identifier)
+export const ITransactionManager = Symbol('ITransactionManager');
+
+// 2. Interface (Type)
 export interface ITransactionManager {
   runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }
@@ -2593,6 +2948,52 @@ export interface IEventBus {
     handler: (event: T) => Promise<void>,
   ): void;
   unsubscribe(eventName: string, handler: Function): void;
+}
+```
+
+## File: src/core/shared/application/ports/logger.port.ts
+```
+export enum LogLevel {
+  DEBUG = 'debug',
+  INFO = 'info',
+  WARN = 'warn',
+  ERROR = 'error',
+}
+
+export interface LogContext {
+  requestId?: string;
+  userId?: number | string;
+  ipAddress?: string;
+  method?: string;
+  url?: string;
+  [key: string]: any;
+}
+
+// ✅ PRO WAY: Định nghĩa Token ở đây
+export const LOGGER_TOKEN = 'ILogger';
+
+export interface ILogger {
+  debug(message: string, context?: LogContext): void;
+  info(message: string, context?: LogContext): void;
+  warn(message: string, context?: LogContext): void;
+  error(message: string, error?: Error, context?: LogContext): void;
+
+  withContext(context: LogContext): ILogger;
+  createChildLogger(module: string): ILogger;
+}
+```
+
+## File: src/core/shared/application/ports/cache.port.ts
+```
+// Token để Inject
+export const ICacheService = Symbol('ICacheService');
+
+// Interface trừu tượng
+export interface ICacheService {
+  get<T>(key: string): Promise<T | undefined>;
+  set(key: string, value: unknown, ttl?: number): Promise<void>;
+  del(key: string): Promise<void>;
+  reset(): Promise<void>;
 }
 ```
 
@@ -2664,10 +3065,10 @@ export class InMemoryEventBus implements IEventBus {
 ## File: src/core/shared/infrastructure/persistence/drizzle-base.repository.ts
 ```
 import { Inject, Injectable } from '@nestjs/common';
-import { DRIZZLE } from '../../../../database/drizzle.provider';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '../../../../database/schema';
-import { Transaction } from '../../application/ports/transaction-manager.port';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleBaseRepository {
@@ -2675,7 +3076,6 @@ export class DrizzleBaseRepository {
     @Inject(DRIZZLE) protected readonly db: NodePgDatabase<typeof schema>,
   ) {}
 
-  // Helper để lấy DB Context
   protected getDb(tx?: Transaction): NodePgDatabase<typeof schema> {
     return tx ? (tx as NodePgDatabase<typeof schema>) : this.db;
   }
@@ -2685,14 +3085,13 @@ export class DrizzleBaseRepository {
 ## File: src/core/shared/infrastructure/persistence/drizzle-transaction.manager.ts
 ```
 import { Inject, Injectable } from '@nestjs/common';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
 import {
   ITransactionManager,
   Transaction,
-} from '../../application/ports/transaction-manager.port';
-// FIX PATH: 4 cấp ../ để về src, sau đó vào database
-import { DRIZZLE } from '../../../../database/drizzle.provider';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '../../../../database/schema';
+} from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleTransactionManager implements ITransactionManager {
@@ -2704,6 +3103,139 @@ export class DrizzleTransactionManager implements ITransactionManager {
     });
   }
 }
+```
+
+## File: src/core/shared/infrastructure/context/request-context.service.ts
+```
+import { Injectable } from '@nestjs/common';
+import { AsyncLocalStorage } from 'async_hooks';
+
+export class RequestContext {
+  constructor(
+    public readonly requestId: string,
+    public readonly url: string,
+  ) {}
+}
+
+@Injectable()
+export class RequestContextService {
+  // Static để có thể gọi ở bất cứ đâu (kể cả nơi không inject được)
+  private static readonly als = new AsyncLocalStorage<RequestContext>();
+
+  static run(context: RequestContext, callback: () => void) {
+    this.als.run(context, callback);
+  }
+
+  static getRequestId(): string {
+    const store = this.als.getStore();
+    return store?.requestId || 'sys-' + process.pid; // Fallback nếu không có request (VD: Cronjob)
+  }
+
+  static getContext(): RequestContext | undefined {
+    return this.als.getStore();
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/cache/redis-cache.adapter.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache as RootCache } from 'cache-manager';
+import { ICacheService } from '../../application/ports/cache.port';
+// 1. Import Logger Port và Token
+import { ILogger, LOGGER_TOKEN } from '../../application/ports/logger.port';
+
+interface ExtendedCache extends Omit<RootCache, 'clear'> {
+  clear?: () => Promise<void | boolean>;
+  reset?: () => Promise<void>;
+}
+
+@Injectable()
+export class RedisCacheAdapter implements ICacheService {
+  constructor(
+    @Inject(CACHE_MANAGER) private readonly cacheManager: ExtendedCache,
+    // 2. Inject Logger vào Adapter
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  async get<T>(key: string): Promise<T | undefined> {
+    const start = Date.now();
+    const value = await this.cacheManager.get<T>(key);
+
+    // 3. Log Debug (Thay vì Info để tránh spam log production)
+    this.logger.debug(`Redis GET`, {
+      key,
+      hit: !!value,
+      duration: `${Date.now() - start}ms`,
+    });
+
+    return value;
+  }
+
+  async set(key: string, value: unknown, ttl?: number): Promise<void> {
+    // Log Debug
+    this.logger.debug(`Redis SET`, { key, ttl });
+
+    await (this.cacheManager as unknown as RootCache).set(key, value, ttl ?? 0);
+  }
+
+  async del(key: string): Promise<void> {
+    this.logger.debug(`Redis DEL`, { key });
+    await this.cacheManager.del(key);
+  }
+
+  async reset(): Promise<void> {
+    this.logger.warn(`Redis RESET ALL`); // Warn vì đây là hành động nguy hiểm
+
+    if (this.cacheManager.clear) {
+      await this.cacheManager.clear();
+      return;
+    }
+
+    if (this.cacheManager.reset) {
+      await this.cacheManager.reset();
+    }
+  }
+}
+```
+
+## File: src/core/shared/infrastructure/cache/redis-cache.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { CacheModule } from '@nestjs/cache-manager';
+import * as redisStore from 'cache-manager-redis-store';
+import { ICacheService } from '../../application/ports/cache.port';
+import { RedisCacheAdapter } from './redis-cache.adapter';
+import redisConfig from '@config/redis.config';
+
+@Global()
+@Module({
+  imports: [
+    ConfigModule.forFeature(redisConfig),
+    CacheModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        store: redisStore,
+        host: configService.get('redis.host'),
+        port: configService.get('redis.port'),
+        ttl: configService.get('redis.ttl'),
+        max: configService.get('redis.max'),
+        // isGlobal: true, // Đã để module Global nên không bắt buộc set ở đây, nhưng set cho chắc
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+  providers: [
+    {
+      provide: ICacheService,
+      useClass: RedisCacheAdapter,
+    },
+  ],
+  exports: [ICacheService],
+})
+export class RedisCacheModule {}
 ```
 
 ## File: src/core/shared/domain/value-objects/money.vo.ts
@@ -2774,6 +3306,92 @@ export interface IDomainEvent {
 }
 ```
 
+## File: src/core/shared/utils/password.util.ts
+```
+import * as bcrypt from 'bcrypt';
+export class PasswordUtil {
+  static async hash(p: string) {
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(p, salt);
+  }
+  static async compare(p: string, h: string) {
+    return bcrypt.compare(p, h);
+  }
+  static validateStrength(p: string) {
+    return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(p);
+  }
+}
+```
+
+## File: src/core/shared/types/common.types.ts
+```
+export type ApiResponse<T = any> = {
+  success: boolean;
+  data?: T;
+  message?: string;
+  error?: string;
+  timestamp: Date;
+};
+
+export type PaginatedResponse<T> = ApiResponse<{
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}>;
+
+export type JwtPayload = {
+  sub: number;
+  username: string;
+  roles: string[];
+  iat?: number;
+  exp?: number;
+};
+
+export type UserContext = {
+  id: number;
+  username: string;
+  roles: string[];
+  permissions: string[];
+};
+```
+
+## File: src/core/core.module.ts
+```
+import { Module } from '@nestjs/common';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+
+import { TransformResponseInterceptor } from './interceptors/transform-response.interceptor';
+import { HttpExceptionFilter } from './filters/http-exception.filter';
+import { RequestContextService } from './shared/infrastructure/context/request-context.service';
+
+@Module({
+  providers: [
+    RequestContextService, // Đăng ký Service này
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TransformResponseInterceptor,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: HttpExceptionFilter,
+    },
+  ],
+  exports: [RequestContextService],
+})
+export class CoreModule {}
+```
+
 ## File: src/config/app.config.ts
 ```
 import { registerAs } from '@nestjs/config';
@@ -2812,6 +3430,19 @@ import { registerAs } from '@nestjs/config';
 
 export default registerAs('logging', () => ({
   level: process.env.LOG_LEVEL || 'info',
+}));
+```
+
+## File: src/config/redis.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('redis', () => ({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  // Sử dụng biến RBAC_CACHE_TTL từ .env của bạn
+  ttl: parseInt(process.env.RBAC_CACHE_TTL || '300', 10),
+  max: parseInt(process.env.RBAC_CACHE_MAX || '1000', 10),
 }));
 ```
 
@@ -2868,7 +3499,7 @@ export const sessions = pgTable(
     expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
     ipAddress: text('ipAddress'),
     userAgent: text('userAgent'),
-    createdAt: timestamp('createdAt').defaultNow(),
+    createdAt: timestamp('createdAt').defaultNow().notNull(),
   },
   (table) => {
     return {
@@ -2892,7 +3523,9 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
-// Permissions
+// --- 1. TABLES DEFINITIONS ---
+
+// Permissions Table
 export const permissions = pgTable('permissions', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().unique(),
@@ -2904,7 +3537,7 @@ export const permissions = pgTable('permissions', {
   createdAt: timestamp('createdAt').defaultNow(),
 });
 
-// Roles
+// Roles Table
 export const roles = pgTable('roles', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().unique(),
@@ -2915,12 +3548,12 @@ export const roles = pgTable('roles', {
   updatedAt: timestamp('updatedAt').defaultNow(),
 });
 
-// User Roles (Many-to-Many User-Role)
+// User Roles (Pivot Table: Users <-> Roles)
 export const userRoles = pgTable(
   'user_roles',
   {
     userId: bigint('userId', { mode: 'number' }).notNull(),
-    roleId: integer('roleId')
+    roleId: integer('roleId') // Lưu ý: DB column name nên để 'role_id' nếu muốn chuẩn snake_case, ở đây giữ nguyên theo code cũ của bạn
       .notNull()
       .references(() => roles.id),
     assignedBy: bigint('assignedBy', { mode: 'number' }),
@@ -2932,7 +3565,7 @@ export const userRoles = pgTable(
   }),
 );
 
-// Role Permissions (Many-to-Many Role-Permission)
+// Role Permissions (Pivot Table: Roles <-> Permissions)
 export const rolePermissions = pgTable(
   'role_permissions',
   {
@@ -2948,15 +3581,21 @@ export const rolePermissions = pgTable(
   }),
 );
 
-// Relations
-export const rolesRelations = relations(roles, ({ many }) => ({
-  permissions: many(rolePermissions),
-}));
+// --- 2. RELATIONS DEFINITIONS ---
 
+// Relations cho Permissions
 export const permissionsRelations = relations(permissions, ({ many }) => ({
-  roles: many(rolePermissions),
+  roles: many(rolePermissions), // Permission có nhiều entry trong bảng nối rolePermissions
 }));
 
+// Relations cho Roles
+export const rolesRelations = relations(roles, ({ many }) => ({
+  permissions: many(rolePermissions), // Role có nhiều entry trong bảng nối rolePermissions
+  // Nếu bạn muốn query ngược từ Role ra User, cần relation này (Optional)
+  users: many(userRoles),
+}));
+
+// Relations cho RolePermissions (Bảng nối)
 export const rolePermissionsRelations = relations(
   rolePermissions,
   ({ one }) => ({
@@ -2970,6 +3609,17 @@ export const rolePermissionsRelations = relations(
     }),
   }),
 );
+
+// Relations cho UserRoles (Bảng nối) - PHẦN BỊ THIẾU GÂY LỖI
+export const userRolesRelations = relations(userRoles, ({ one }) => ({
+  role: one(roles, {
+    fields: [userRoles.roleId],
+    references: [roles.id],
+  }),
+  // Chúng ta chưa import bảng 'users' ở đây để tránh Circular Dependency.
+  // Nếu cần query user từ bảng nối này, cần import 'users' cẩn thận.
+  // Hiện tại chỉ cần 'role' để Drizzle hiểu graph khi query từ Role.
+}));
 ```
 
 ## File: src/database/drizzle.provider.ts
@@ -2987,7 +3637,6 @@ export const drizzleProvider = {
   useFactory: async (configService: ConfigService) => {
     const connectionString = configService.get<string>('database.url');
 
-    // Config cho cả Local và Cloud
     const host = configService.get<string>('database.host');
     const port = configService.get<number>('database.port');
     const user = configService.get<string>('database.username');
@@ -2999,7 +3648,6 @@ export const drizzleProvider = {
       : { host, port, user, password, database };
 
     const pool = new Pool(poolConfig);
-
     return drizzle(pool, { schema });
   },
 };
@@ -3018,5 +3666,61 @@ import { ConfigModule } from '@nestjs/config';
   exports: [drizzleProvider],
 })
 export class DrizzleModule {}
+```
+
+## File: src/api/middleware/request-logging.middleware.ts
+```
+import { Injectable, NestMiddleware, Inject } from '@nestjs/common';
+import { Request, Response, NextFunction } from 'express';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import {
+  RequestContextService,
+  RequestContext,
+} from '@core/shared/infrastructure/context/request-context.service';
+
+@Injectable()
+export class RequestLoggingMiddleware implements NestMiddleware {
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) {}
+
+  use(req: Request, res: Response, next: NextFunction) {
+    const startTime = Date.now();
+
+    let rawRequestId = req.headers['x-request-id'];
+    if (Array.isArray(rawRequestId)) rawRequestId = rawRequestId[0];
+    const requestId = rawRequestId || `req-${Date.now()}`;
+
+    req.headers['x-request-id'] = requestId;
+    res.setHeader('x-request-id', requestId);
+
+    // QUAN TRỌNG: Bọc next() trong RequestContextService.run
+    const context = new RequestContext(requestId, req.originalUrl);
+
+    RequestContextService.run(context, () => {
+      // Log lúc bắt đầu (bên trong context)
+      this.logger.info(`Incoming Request: ${req.method} ${req.originalUrl}`, {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
+      res.on('finish', () => {
+        const duration = Date.now() - startTime;
+        const statusCode = res.statusCode;
+        const message = `Request Completed: ${statusCode} (${duration}ms)`;
+        const logContext = { statusCode, duration };
+
+        if (statusCode >= 500) {
+          this.logger.error(message, undefined, logContext);
+        } else if (statusCode >= 400) {
+          this.logger.warn(message, logContext);
+        } else {
+          this.logger.info(message, logContext);
+        }
+      });
+
+      next();
+    });
+  }
+}
 ```
 

@@ -6,57 +6,22 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
-import type { ISessionRepository } from '../../domain/repositories/session-repository.interface';
-import { PasswordUtil } from '../../../shared/utils/password.util';
-import { User } from '../../../user/domain/entities/user.entity';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
+import { ISessionRepository } from '../../domain/repositories/session.repository';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '@modules/user/domain/entities/user.entity';
 import { Session } from '../../domain/entities/session.entity';
-import { JwtPayload } from '../../../shared/types/common.types';
-import type {
-  ITransactionManager,
-  Transaction,
-} from '../../../../core/shared/application/ports/transaction-manager.port';
-import { RegisterDto } from '../../infrastructure/dtos/auth.dto'; // FIX: import type
+import { JwtPayload } from '@core/shared/types/common.types';
 
 @Injectable()
 export class AuthenticationService {
   constructor(
-    @Inject('IUserRepository') private userRepository: IUserRepository,
-    @Inject('ISessionRepository') private sessionRepository: ISessionRepository,
-    @Inject('ITransactionManager') private txManager: ITransactionManager,
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+    @Inject(ISessionRepository) private sessionRepository: ISessionRepository,
+    @Inject(ITransactionManager) private txManager: ITransactionManager,
     private jwtService: JwtService,
   ) {}
-
-  private async createSessionForUser(
-    user: User,
-    ip?: string,
-    agent?: string,
-    tx?: Transaction,
-  ) {
-    const payload: JwtPayload = {
-      sub: user.id!,
-      username: user.username,
-      roles: [], // Nên fetch role thật của user để nhét vào đây nếu cần claim-based
-    };
-    const accessToken = this.jwtService.sign(payload);
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
-
-    const session = new Session(
-      undefined,
-      user.id!,
-      accessToken,
-      expiresAt,
-      ip,
-      agent,
-      new Date(),
-    );
-
-    await this.sessionRepository.create(session, tx);
-
-    return { accessToken, user: user.toJSON() };
-  }
 
   async login(credentials: {
     username: string;
@@ -68,7 +33,6 @@ export class AuthenticationService {
 
     if (!user || !user.isActive)
       throw new UnauthorizedException('Invalid credentials');
-    // Access getter directly (domain encapsulation)
     if (!user.hashedPassword)
       throw new UnauthorizedException('Password not set');
 
@@ -80,11 +44,32 @@ export class AuthenticationService {
 
     if (!user.id) throw new InternalServerErrorException('User ID is missing');
 
-    return this.createSessionForUser(
-      user,
+    const payload: JwtPayload = {
+      sub: user.id,
+      username: user.username,
+      roles: [],
+    };
+    const accessToken = this.jwtService.sign(payload);
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1);
+
+    const session = new Session(
+      undefined,
+      user.id,
+      accessToken,
+      expiresAt,
       credentials.ip,
       credentials.userAgent,
+      new Date(),
     );
+
+    await this.sessionRepository.create(session);
+
+    return {
+      accessToken,
+      user: user.toJSON(),
+    };
   }
 
   async validateUser(
@@ -95,7 +80,7 @@ export class AuthenticationService {
     return user.toJSON();
   }
 
-  async register(data: RegisterDto) {
+  async register(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
@@ -119,37 +104,30 @@ export class AuthenticationService {
       const savedUser = await this.userRepository.save(newUser, tx);
       if (!savedUser.id)
         throw new InternalServerErrorException('Failed to generate User ID');
-      return this.createSessionForUser(savedUser, undefined, undefined, tx);
-    });
 
-    // return this.txManager.runInTransaction(async (tx) => {
-    //   const savedUser = await this.userRepository.save(newUser, tx);
-    //   if (!savedUser.id)
-    //     throw new InternalServerErrorException('Failed to generate User ID');
-    //
-    //   const payload: JwtPayload = {
-    //     sub: savedUser.id,
-    //     username: savedUser.username,
-    //     roles: [],
-    //   };
-    //   const accessToken = this.jwtService.sign(payload);
-    //
-    //   const expiresAt = new Date();
-    //   expiresAt.setDate(expiresAt.getDate() + 1);
-    //
-    //   const session = new Session(
-    //     undefined,
-    //     savedUser.id,
-    //     accessToken,
-    //     expiresAt,
-    //     undefined,
-    //     undefined,
-    //     new Date(),
-    //   );
-    //
-    //   await this.sessionRepository.create(session, tx);
-    //
-    //   return { accessToken, user: savedUser.toJSON() };
-    // });
+      const payload: JwtPayload = {
+        sub: savedUser.id,
+        username: savedUser.username,
+        roles: [],
+      };
+      const accessToken = this.jwtService.sign(payload);
+
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 1);
+
+      const session = new Session(
+        undefined,
+        savedUser.id,
+        accessToken,
+        expiresAt,
+        undefined,
+        undefined,
+        new Date(),
+      );
+
+      await this.sessionRepository.create(session, tx);
+
+      return { accessToken, user: savedUser.toJSON() };
+    });
   }
 }

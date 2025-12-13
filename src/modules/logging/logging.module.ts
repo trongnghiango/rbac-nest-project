@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { WinstonFactory } from './infrastructure/winston/winston.factory';
 import { WinstonLoggerAdapter } from './infrastructure/winston/winston-logger.adapter';
 // Import Token
-import { LOGGER_TOKEN } from '../../core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 
 @Global()
 @Module({})

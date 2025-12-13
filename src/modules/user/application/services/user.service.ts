@@ -4,60 +4,44 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import type { IUserRepository } from '../../domain/repositories/user-repository.interface';
+// FIX IMPORT: Import cả Token và Interface
+import { IUserRepository } from '../../domain/repositories/user.repository';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
-import { LOGGER_TOKEN } from '../../../../core/shared/application/ports/logger.port';
-import type { ILogger } from '../../../../core/shared/application/ports/logger.port';
 
 @Injectable()
 export class UserService {
   constructor(
-    @Inject('IUserRepository') private userRepository: IUserRepository,
-    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    // FIX INJECT: Dùng Symbol IUserRepository
+    @Inject(IUserRepository) private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: {
-    id: number;
-    username: string;
-    email?: string;
-    password?: string;
-    fullName: string;
-  }): Promise<any> {
+  async createUser(data: any): Promise<any> {
     const existing = await this.userRepository.findByUsername(data.username);
-    if (existing) {
-      throw new BadRequestException('User already exists');
-    }
+    if (existing) throw new BadRequestException('User already exists');
 
     let hashedPassword;
     if (data.password) {
-      if (!PasswordUtil.validateStrength(data.password)) {
-        throw new BadRequestException(
-          'Password does not meet strength requirements',
-        );
-      }
+      if (!PasswordUtil.validateStrength(data.password))
+        throw new BadRequestException('Weak password');
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    // FIX: Sử dụng Constructor chuẩn của Domain
     const newUser = new User(
       data.id,
       data.username,
       data.email,
       hashedPassword,
       data.fullName,
-      true, // isActive
-      undefined, // phoneNumber
-      undefined, // avatarUrl
-      undefined, // profile
-      new Date(), // createdAt
-      new Date(), // updatedAt
+      true,
+      undefined,
+      undefined,
+      undefined,
+      new Date(),
+      new Date(),
     );
 
-    // 1. Log Info (Thông tin chung)
-
     const user = await this.userRepository.save(newUser);
-    this.logger.info('Creating new user', user.toJSON());
     return user.toJSON();
   }
 
@@ -73,9 +57,7 @@ export class UserService {
 
   async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(id);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    if (!user) throw new NotFoundException('User not found');
     return user.toJSON();
   }
 
@@ -84,9 +66,7 @@ export class UserService {
     profileData: any,
   ): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    if (!user) throw new NotFoundException('User not found');
 
     user.updateProfile(profileData);
     const updated = await this.userRepository.save(user);
@@ -95,10 +75,7 @@ export class UserService {
 
   async deactivateUser(userId: number): Promise<void> {
     const user = await this.userRepository.findById(userId);
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
+    if (!user) throw new NotFoundException('User not found');
     user.deactivate();
     await this.userRepository.save(user);
   }

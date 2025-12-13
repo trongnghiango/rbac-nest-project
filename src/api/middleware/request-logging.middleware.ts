@@ -1,11 +1,11 @@
 import { Injectable, NestMiddleware, Inject } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
-import type { ILogger } from '../../core/shared/application/ports/logger.port';
-import { LOGGER_TOKEN } from '../../core/shared/application/ports/logger.port';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 import {
   RequestContextService,
   RequestContext,
-} from '../../core/shared/infrastructure/context/request-context.service';
+} from '@core/shared/infrastructure/context/request-context.service';
 
 @Injectable()
 export class RequestLoggingMiddleware implements NestMiddleware {

@@ -1,12 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
 import {
   ITransactionManager,
   Transaction,
-} from '../../application/ports/transaction-manager.port';
-// FIX PATH: 4 cấp ../ để về src, sau đó vào database
-import { DRIZZLE } from '../../../../database/drizzle.provider';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '../../../../database/schema';
+} from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleTransactionManager implements ITransactionManager {

@@ -11,7 +11,6 @@ export const drizzleProvider = {
   useFactory: async (configService: ConfigService) => {
     const connectionString = configService.get<string>('database.url');
 
-    // Config cho cả Local và Cloud
     const host = configService.get<string>('database.host');
     const port = configService.get<number>('database.port');
     const user = configService.get<string>('database.username');
@@ -23,7 +22,6 @@ export const drizzleProvider = {
       : { host, port, user, password, database };
 
     const pool = new Pool(poolConfig);
-
     return drizzle(pool, { schema });
   },
 };

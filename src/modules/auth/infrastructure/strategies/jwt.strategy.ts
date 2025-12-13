@@ -2,14 +2,15 @@ import { Injectable, Inject } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import type { IUserRepository } from '../../../user/domain/repositories/user-repository.interface';
+// FIX IMPORT
+import { IUserRepository } from '../../../user/domain/repositories/user.repository';
 import { JwtPayload } from '../../../shared/types/common.types';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
-    @Inject('IUserRepository') private userRepository: IUserRepository,
+    @Inject(IUserRepository) private userRepository: IUserRepository, // FIX: Symbol
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -20,10 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload) {
     const user = await this.userRepository.findById(payload.sub);
-    if (!user || !user.isActive) {
-      return null;
-    }
-
+    if (!user || !user.isActive) return null;
     return {
       id: user.id,
       username: user.username,

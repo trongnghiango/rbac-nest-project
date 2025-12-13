@@ -1,6 +1,6 @@
 import { InferSelectModel } from 'drizzle-orm';
 import { Session } from '../../../domain/entities/session.entity';
-import { sessions } from '../../../../../database/schema';
+import { sessions } from '@database/schema';
 
 type SessionRecord = InferSelectModel<typeof sessions>;
 

@@ -1,87 +1,139 @@
 #!/bin/bash
 
-# ============================================
-# FIX IMPORT PATH IN ROLE DTO
-# ============================================
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 NC='\033[0m'
-
 log() { echo -e "${BLUE}[INFO]${NC} $1"; }
-success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-log "🛠️ FIXING ROLE DTO IMPORT PATHS (2 DOTS)..."
+log "🛠️ FIXING WINSTON IMPORT ERROR..."
 
-cat > src/modules/rbac/infrastructure/dtos/role.dto.ts << 'EOF'
-import { ApiProperty } from '@nestjs/swagger';
-// FIX PATH: Chỉ cần 2 cấp ../
-import { Role } from '../../domain/entities/role.entity';
-import { Permission } from '../../domain/entities/permission.entity';
+cat > src/modules/logging/infrastructure/winston/winston.factory.ts << 'EOF'
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as winston from 'winston';
 
-export class PermissionDto {
-  @ApiProperty({ example: 1 })
-  id: number;
+// FIX: Dùng require để tránh lỗi "is not a constructor" do xung đột ES Module/CommonJS
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const DailyRotateFile = require('winston-daily-rotate-file');
 
-  @ApiProperty({ example: 'user:create' })
-  name: string;
+@Injectable()
+export class WinstonFactory {
+  constructor(private configService: ConfigService) {}
 
-  @ApiProperty({ example: 'Create new users' })
-  description: string;
+  createLogger(): winston.Logger {
+    const logLevel = this.configService.get('logging.level') || 'info';
+    const appName = this.configService.get('app.name') || 'SERVER';
+    const isProduction = process.env.NODE_ENV === 'production';
 
-  @ApiProperty({ example: 'user' })
-  resourceType: string;
+    // 1. MASKER
+    const sensitiveKeys = ['password', 'token', 'authorization', 'secret', 'creditCard', 'cvv'];
+    const masker = winston.format((info) => {
+      const maskDeep = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        Object.keys(obj).forEach((key) => {
+          if (sensitiveKeys.some(k => key.toLowerCase().includes(k))) {
+            obj[key] = '***MASKED***';
+          } else if (typeof obj[key] === 'object') {
+            maskDeep(obj[key]);
+          }
+        });
+      };
+      const splat = (info as any)[Symbol.for('splat')];
+      if (splat) maskDeep(splat);
+      maskDeep(info);
+      return info;
+    });
 
-  @ApiProperty({ example: 'create' })
-  action: string;
-}
+    // 2. CONSOLE FORMAT
+    const consoleFormat = winston.format.printf((info) => {
+      const tsVal = info.timestamp || new Date().toISOString();
+      const { level, message, context, requestId, label, timestamp, ...meta } = info;
 
-export class RoleResponseDto {
-  @ApiProperty({ example: 1 })
-  id: number;
+      const cDim = '\x1b[2m';
+      const cReset = '\x1b[0m';
+      const cCyan = '\x1b[36m';
+      const cYellow = '\x1b[33m';
 
-  @ApiProperty({ example: 'ADMIN' })
-  name: string;
+      const splatSymbol = Symbol.for('splat');
+      const splat = (info as any)[splatSymbol];
+      let finalMeta = { ...meta };
+      if (Array.isArray(splat)) {
+        const splatObj = splat.find((item: any) => typeof item === 'object' && item !== null);
+        if (splatObj) Object.assign(finalMeta, splatObj);
+      }
 
-  @ApiProperty({ example: 'Administrator with full access' })
-  description: string;
+      delete (finalMeta as any).level;
+      delete (finalMeta as any).message;
+      delete (finalMeta as any).timestamp;
+      delete (finalMeta as any).service;
 
-  @ApiProperty({ example: true })
-  isActive: boolean;
+      let metaStr = '';
+      if (Object.keys(finalMeta).length) {
+         const jsonStr = JSON.stringify(finalMeta);
+         if (jsonStr.length < 150) {
+             metaStr = ` ${cDim}${jsonStr}${cReset}`;
+         } else {
+             metaStr = `\n${cDim}${JSON.stringify(finalMeta, null, 2)}${cReset}`;
+         }
+      }
 
-  @ApiProperty({ example: false })
-  isSystem: boolean;
+      const timeDisplay = `${cDim}[${tsVal}]${cReset}`;
+      const levelDisplay = level;
+      const contextVal = context || label || appName;
+      const contextDisplay = `${cYellow}[${contextVal}]${cReset}`;
+      const requestDisplay = requestId ? `${cCyan}[${requestId}]${cReset}` : '';
 
-  @ApiProperty({ type: [PermissionDto] })
-  permissions: PermissionDto[];
+      return `${timeDisplay} ${levelDisplay} ${contextDisplay} ${requestDisplay} ${message}${metaStr}`;
+    });
 
-  @ApiProperty()
-  createdAt: Date;
+    // 3. TRANSPORTS
+    const transports: winston.transport[] = [
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.info.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '14d',
+        level: 'info',
+        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
+      }),
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.error.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '30d',
+        level: 'error',
+        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
+      }),
+    ];
 
-  @ApiProperty()
-  updatedAt: Date;
+    if (isProduction) {
+      transports.push(new winston.transports.Console({
+        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
+      }));
+    } else {
+      transports.push(new winston.transports.Console({
+        format: winston.format.combine(
+            winston.format.timestamp({ format: 'HH:mm:ss' }),
+            masker(),
+            winston.format.colorize({ all: true }),
+            consoleFormat
+        ),
+      }));
+    }
 
-  static fromDomain(role: Role): RoleResponseDto {
-    const dto = new RoleResponseDto();
-    dto.id = role.id!;
-    dto.name = role.name;
-    dto.description = role.description || '';
-    dto.isActive = role.isActive;
-    dto.isSystem = role.isSystem;
-    dto.createdAt = role.createdAt || new Date();
-    dto.updatedAt = role.updatedAt || new Date();
-
-    dto.permissions = role.permissions ? role.permissions.map(p => ({
-      id: p.id!,
-      name: p.name,
-      description: p.description || '',
-      resourceType: p.resourceType || '',
-      action: p.action || '',
-    })) : [];
-
-    return dto;
+    return winston.createLogger({
+      level: logLevel,
+      defaultMeta: { service: appName },
+      transports,
+      exitOnError: false,
+    });
   }
 }
 EOF
 
-success "✅ DTO PATHS FIXED!"
-echo "👉 App should compile cleanly now."
+echo "✅ FIXED: Replaced import with require for DailyRotateFile."
+echo "👉 Restart server: npm run start:dev"

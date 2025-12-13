@@ -1,15 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as winston from 'winston';
-import DailyRotateFile from 'winston-daily-rotate-file';
+
+// FIX: Dùng require để tránh lỗi "is not a constructor" do xung đột ES Module/CommonJS
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const DailyRotateFile = require('winston-daily-rotate-file');
 
 @Injectable()
 export class WinstonFactory {
   constructor(private configService: ConfigService) {}
 
   createLogger(): winston.Logger {
-    const logLevel: string = this.configService.get('logging.level') || 'info';
-    const appName: string = this.configService.get('app.name') || 'SERVER';
+    const logLevel = this.configService.get('logging.level') || 'info';
+    const appName = this.configService.get('app.name') || 'SERVER';
     const isProduction = process.env.NODE_ENV === 'production';
 
     // 1. MASKER
@@ -40,9 +43,7 @@ export class WinstonFactory {
 
     // 2. CONSOLE FORMAT
     const consoleFormat = winston.format.printf((info) => {
-      // FIX: Timestamp sẽ là ISO String mặc định
       const tsVal = info.timestamp || new Date().toISOString();
-
       const { level, message, context, requestId, label, timestamp, ...meta } =
         info;
 
@@ -76,7 +77,6 @@ export class WinstonFactory {
         }
       }
 
-      // Format ISO Timestamp
       const timeDisplay = `${cDim}[${tsVal}]${cReset}`;
       const levelDisplay = level;
       const contextVal = context || label || appName;
@@ -132,8 +132,7 @@ export class WinstonFactory {
       transports.push(
         new winston.transports.Console({
           format: winston.format.combine(
-            // FIX: Bỏ tham số { format: 'HH:mm:ss' } để về mặc định ISO
-            winston.format.timestamp(),
+            winston.format.timestamp({ format: 'HH:mm:ss' }),
             masker(),
             winston.format.colorize({ all: true }),
             consoleFormat,

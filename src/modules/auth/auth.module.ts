@@ -8,6 +8,7 @@ import { JwtStrategy } from './infrastructure/strategies/jwt.strategy';
 import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
 import { AuthController } from './infrastructure/controllers/auth.controller';
 import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-session.repository';
+import { ISessionRepository } from './domain/repositories/session.repository';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-s
     AuthenticationService,
     JwtStrategy,
     JwtAuthGuard,
-    { provide: 'ISessionRepository', useClass: DrizzleSessionRepository },
+    { provide: ISessionRepository, useClass: DrizzleSessionRepository },
   ],
   exports: [JwtAuthGuard, AuthenticationService, JwtModule],
 })

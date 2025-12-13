@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { IUserRepository } from '../../domain/repositories/user-repository.interface';
+// FIX IMPORT: Dùng file mới
+import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
-import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
-import { users } from '../../../../database/schema';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { users } from '@database/schema';
 import { UserMapper } from './mappers/user.mapper';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleUserRepository
@@ -57,7 +58,6 @@ export class DrizzleUserRepository
         .returning();
     } else {
       const { id, ...insertData } = data;
-      // FIX: Cast explicitly to Insert Type
       result = await db
         .insert(users)
         .values(insertData as typeof users.$inferInsert)

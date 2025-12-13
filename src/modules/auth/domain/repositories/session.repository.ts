@@ -1,5 +1,7 @@
 import { Session } from '../entities/session.entity';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+export const ISessionRepository = Symbol('ISessionRepository');
 
 export interface ISessionRepository {
   create(session: Session, tx?: Transaction): Promise<void>;

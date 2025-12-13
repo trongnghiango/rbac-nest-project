@@ -1,7 +1,7 @@
 import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
 // FIX PATH: 3 dots ../../../
 import { User } from '../../../domain/entities/user.entity';
-import { users } from '../../../../../database/schema';
+import { users } from '@database/schema';
 
 type UserSelect = InferSelectModel<typeof users>;
 type UserInsert = InferInsertModel<typeof users>;

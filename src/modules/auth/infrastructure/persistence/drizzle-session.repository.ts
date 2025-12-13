@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
-import { ISessionRepository } from '../../domain/repositories/session-repository.interface';
+// FIX IMPORT
+import { ISessionRepository } from '../../domain/repositories/session.repository';
 import { Session } from '../../domain/entities/session.entity';
-import { DrizzleBaseRepository } from '../../../../core/shared/infrastructure/persistence/drizzle-base.repository';
-import { sessions } from '../../../../database/schema';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { sessions } from '@database/schema';
 import { SessionMapper } from './mappers/session.mapper';
-import { Transaction } from '../../../../core/shared/application/ports/transaction-manager.port';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleSessionRepository
@@ -20,7 +21,6 @@ export class DrizzleSessionRepository
       await db.insert(sessions).values(data as any);
     } else {
       const { id, ...insertData } = data;
-      // FIX: Cast type
       await db
         .insert(sessions)
         .values(insertData as typeof sessions.$inferInsert);

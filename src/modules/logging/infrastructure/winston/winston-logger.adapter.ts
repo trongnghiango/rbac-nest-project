@@ -3,8 +3,8 @@ import * as winston from 'winston';
 import {
   ILogger,
   LogContext,
-} from '../../../../core/shared/application/ports/logger.port';
-import { RequestContextService } from '../../../../core/shared/infrastructure/context/request-context.service';
+} from '@core/shared/application/ports/logger.port';
+import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
 
 // CHUYỂN VỀ DEFAULT SCOPE (SINGLETON) - TỐT CHO HIỆU NĂNG
 @Injectable()

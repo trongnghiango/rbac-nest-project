@@ -55,13 +55,15 @@ export class RoleResponseDto {
     dto.createdAt = role.createdAt || new Date();
     dto.updatedAt = role.updatedAt || new Date();
 
-    dto.permissions = role.permissions ? role.permissions.map(p => ({
-      id: p.id!,
-      name: p.name,
-      description: p.description || '',
-      resourceType: p.resourceType || '',
-      action: p.action || '',
-    })) : [];
+    dto.permissions = role.permissions
+      ? role.permissions.map((p) => ({
+          id: p.id!,
+          name: p.name,
+          description: p.description || '',
+          resourceType: p.resourceType || '',
+          action: p.action || '',
+        }))
+      : [];
 
     return dto;
   }
