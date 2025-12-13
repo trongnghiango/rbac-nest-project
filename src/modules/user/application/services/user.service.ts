@@ -7,11 +7,14 @@ import {
 import type { IUserRepository } from '../../domain/repositories/user-repository.interface';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
+import { LOGGER_TOKEN } from '../../../../core/shared/application/ports/logger.port';
+import type { ILogger } from '../../../../core/shared/application/ports/logger.port';
 
 @Injectable()
 export class UserService {
   constructor(
     @Inject('IUserRepository') private userRepository: IUserRepository,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
   ) {}
 
   async createUser(data: {
@@ -51,7 +54,10 @@ export class UserService {
       new Date(), // updatedAt
     );
 
+    // 1. Log Info (Thông tin chung)
+
     const user = await this.userRepository.save(newUser);
+    this.logger.info('Creating new user', user.toJSON());
     return user.toJSON();
   }
 

@@ -4,9 +4,11 @@ import { ValidationPipe } from '@nestjs/common';
 
 import { TransformResponseInterceptor } from './interceptors/transform-response.interceptor';
 import { HttpExceptionFilter } from './filters/http-exception.filter';
+import { RequestContextService } from './shared/infrastructure/context/request-context.service';
 
 @Module({
   providers: [
+    RequestContextService, // Đăng ký Service này
     {
       provide: APP_PIPE,
       useValue: new ValidationPipe({
@@ -24,5 +26,6 @@ import { HttpExceptionFilter } from './filters/http-exception.filter';
       useClass: HttpExceptionFilter,
     },
   ],
+  exports: [RequestContextService],
 })
 export class CoreModule {}

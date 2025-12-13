@@ -13,11 +13,11 @@ type PermissionSelect = InferSelectModel<typeof permissions>;
 type UserRoleSelect = InferSelectModel<typeof userRoles>;
 
 type RoleWithRelations = RoleSelect & {
-    permissions: { permission: PermissionSelect }[];
+  permissions: { permission: PermissionSelect }[];
 };
 
 type UserRoleWithRole = UserRoleSelect & {
-    role: RoleSelect;
+  role: RoleSelect;
 };
 
 export class RbacMapper {
@@ -31,11 +31,13 @@ export class RbacMapper {
       raw.action || undefined,
       raw.isActive ?? true,
       raw.attributes || '*',
-      raw.createdAt || undefined
+      raw.createdAt || undefined,
     );
   }
 
-  static toPermissionPersistence(domain: Permission): InferInsertModel<typeof permissions> {
+  static toPermissionPersistence(
+    domain: Permission,
+  ): InferInsertModel<typeof permissions> {
     return {
       id: domain.id,
       name: domain.name,
@@ -54,7 +56,9 @@ export class RbacMapper {
     let perms: Permission[] = [];
     // Kiểm tra an toàn xem có permissions được join vào không
     if ('permissions' in raw && Array.isArray(raw.permissions)) {
-        perms = raw.permissions.map(rp => this.toPermissionDomain(rp.permission)!).filter(Boolean);
+      perms = raw.permissions
+        .map((rp) => this.toPermissionDomain(rp.permission)!)
+        .filter(Boolean);
     }
 
     return new Role(
@@ -65,7 +69,7 @@ export class RbacMapper {
       raw.isSystem ?? false,
       perms,
       raw.createdAt || undefined,
-      raw.updatedAt || undefined
+      raw.updatedAt || undefined,
     );
   }
 
@@ -81,12 +85,18 @@ export class RbacMapper {
     };
   }
 
-  static toUserRoleDomain(raw: UserRoleWithRole | UserRoleSelect | null): UserRole | null {
+  static toUserRoleDomain(
+    raw: UserRoleWithRole | UserRoleSelect | null,
+  ): UserRole | null {
     if (!raw) return null;
 
     let roleDomain;
     if ('role' in raw && raw.role) {
-        roleDomain = new Role(raw.role.id, raw.role.name, raw.role.description || undefined);
+      roleDomain = new Role(
+        raw.role.id,
+        raw.role.name,
+        raw.role.description || undefined,
+      );
     }
 
     return new UserRole(
@@ -95,11 +105,13 @@ export class RbacMapper {
       raw.assignedBy ? Number(raw.assignedBy) : undefined,
       raw.expiresAt || undefined,
       raw.assignedAt || undefined,
-      roleDomain
+      roleDomain,
     );
   }
 
-  static toUserRolePersistence(domain: UserRole): InferInsertModel<typeof userRoles> {
+  static toUserRolePersistence(
+    domain: UserRole,
+  ): InferInsertModel<typeof userRoles> {
     return {
       userId: domain.userId,
       roleId: domain.roleId,

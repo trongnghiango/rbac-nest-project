@@ -1,20 +1,9 @@
 import { Injectable, Inject } from '@nestjs/common';
-import type {
-  IRoleRepository,
-  IPermissionRepository,
-} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+import type { IRoleRepository, IPermissionRepository } from '../../domain/repositories/rbac-repository.interface';
 import { Role } from '../../domain/entities/role.entity';
-import {
-  SystemRole,
-  SystemPermission,
-} from '../../domain/constants/rbac.constants';
 
-export interface AccessControlItem {
-  role: string;
-  resource: string;
-  action: string;
-  attributes: string;
-}
+// Interface cho hàm getAccessControlList (đã định nghĩa trước đó)
+export interface AccessControlItem { role: string; resource: string; action: string; attributes: string; }
 
 @Injectable()
 export class RoleService {
@@ -36,27 +25,30 @@ export class RoleService {
     return this.roleRepo.save(role);
   }
 
+  // --- HÀM MỚI: Lấy danh sách Roles đầy đủ ---
+  async findAllRoles(): Promise<Role[]> {
+    return this.roleRepo.findAll();
+  }
+  // ------------------------------------------
+
   async getAccessControlList(): Promise<AccessControlItem[]> {
     const roles = await this.roleRepo.findAll();
     const acl: AccessControlItem[] = [];
-    roles.forEach((role) => {
-      role.permissions.forEach((p) => {
-        acl.push({
-          role: role.name.toLowerCase(),
-          resource: p.resourceType || '*',
-          action: p.action || '*',
-          attributes: p.attributes,
-        });
-      });
+    roles.forEach(role => {
+        if (role.permissions) {
+            role.permissions.forEach(p => {
+                acl.push({
+                    role: role.name.toLowerCase(),
+                    resource: p.resourceType || '*',
+                    action: p.action || '*',
+                    attributes: p.attributes
+                });
+            });
+        }
     });
     return acl;
   }
 
-  // Seeder logic remains in seeder file mostly, but keeping init logic if needed
-  async initializeSystemRoles(): Promise<void> {
-    // Implementation placeholder if called from module init
-  }
-  async initializeSystemPermissions(): Promise<void> {
-    // Implementation placeholder
-  }
+  async initializeSystemRoles(): Promise<void> {}
+  async initializeSystemPermissions(): Promise<void> {}
 }

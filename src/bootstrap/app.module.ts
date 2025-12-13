@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
+// FIX: Removed TypeOrmModule import
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 
@@ -8,7 +9,9 @@ import loggingConfig from '../config/logging.config';
 
 import { CoreModule } from '../core/core.module';
 import { SharedModule } from '../modules/shared/shared.module';
-import { DrizzleModule } from '../database/drizzle.module'; // NEW
+import { DrizzleModule } from '../database/drizzle.module';
+import { LoggingModule } from '../modules/logging/logging.module';
+import { RequestLoggingMiddleware } from '../api/middleware/request-logging.middleware';
 
 import { UserModule } from '../modules/user/user.module';
 import { AuthModule } from '../modules/auth/auth.module';
@@ -24,7 +27,9 @@ import { TestModule } from '../modules/test/test.module';
     }),
     CoreModule,
     SharedModule,
-    DrizzleModule, // Thay thế TypeOrmModule
+    DrizzleModule, // Using Drizzle
+    LoggingModule.forRootAsync(),
+
     CacheModule.registerAsync({
       imports: [ConfigModule],
       useFactory: () => ({ ttl: 300, max: 100 }),
@@ -36,4 +41,10 @@ import { TestModule } from '../modules/test/test.module';
     TestModule,
   ],
 })
-export class AppModule {}
+export class AppModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(RequestLoggingMiddleware)
+      .forRoutes({ path: '(.*)', method: RequestMethod.ALL });
+  }
+}
