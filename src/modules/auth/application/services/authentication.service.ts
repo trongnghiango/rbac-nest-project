@@ -15,7 +15,8 @@ import { JwtPayload } from '../../../shared/types/common.types';
 import type {
   ITransactionManager,
   Transaction,
-} from '../../../../core/shared/application/ports/transaction-manager.port'; // FIX: import type
+} from '../../../../core/shared/application/ports/transaction-manager.port';
+import { RegisterDto } from '../../infrastructure/dtos/auth.dto'; // FIX: import type
 
 @Injectable()
 export class AuthenticationService {
@@ -94,7 +95,7 @@ export class AuthenticationService {
     return user.toJSON();
   }
 
-  async register(data: any): Promise<any> {
+  async register(data: RegisterDto) {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 

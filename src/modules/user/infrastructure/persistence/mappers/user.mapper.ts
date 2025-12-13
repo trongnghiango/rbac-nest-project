@@ -1,32 +1,32 @@
-import { InferSelectModel } from 'drizzle-orm';
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+// FIX PATH: 3 dots ../../../
 import { User } from '../../../domain/entities/user.entity';
 import { users } from '../../../../../database/schema';
 
-// Tự động lấy Type từ Schema Definition
-type UserRecord = InferSelectModel<typeof users>;
+type UserSelect = InferSelectModel<typeof users>;
+type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  static toDomain(raw: UserRecord | null): User | null {
+  static toDomain(raw: UserSelect | null): User | null {
     if (!raw) return null;
-
     return new User(
       raw.id,
       raw.username,
       raw.email || undefined,
       raw.hashedPassword || undefined,
       raw.fullName || undefined,
-      raw.isActive || false,
+      raw.isActive ?? true,
       raw.phoneNumber || undefined,
       raw.avatarUrl || undefined,
-      (raw.profile as any) || undefined, // JSONB cần cast nhẹ hoặc định nghĩa type riêng
+      (raw.profile as any) || undefined,
       raw.createdAt || undefined,
       raw.updatedAt || undefined,
     );
   }
 
-  static toPersistence(domain: User) {
+  static toPersistence(domain: User): UserInsert {
     return {
-      id: domain.id, // Có thể undefined
+      id: domain.id,
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,

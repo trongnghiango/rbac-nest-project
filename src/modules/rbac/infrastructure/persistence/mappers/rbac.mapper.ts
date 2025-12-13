@@ -1,25 +1,27 @@
-import { InferSelectModel } from 'drizzle-orm';
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+
+// FIX: 3 cấp ../ để về thư mục 'rbac'
 import { Role } from '../../../domain/entities/role.entity';
 import { Permission } from '../../../domain/entities/permission.entity';
 import { UserRole } from '../../../domain/entities/user-role.entity';
+
+// FIX: 5 cấp ../ để về thư mục 'src' -> 'database'
 import { roles, permissions, userRoles } from '../../../../../database/schema';
 
-// Định nghĩa Type dựa trên Schema
-type RoleRecord = InferSelectModel<typeof roles>;
-type PermissionRecord = InferSelectModel<typeof permissions>;
-type UserRoleRecord = InferSelectModel<typeof userRoles>;
+type RoleSelect = InferSelectModel<typeof roles>;
+type PermissionSelect = InferSelectModel<typeof permissions>;
+type UserRoleSelect = InferSelectModel<typeof userRoles>;
 
-// Type phức tạp cho Relation (Kết quả trả về từ db.query...)
-type RoleWithPermissions = RoleRecord & {
-  permissions: { permission: PermissionRecord }[];
+type RoleWithRelations = RoleSelect & {
+    permissions: { permission: PermissionSelect }[];
 };
-type UserRoleWithRole = UserRoleRecord & {
-  role: RoleRecord;
+
+type UserRoleWithRole = UserRoleSelect & {
+    role: RoleSelect;
 };
 
 export class RbacMapper {
-  // PERMISSION
-  static toPermissionDomain(raw: PermissionRecord | null): Permission | null {
+  static toPermissionDomain(raw: PermissionSelect | null): Permission | null {
     if (!raw) return null;
     return new Permission(
       raw.id,
@@ -27,13 +29,13 @@ export class RbacMapper {
       raw.description || undefined,
       raw.resourceType || undefined,
       raw.action || undefined,
-      raw.isActive || false,
+      raw.isActive ?? true,
       raw.attributes || '*',
-      raw.createdAt || undefined,
+      raw.createdAt || undefined
     );
   }
 
-  static toPermissionPersistence(domain: Permission) {
+  static toPermissionPersistence(domain: Permission): InferInsertModel<typeof permissions> {
     return {
       id: domain.id,
       name: domain.name,
@@ -46,33 +48,28 @@ export class RbacMapper {
     };
   }
 
-  // ROLE (Handle Relation Type Safety)
-  static toRoleDomain(
-    raw: RoleWithPermissions | RoleRecord | null,
-  ): Role | null {
+  static toRoleDomain(raw: RoleWithRelations | RoleSelect | null): Role | null {
     if (!raw) return null;
 
-    // Check if it has nested permissions
     let perms: Permission[] = [];
+    // Kiểm tra an toàn xem có permissions được join vào không
     if ('permissions' in raw && Array.isArray(raw.permissions)) {
-      perms = raw.permissions
-        .map((rp) => this.toPermissionDomain(rp.permission)!)
-        .filter(Boolean);
+        perms = raw.permissions.map(rp => this.toPermissionDomain(rp.permission)!).filter(Boolean);
     }
 
     return new Role(
       raw.id,
       raw.name,
       raw.description || undefined,
-      raw.isActive || false,
-      raw.isSystem || false,
+      raw.isActive ?? true,
+      raw.isSystem ?? false,
       perms,
       raw.createdAt || undefined,
-      raw.updatedAt || undefined,
+      raw.updatedAt || undefined
     );
   }
 
-  static toRolePersistence(domain: Role) {
+  static toRolePersistence(domain: Role): InferInsertModel<typeof roles> {
     return {
       id: domain.id,
       name: domain.name,
@@ -84,15 +81,12 @@ export class RbacMapper {
     };
   }
 
-  // USER ROLE
-  static toUserRoleDomain(
-    raw: UserRoleWithRole | UserRoleRecord | null,
-  ): UserRole | null {
+  static toUserRoleDomain(raw: UserRoleWithRole | UserRoleSelect | null): UserRole | null {
     if (!raw) return null;
 
-    let role;
+    let roleDomain;
     if ('role' in raw && raw.role) {
-      role = this.toRoleDomain(raw.role);
+        roleDomain = new Role(raw.role.id, raw.role.name, raw.role.description || undefined);
     }
 
     return new UserRole(
@@ -101,11 +95,11 @@ export class RbacMapper {
       raw.assignedBy ? Number(raw.assignedBy) : undefined,
       raw.expiresAt || undefined,
       raw.assignedAt || undefined,
-      role!,
+      roleDomain
     );
   }
 
-  static toUserRolePersistence(domain: UserRole) {
+  static toUserRolePersistence(domain: UserRole): InferInsertModel<typeof userRoles> {
     return {
       userId: domain.userId,
       roleId: domain.roleId,

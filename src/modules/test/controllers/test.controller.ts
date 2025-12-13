@@ -4,7 +4,7 @@ import { PermissionGuard } from '../../rbac/infrastructure/guards/permission.gua
 import { Permissions } from '../../rbac/infrastructure/decorators/permission.decorator';
 import { Public } from '../../auth/infrastructure/decorators/public.decorator';
 import { CurrentUser } from '../../auth/infrastructure/decorators/current-user.decorator';
-import {ApiBearerAuth} from "@nestjs/swagger";
+import { ApiBearerAuth } from '@nestjs/swagger';
 
 @Controller('test')
 @ApiBearerAuth()
