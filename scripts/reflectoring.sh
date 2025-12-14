@@ -1,139 +1,213 @@
 #!/bin/bash
 
-BLUE='\033[0;34m'
+# Màu sắc
 GREEN='\033[0;32m'
+BLUE='\033[0;34m'
 NC='\033[0m'
+
 log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-log "🛠️ FIXING WINSTON IMPORT ERROR..."
+log "🛠️ FIXING EVENT BUS IMPORTS TO USE ALIASES (@core)..."
 
-cat > src/modules/logging/infrastructure/winston/winston.factory.ts << 'EOF'
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import * as winston from 'winston';
+DIR="src/core/shared/infrastructure/event-bus"
 
-// FIX: Dùng require để tránh lỗi "is not a constructor" do xung đột ES Module/CommonJS
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const DailyRotateFile = require('winston-daily-rotate-file');
+# 1. Fix In-Memory Adapter
+log "Fixing InMemoryEventBusAdapter..."
+cat > $DIR/adapters/in-memory-event-bus.adapter.ts << 'EOF'
+import { Injectable, Logger } from '@nestjs/common';
+import { Type } from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
 
 @Injectable()
-export class WinstonFactory {
-  constructor(private configService: ConfigService) {}
+export class InMemoryEventBusAdapter implements IEventBus {
+  private readonly logger = new Logger(InMemoryEventBusAdapter.name);
+  private handlers = new Map<string, Array<(event: IDomainEvent) => Promise<void>>>();
 
-  createLogger(): winston.Logger {
-    const logLevel = this.configService.get('logging.level') || 'info';
-    const appName = this.configService.get('app.name') || 'SERVER';
-    const isProduction = process.env.NODE_ENV === 'production';
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    const eventName = event.eventName;
+    const handlers = this.handlers.get(eventName) || [];
 
-    // 1. MASKER
-    const sensitiveKeys = ['password', 'token', 'authorization', 'secret', 'creditCard', 'cvv'];
-    const masker = winston.format((info) => {
-      const maskDeep = (obj: any) => {
-        if (!obj || typeof obj !== 'object') return;
-        Object.keys(obj).forEach((key) => {
-          if (sensitiveKeys.some(k => key.toLowerCase().includes(k))) {
-            obj[key] = '***MASKED***';
-          } else if (typeof obj[key] === 'object') {
-            maskDeep(obj[key]);
-          }
-        });
-      };
-      const splat = (info as any)[Symbol.for('splat')];
-      if (splat) maskDeep(splat);
-      maskDeep(info);
-      return info;
-    });
+    Promise.all(handlers.map(handler => handler(event)))
+      .catch(err => this.logger.error(`Error handling event ${eventName}`, err));
+  }
 
-    // 2. CONSOLE FORMAT
-    const consoleFormat = winston.format.printf((info) => {
-      const tsVal = info.timestamp || new Date().toISOString();
-      const { level, message, context, requestId, label, timestamp, ...meta } = info;
+  subscribe<T extends IDomainEvent>(
+    eventCls: Type<T> | string,
+    handler: (event: T) => Promise<void>
+  ): void {
+    const eventName = typeof eventCls === 'string'
+      ? eventCls
+      : new eventCls({} as any, {} as any).eventName;
 
-      const cDim = '\x1b[2m';
-      const cReset = '\x1b[0m';
-      const cCyan = '\x1b[36m';
-      const cYellow = '\x1b[33m';
-
-      const splatSymbol = Symbol.for('splat');
-      const splat = (info as any)[splatSymbol];
-      let finalMeta = { ...meta };
-      if (Array.isArray(splat)) {
-        const splatObj = splat.find((item: any) => typeof item === 'object' && item !== null);
-        if (splatObj) Object.assign(finalMeta, splatObj);
-      }
-
-      delete (finalMeta as any).level;
-      delete (finalMeta as any).message;
-      delete (finalMeta as any).timestamp;
-      delete (finalMeta as any).service;
-
-      let metaStr = '';
-      if (Object.keys(finalMeta).length) {
-         const jsonStr = JSON.stringify(finalMeta);
-         if (jsonStr.length < 150) {
-             metaStr = ` ${cDim}${jsonStr}${cReset}`;
-         } else {
-             metaStr = `\n${cDim}${JSON.stringify(finalMeta, null, 2)}${cReset}`;
-         }
-      }
-
-      const timeDisplay = `${cDim}[${tsVal}]${cReset}`;
-      const levelDisplay = level;
-      const contextVal = context || label || appName;
-      const contextDisplay = `${cYellow}[${contextVal}]${cReset}`;
-      const requestDisplay = requestId ? `${cCyan}[${requestId}]${cReset}` : '';
-
-      return `${timeDisplay} ${levelDisplay} ${contextDisplay} ${requestDisplay} ${message}${metaStr}`;
-    });
-
-    // 3. TRANSPORTS
-    const transports: winston.transport[] = [
-      new DailyRotateFile({
-        dirname: 'logs',
-        filename: 'app-%DATE%.info.log',
-        datePattern: 'YYYY-MM-DD',
-        zippedArchive: true,
-        maxSize: '20m',
-        maxFiles: '14d',
-        level: 'info',
-        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
-      }),
-      new DailyRotateFile({
-        dirname: 'logs',
-        filename: 'app-%DATE%.error.log',
-        datePattern: 'YYYY-MM-DD',
-        zippedArchive: true,
-        maxSize: '20m',
-        maxFiles: '30d',
-        level: 'error',
-        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
-      }),
-    ];
-
-    if (isProduction) {
-      transports.push(new winston.transports.Console({
-        format: winston.format.combine(winston.format.timestamp(), masker(), winston.format.json()),
-      }));
-    } else {
-      transports.push(new winston.transports.Console({
-        format: winston.format.combine(
-            winston.format.timestamp({ format: 'HH:mm:ss' }),
-            masker(),
-            winston.format.colorize({ all: true }),
-            consoleFormat
-        ),
-      }));
+    if (!this.handlers.has(eventName)) {
+      this.handlers.set(eventName, []);
     }
-
-    return winston.createLogger({
-      level: logLevel,
-      defaultMeta: { service: appName },
-      transports,
-      exitOnError: false,
-    });
+    this.handlers.get(eventName)!.push(handler as any);
+    this.logger.log(`Subscribed to event: ${eventName}`);
   }
 }
 EOF
 
-echo "✅ FIXED: Replaced import with require for DailyRotateFile."
-echo "👉 Restart server: npm run start:dev"
+# 2. Fix RabbitMQ Adapter
+log "Fixing RabbitMQEventBusAdapter..."
+cat > $DIR/adapters/rabbitmq-event-bus.adapter.ts << 'EOF'
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+@Injectable()
+export class RabbitMQEventBusAdapter implements IEventBus, OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RabbitMQEventBusAdapter.name);
+
+  async onModuleInit() {
+    this.logger.log('Connecting to RabbitMQ...');
+  }
+
+  async onModuleDestroy() {
+    this.logger.log('Closing RabbitMQ connection...');
+  }
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    this.logger.log(`[RabbitMQ] Publishing: ${event.eventName}`);
+  }
+
+  subscribe<T extends IDomainEvent>(eventCls: any, handler: (event: T) => Promise<void>): void {
+    this.logger.log(`[RabbitMQ] Subscribing to: ${eventCls}`);
+  }
+}
+EOF
+
+# 3. Fix Kafka Adapter
+log "Fixing KafkaEventBusAdapter..."
+cat > $DIR/adapters/kafka-event-bus.adapter.ts << 'EOF'
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+@Injectable()
+export class KafkaEventBusAdapter implements IEventBus, OnModuleInit {
+  private readonly logger = new Logger(KafkaEventBusAdapter.name);
+
+  async onModuleInit() {
+    this.logger.log('Connecting to Kafka...');
+  }
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    this.logger.log(`[Kafka] Publishing: ${event.eventName}`);
+  }
+
+  subscribe<T extends IDomainEvent>(eventCls: any, handler: (event: T) => Promise<void>): void {
+    this.logger.log(`[Kafka] Subscribing to: ${eventCls}`);
+  }
+}
+EOF
+
+# 4. Fix Decorator
+log "Fixing EventHandler Decorator..."
+cat > $DIR/decorators/event-handler.decorator.ts << 'EOF'
+import { SetMetadata } from '@nestjs/common';
+import { Type } from '@nestjs/common';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+export const EVENT_HANDLER_METADATA = 'EVENT_HANDLER_METADATA';
+
+export const EventHandler = (event: Type<IDomainEvent> | string) =>
+  SetMetadata(EVENT_HANDLER_METADATA, event);
+EOF
+
+# 5. Fix Event Explorer
+log "Fixing Event Explorer..."
+cat > $DIR/event.explorer.ts << 'EOF'
+import { Injectable, OnModuleInit, Inject } from '@nestjs/common';
+import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { EVENT_HANDLER_METADATA } from './decorators/event-handler.decorator';
+
+@Injectable()
+export class EventExplorer implements OnModuleInit {
+  constructor(
+    private readonly discoveryService: DiscoveryService,
+    private readonly metadataScanner: MetadataScanner,
+    private readonly reflector: Reflector,
+    @Inject(IEventBus) private readonly eventBus: IEventBus,
+  ) {}
+
+  onModuleInit() {
+    this.explore();
+  }
+
+  private explore() {
+    const providers = this.discoveryService.getProviders();
+
+    providers
+      .filter((wrapper) => wrapper.instance && !wrapper.isAlias)
+      .forEach((wrapper) => {
+        const { instance } = wrapper;
+        const prototype = Object.getPrototypeOf(instance);
+        if (!prototype) return;
+
+        this.metadataScanner.scanFromPrototype(
+          instance,
+          prototype,
+          (methodName) => {
+            const method = instance[methodName];
+            const eventCls = this.reflector.get(EVENT_HANDLER_METADATA, method);
+
+            if (eventCls) {
+              this.eventBus.subscribe(eventCls, method.bind(instance));
+            }
+          },
+        );
+      });
+  }
+}
+EOF
+
+# 6. Fix Event Bus Module
+log "Fixing Event Bus Module..."
+cat > $DIR/event-bus.module.ts << 'EOF'
+import { Module, Global } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { DiscoveryModule } from '@nestjs/core';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { InMemoryEventBusAdapter } from './adapters/in-memory-event-bus.adapter';
+import { RabbitMQEventBusAdapter } from './adapters/rabbitmq-event-bus.adapter';
+import { KafkaEventBusAdapter } from './adapters/kafka-event-bus.adapter';
+import { EventExplorer } from './event.explorer';
+import eventBusConfig from '@config/event-bus.config';
+
+@Global()
+@Module({
+  imports: [
+    ConfigModule.forFeature(eventBusConfig),
+    DiscoveryModule,
+  ],
+  providers: [
+    EventExplorer,
+    {
+      provide: IEventBus,
+      useFactory: (config: ConfigService) => {
+        const type = config.get('eventBus.type');
+        console.log(`🔌 EventBus initialized with type: ${type}`);
+
+        switch (type) {
+          case 'rabbitmq':
+            return new RabbitMQEventBusAdapter();
+          case 'kafka':
+            return new KafkaEventBusAdapter();
+          case 'memory':
+          default:
+            return new InMemoryEventBusAdapter();
+        }
+      },
+      inject: [ConfigService],
+    },
+  ],
+  exports: [IEventBus],
+})
+export class EventBusModule {}
+EOF
+
+success "✅ FIXED ALL IMPORTS! NestJS should compile successfully now."

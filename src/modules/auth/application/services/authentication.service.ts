@@ -13,6 +13,12 @@ import { PasswordUtil } from '@core/shared/utils/password.util';
 import { User } from '@modules/user/domain/entities/user.entity';
 import { Session } from '../../domain/entities/session.entity';
 import { JwtPayload } from '@core/shared/types/common.types';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { UserCreatedEvent } from '@modules/user/domain/events/user-created.event';
+import {
+  type ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
 
 @Injectable()
 export class AuthenticationService {
@@ -20,6 +26,8 @@ export class AuthenticationService {
     @Inject(IUserRepository) private userRepository: IUserRepository,
     @Inject(ISessionRepository) private sessionRepository: ISessionRepository,
     @Inject(ITransactionManager) private txManager: ITransactionManager,
+    @Inject(IEventBus) private eventBus: IEventBus,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     private jwtService: JwtService,
   ) {}
 
@@ -105,6 +113,11 @@ export class AuthenticationService {
       if (!savedUser.id)
         throw new InternalServerErrorException('Failed to generate User ID');
 
+      this.logger.info('Register:::');
+      await this.eventBus.publish(
+        new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
+      );
+
       const payload: JwtPayload = {
         sub: savedUser.id,
         username: savedUser.username,
@@ -126,6 +139,10 @@ export class AuthenticationService {
       );
 
       await this.sessionRepository.create(session, tx);
+
+      await this.eventBus.publish(
+        new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
+      );
 
       return { accessToken, user: savedUser.toJSON() };
     });

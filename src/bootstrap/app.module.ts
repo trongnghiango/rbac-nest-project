@@ -17,13 +17,21 @@ import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/auth/auth.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
+import eventBusConfig from '@config/event-bus.config';
+import { NotificationModule } from '@modules/notification/notification.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
-      load: [databaseConfig, appConfig, loggingConfig, redisConfig],
+      load: [
+        databaseConfig,
+        appConfig,
+        loggingConfig,
+        redisConfig,
+        eventBusConfig,
+      ],
     }),
     CoreModule,
     SharedModule,
@@ -36,6 +44,7 @@ import { TestModule } from '@modules/test/test.module';
     UserModule,
     AuthModule,
     RbacModule,
+    NotificationModule,
     TestModule,
   ],
 })
