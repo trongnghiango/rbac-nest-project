@@ -4,19 +4,28 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-// FIX IMPORT: Import cả Token và Interface
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
+import { UserProfile } from '../../domain/types/user-profile.type';
+
+export interface CreateUserParams {
+  id: number;
+  username: string;
+  email?: string;
+  password?: string;
+  fullName: string;
+}
 
 @Injectable()
 export class UserService {
   constructor(
-    // FIX INJECT: Dùng Symbol IUserRepository
     @Inject(IUserRepository) private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: any): Promise<any> {
+  async createUser(
+    data: CreateUserParams,
+  ): Promise<ReturnType<User['toJSON']>> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
@@ -63,7 +72,7 @@ export class UserService {
 
   async updateUserProfile(
     userId: number,
-    profileData: any,
+    profileData: UserProfile,
   ): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new NotFoundException('User not found');

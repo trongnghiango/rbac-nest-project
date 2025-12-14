@@ -19,6 +19,12 @@ import {
   type ILogger,
   LOGGER_TOKEN,
 } from '@core/shared/application/ports/logger.port';
+import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
+
+export type AuthResponse = {
+  accessToken: string;
+  user: ReturnType<User['toJSON']>;
+};
 
 @Injectable()
 export class AuthenticationService {
@@ -36,7 +42,7 @@ export class AuthenticationService {
     password: string;
     ip?: string;
     userAgent?: string;
-  }): Promise<any> {
+  }): Promise<AuthResponse> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
     if (!user || !user.isActive)
@@ -88,14 +94,14 @@ export class AuthenticationService {
     return user.toJSON();
   }
 
-  async register(data: any): Promise<any> {
+  async register(data: RegisterDto): Promise<AuthResponse> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
     const hashedPassword = await PasswordUtil.hash(data.password);
 
     const newUser = new User(
-      undefined,
+      data.id,
       data.username,
       data.email,
       hashedPassword,
@@ -114,9 +120,6 @@ export class AuthenticationService {
         throw new InternalServerErrorException('Failed to generate User ID');
 
       this.logger.info('Register:::');
-      await this.eventBus.publish(
-        new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
-      );
 
       const payload: JwtPayload = {
         sub: savedUser.id,
@@ -140,6 +143,7 @@ export class AuthenticationService {
 
       await this.sessionRepository.create(session, tx);
 
+      // Publish Event inside transaction (or use Outbox pattern for better reliability)
       await this.eventBus.publish(
         new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
       );

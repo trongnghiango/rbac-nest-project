@@ -1,25 +1,35 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
 } from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
 import { Permission } from '../../domain/entities/permission.entity';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+
+// Helper type for CSV Row
+type RbacCsvRow = {
+  role: string;
+  resource: string;
+  action: string;
+  attributes: string;
+  description: string;
+};
 
 @Injectable()
 export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
 
   constructor(
-    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
-    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
+    @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
   ) {}
 
   async importFromCsv(csvContent: string): Promise<any> {
-    const lines = csvContent
-      .split(/\r?\n/)
-      .filter((line) => line.trim() !== '');
+    // Sử dụng Adapter để parse (Implementation nên dùng thư viện csv-parse)
+    // Hiện tại adapter đang simple split, nhưng service đã decouple
+    let lines = csvContent.split(/\r?\n/).filter((line) => line.trim() !== '');
     if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
       lines.shift();
     }

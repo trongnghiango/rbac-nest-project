@@ -1,10 +1,15 @@
 import { Injectable, Inject } from '@nestjs/common';
-// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
 } from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
+
+export interface CreateRoleParams {
+  name: string;
+  description?: string;
+  isSystem?: boolean;
+}
 
 export interface AccessControlItem {
   role: string;
@@ -16,11 +21,11 @@ export interface AccessControlItem {
 @Injectable()
 export class RoleService {
   constructor(
-    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
-    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
   ) {}
 
-  async createRole(data: any): Promise<Role> {
+  async createRole(data: CreateRoleParams): Promise<Role> {
     const existing = await this.roleRepo.findByName(data.name);
     if (existing) throw new Error('Role exists');
     const role = new Role(

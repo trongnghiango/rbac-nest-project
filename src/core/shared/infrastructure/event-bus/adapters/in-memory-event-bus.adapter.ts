@@ -24,10 +24,34 @@ export class InMemoryEventBusAdapter implements IEventBus {
     eventCls: Type<T> | string,
     handler: (event: T) => Promise<void>,
   ): void {
-    const eventName =
-      typeof eventCls === 'string'
-        ? eventCls
-        : new eventCls({} as any, {} as any).eventName;
+    let eventName: string;
+
+    if (typeof eventCls === 'string') {
+      eventName = eventCls;
+    } else {
+      // ✅ SAFE FIX: Sử dụng Object.create để tránh gọi constructor thực thi logic validate
+      // Điều này ngăn chặn crash app khi khởi tạo Event Class rỗng
+      const instance = Object.create(eventCls.prototype);
+      // Nếu eventName là property instance (được gán trong constructor), ta không lấy được ở đây
+      // NHƯNG, với kiến trúc hiện tại, eventName thường hardcode.
+      // Cách tốt nhất: Fallback về tên Class nếu instance.eventName undefined
+      eventName = instance.eventName || eventCls.name;
+
+      // Nếu trường hợp eventName bắt buộc phải lấy từ instance thật và khác tên class
+      // thì nên refactor Event thành có static property.
+      // Ở đây ta dùng instance giả lập an toàn.
+      if (!eventName) {
+        try {
+          const realInstance = new eventCls({} as any, {} as any);
+          eventName = realInstance.eventName;
+        } catch (e) {
+          eventName = eventCls.name;
+          this.logger.warn(
+            `Could not extract eventName from ${eventCls.name}, using class name.`,
+          );
+        }
+      }
+    }
 
     if (!this.handlers.has(eventName)) {
       this.handlers.set(eventName, []);

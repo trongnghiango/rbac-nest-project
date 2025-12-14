@@ -55,6 +55,7 @@ export class NotificationService {
   }
 
   async getUserNotifications(userId: number) {
+    this.logger.info('user::', { userId });
     return this.repo.findByUserId(userId);
   }
 }
