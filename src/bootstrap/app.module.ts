@@ -19,6 +19,8 @@ import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
 import eventBusConfig from '@config/event-bus.config';
 import { NotificationModule } from '@modules/notification/notification.module';
+import dentalConfig from "@config/dental.config";
+import {DentalModule} from "@modules/dental/dental.module";
 
 @Module({
   imports: [
@@ -31,6 +33,7 @@ import { NotificationModule } from '@modules/notification/notification.module';
         loggingConfig,
         redisConfig,
         eventBusConfig,
+        dentalConfig,
       ],
     }),
     CoreModule,
@@ -46,6 +49,7 @@ import { NotificationModule } from '@modules/notification/notification.module';
     RbacModule,
     NotificationModule,
     TestModule,
+    DentalModule,
   ],
 })
 export class AppModule {
