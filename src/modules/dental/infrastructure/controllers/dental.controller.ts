@@ -3,7 +3,6 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import path from 'path';
-// ✅ FIX: Import toàn bộ namespace thay vì default import
 import * as fs from 'fs-extra';
 import { DentalService } from '../../application/services/dental.service';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
@@ -11,7 +10,6 @@ import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard
 // Cấu hình Multer lưu tạm
 const uploadDir = 'uploads/temp';
 
-// Đảm bảo thư mục tồn tại (Sync để chạy 1 lần lúc khởi tạo file)
 try {
   fs.ensureDirSync(uploadDir);
 } catch (error) {
@@ -46,13 +44,32 @@ export class DentalController {
     @UploadedFile() file: Express.Multer.File,
     @Body('clientId') clientId: string
   ) {
-    // Fallback nếu clientId không có trong body (ví dụ test qua Swagger cũ)
     const finalClientId = clientId || 'default-client';
-    return this.dentalService.processZipUpload(file, finalClientId);
+    const result = await this.dentalService.processZipUpload(file, finalClientId);
+
+    // Trả về object chuẩn, Interceptor sẽ lo phần wrap success/statusCode
+    return {
+        message: 'File uploaded and processing started',
+        jobId: result.jobId,
+        stats: result.stats
+    };
   }
 
   @Get('models')
   async listModels(@Query('clientId') clientId: string) {
-      return this.dentalService.listModels(clientId || 'default-client');
+      const finalClientId = clientId || 'default-client';
+      const models = await this.dentalService.listModels(finalClientId);
+
+      // ✅ FIX: Interceptor global của chúng ta (TransformResponseInterceptor)
+      // sẽ tự động bọc kết quả này vào { success: true, statusCode: 200, result: ... }
+      // Nhưng nếu bạn muốn cấu trúc Metadata riêng biệt như hình mẫu, ta có thể return object tùy chỉnh.
+
+      // Tuy nhiên, để nhất quán với toàn bộ hệ thống, ta nên return data raw,
+      // và để Interceptor lo phần format chung.
+
+      // Nếu bạn muốn override message mặc định 'Success':
+      // (Cần dùng decorator @ResponseMessage('Successfully listed models.') nhưng ở đây ta return thẳng)
+
+      return models;
   }
 }

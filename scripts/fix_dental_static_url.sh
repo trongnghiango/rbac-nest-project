@@ -1,3 +1,16 @@
+#!/bin/bash
+
+# Màu sắc
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+
+log "🦷 UPGRADING DENTAL SERVICE TO DEEP SCAN MODE..."
+
+cat > src/modules/dental/application/services/dental.service.ts << 'EOF'
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
@@ -205,3 +218,8 @@ export class DentalService {
     return results;
   }
 }
+EOF
+
+success "✅ DEEP SCAN LOGIC APPLIED! API will now find files in nested folders."
+echo "👉 Restart server: npm run start:dev"
+echo "👉 Call API again. It should work with existing files."

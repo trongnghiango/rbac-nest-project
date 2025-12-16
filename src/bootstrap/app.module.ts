@@ -1,26 +1,28 @@
 import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import * as path from 'path';
 
 import databaseConfig from '@config/database.config';
 import appConfig from '@config/app.config';
 import loggingConfig from '@config/logging.config';
-import redisConfig from '@config/redis.config'; // IMPORT CONFIG MỚI
+import redisConfig from '@config/redis.config';
+import eventBusConfig from '@config/event-bus.config';
+import dentalConfig from '@config/dental.config';
 
 import { CoreModule } from '@core/core.module';
 import { SharedModule } from '@modules/shared/shared.module';
 import { DrizzleModule } from '@database/drizzle.module';
 import { LoggingModule } from '@modules/logging/logging.module';
-import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module'; // IMPORT MODULE MỚI
+import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
 import { RequestLoggingMiddleware } from '@api/middleware/request-logging.middleware';
 
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/auth/auth.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
-import eventBusConfig from '@config/event-bus.config';
 import { NotificationModule } from '@modules/notification/notification.module';
-import dentalConfig from "@config/dental.config";
-import {DentalModule} from "@modules/dental/dental.module";
+import { DentalModule } from '@modules/dental/dental.module';
 
 @Module({
   imports: [
@@ -33,29 +35,40 @@ import {DentalModule} from "@modules/dental/dental.module";
         loggingConfig,
         redisConfig,
         eventBusConfig,
-        dentalConfig,
+        dentalConfig
       ],
     }),
+
+    // ✅ CẤU HÌNH SERVE STATIC (QUAN TRỌNG)
+    // Biến folder 'uploads/dental/converted' thành đường dẫn '/models'
+    ServeStaticModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => [{
+        rootPath: path.resolve(config.get('dental.outputDir') || 'uploads/dental/converted'),
+        serveRoot: '/models', // Tiền tố URL
+        exclude: ['/api/(.*)'], // Không chặn các API khác
+      }],
+      inject: [ConfigService],
+    }),
+
     CoreModule,
     SharedModule,
     DrizzleModule,
     LoggingModule.forRootAsync(),
-    RedisCacheModule, // ✅ Module Redis Global
-
-    // Đã xóa CacheModule cũ
+    RedisCacheModule,
 
     UserModule,
     AuthModule,
     RbacModule,
     NotificationModule,
-    TestModule,
     DentalModule,
+    TestModule,
   ],
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
       .apply(RequestLoggingMiddleware)
-      .forRoutes({ path: '(.*)', method: RequestMethod.ALL });
+      .forRoutes({ path: '{*path}', method: RequestMethod.ALL });
   }
 }

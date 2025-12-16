@@ -1,3 +1,19 @@
+#!/bin/bash
+
+# Màu sắc
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+
+log "🎙️ REPLACING DEFAULT NESTJS LOGGER WITH WINSTON..."
+
+# 1. Nâng cấp Adapter để tương thích cả NestJS Core và Application Code
+# NestJS truyền: log(message, contextString)
+# App ta dùng: info(message, contextObj)
+cat > src/modules/logging/infrastructure/winston/winston-logger.adapter.ts << 'EOF'
 import { Injectable, Inject, LoggerService } from '@nestjs/common';
 import * as winston from 'winston';
 import {
@@ -102,3 +118,68 @@ export class WinstonLoggerAdapter implements ILogger, LoggerService {
     });
   }
 }
+EOF
+
+# 2. Cập nhật main.ts để sử dụng custom logger
+log "⚙️ UPDATING MAIN.TS TO USE BUFFER LOGS..."
+
+cat > src/bootstrap/main.ts << 'EOF'
+import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+
+async function bootstrap() {
+  // 1. Bật bufferLogs: true để NestJS giữ log lại, không in ra console bằng logger mặc định
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+  });
+
+  const config = app.get(ConfigService);
+
+  // 2. Lấy Winston Logger từ Container
+  const logger = app.get(LOGGER_TOKEN);
+
+  // 3. Gán Winston làm Logger chính cho toàn bộ hệ thống NestJS
+  app.useLogger(logger);
+
+  // 4. (Tùy chọn) Flush logs đã buffer (nếu có log nào xảy ra trong quá trình khởi tạo)
+  // app.flushLogs();
+
+  const prefix: string = config.get('app.apiPrefix', 'api');
+  app.setGlobalPrefix(prefix);
+
+  app.enableCors();
+
+  // --- SWAGGER CONFIGURATION ---
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('RBAC System API')
+    .setDescription('The RBAC System API description')
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('docs', app, document, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+  });
+  // -----------------------------
+
+  const port: number = config.get('app.port', 3000);
+  await app.listen(port);
+
+  // Dùng logger xịn để log dòng khởi động
+  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, { context: 'Bootstrap' });
+  logger.info(`📚 Swagger Docs:      http://localhost:${port}/docs`, { context: 'Bootstrap' });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+bootstrap().catch((err) => console.error('Err::', err['message']));
+EOF
+
+success "✅ LOGGER REPLACED! NestJS system logs will now use Winston."
+echo "👉 Restart server: npm run start:dev"
+echo "👉 You should see logs in JSON format (including 'InstanceLoader', 'RoutesResolver', etc.)"
