@@ -46,8 +46,12 @@ async function bootstrap() {
   await app.listen(port);
 
   // Dùng logger xịn để log dòng khởi động
-  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, { context: 'Bootstrap' });
-  logger.info(`📚 Swagger Docs:      http://localhost:${port}/docs`, { context: 'Bootstrap' });
+  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, {
+    context: 'Bootstrap',
+  });
+  logger.info(`📚 Swagger Docs:      http://localhost:${port}/docs`, {
+    context: 'Bootstrap',
+  });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access

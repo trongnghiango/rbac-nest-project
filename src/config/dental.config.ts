@@ -6,7 +6,8 @@ export default registerAs('dental', () => ({
   outputDir: process.env.DENTAL_OUTPUT_DIR || 'uploads/dental/converted',
 
   // Encryption
-  encryptionKey: process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE', // 32 chars
+  encryptionKey:
+    process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE', // 32 chars
 
   // Conversion Settings
   simplificationRatio: 0.3,

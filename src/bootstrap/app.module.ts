@@ -35,7 +35,7 @@ import { DentalModule } from '@modules/dental/dental.module';
         loggingConfig,
         redisConfig,
         eventBusConfig,
-        dentalConfig
+        dentalConfig,
       ],
     }),
 
@@ -43,11 +43,15 @@ import { DentalModule } from '@modules/dental/dental.module';
     // Biến folder 'uploads/dental/converted' thành đường dẫn '/models'
     ServeStaticModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => [{
-        rootPath: path.resolve(config.get('dental.outputDir') || 'uploads/dental/converted'),
-        serveRoot: '/models', // Tiền tố URL
-        exclude: ['/api/(.*)'], // Không chặn các API khác
-      }],
+      useFactory: (config: ConfigService) => [
+        {
+          rootPath: path.resolve(
+            config.get('dental.outputDir') || 'uploads/dental/converted',
+          ),
+          serveRoot: '/models', // Tiền tố URL
+          exclude: ['/api/(.*)'], // Không chặn các API khác
+        },
+      ],
       inject: [ConfigService],
     }),
 

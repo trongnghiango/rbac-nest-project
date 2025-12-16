@@ -1,4 +1,13 @@
-import { Controller, Post, Get, Query, UploadedFile, UseInterceptors, UseGuards, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+  UseGuards,
+  Body,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
@@ -35,41 +44,44 @@ export class DentalController {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
-        clientId: { type: 'string' }
+        clientId: { type: 'string' },
       },
     },
   })
   @UseInterceptors(FileInterceptor('file', { storage }))
   async uploadZip(
     @UploadedFile() file: Express.Multer.File,
-    @Body('clientId') clientId: string
+    @Body('clientId') clientId: string,
   ) {
     const finalClientId = clientId || 'default-client';
-    const result = await this.dentalService.processZipUpload(file, finalClientId);
+    const result = await this.dentalService.processZipUpload(
+      file,
+      finalClientId,
+    );
 
     // Trả về object chuẩn, Interceptor sẽ lo phần wrap success/statusCode
     return {
-        message: 'File uploaded and processing started',
-        jobId: result.jobId,
-        stats: result.stats
+      message: 'File uploaded and processing started',
+      jobId: result.jobId,
+      stats: result.stats,
     };
   }
 
   @Get('models')
   async listModels(@Query('clientId') clientId: string) {
-      const finalClientId = clientId || 'default-client';
-      const models = await this.dentalService.listModels(finalClientId);
+    const finalClientId = clientId || 'default-client';
+    const models = await this.dentalService.listModels(finalClientId);
 
-      // ✅ FIX: Interceptor global của chúng ta (TransformResponseInterceptor)
-      // sẽ tự động bọc kết quả này vào { success: true, statusCode: 200, result: ... }
-      // Nhưng nếu bạn muốn cấu trúc Metadata riêng biệt như hình mẫu, ta có thể return object tùy chỉnh.
+    // ✅ FIX: Interceptor global của chúng ta (TransformResponseInterceptor)
+    // sẽ tự động bọc kết quả này vào { success: true, statusCode: 200, result: ... }
+    // Nhưng nếu bạn muốn cấu trúc Metadata riêng biệt như hình mẫu, ta có thể return object tùy chỉnh.
 
-      // Tuy nhiên, để nhất quán với toàn bộ hệ thống, ta nên return data raw,
-      // và để Interceptor lo phần format chung.
+    // Tuy nhiên, để nhất quán với toàn bộ hệ thống, ta nên return data raw,
+    // và để Interceptor lo phần format chung.
 
-      // Nếu bạn muốn override message mặc định 'Success':
-      // (Cần dùng decorator @ResponseMessage('Successfully listed models.') nhưng ở đây ta return thẳng)
+    // Nếu bạn muốn override message mặc định 'Success':
+    // (Cần dùng decorator @ResponseMessage('Successfully listed models.') nhưng ở đây ta return thẳng)
 
-      return models;
+    return models;
   }
 }

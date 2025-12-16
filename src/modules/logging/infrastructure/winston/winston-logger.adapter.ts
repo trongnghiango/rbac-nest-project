@@ -37,7 +37,8 @@ export class WinstonLoggerAdapter implements ILogger, LoggerService {
     }
 
     // Nếu message là object (NestJS hay log object), stringify nó hoặc gán vào meta
-    const msgStr = typeof message === 'string' ? message : JSON.stringify(message);
+    const msgStr =
+      typeof message === 'string' ? message : JSON.stringify(message);
 
     return { msgStr, contextObj };
   }
@@ -52,31 +53,43 @@ export class WinstonLoggerAdapter implements ILogger, LoggerService {
   // --- Implementation cho ILogger (App của ta gọi cái này) ---
 
   debug(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(message, ...optionalParams);
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
     this.callWinston('debug', msgStr, contextObj);
   }
 
   info(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(message, ...optionalParams);
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
     this.callWinston('info', msgStr, contextObj);
   }
 
   warn(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(message, ...optionalParams);
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
     this.callWinston('warn', msgStr, contextObj);
   }
 
   error(message: any, ...optionalParams: any[]): void {
     // NestJS thường gửi stack trace ở tham số thứ 2 hoặc 3
-    const { msgStr, contextObj } = this.normalizeParams(message, ...optionalParams);
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
 
     // Tìm Error object nếu có trong params
-    const errorObj = optionalParams.find(p => p instanceof Error);
+    const errorObj = optionalParams.find((p) => p instanceof Error);
     const meta = { ...contextObj };
 
     if (errorObj) {
-        meta.stack = errorObj.stack;
-        meta.error = errorObj.message;
+      meta.stack = errorObj.stack;
+      meta.error = errorObj.message;
     }
 
     this.callWinston('error', msgStr, meta);
@@ -94,7 +107,11 @@ export class WinstonLoggerAdapter implements ILogger, LoggerService {
     return this.withContext({ context: module }); // Map 'label' hoặc 'context' tùy config winston
   }
 
-  private callWinston(level: string, message: string, context?: LogContext): void {
+  private callWinston(
+    level: string,
+    message: string,
+    context?: LogContext,
+  ): void {
     this.winstonLogger.log(level, message, {
       ...this.context,
       ...this.getTraceInfo(),

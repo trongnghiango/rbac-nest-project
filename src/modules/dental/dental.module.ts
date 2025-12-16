@@ -3,6 +3,10 @@ import { ConfigModule } from '@nestjs/config';
 import { DentalController } from './infrastructure/controllers/dental.controller';
 import { DentalService } from './application/services/dental.service';
 import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
+import { FileSystemDentalStorage } from './infrastructure/adapters/fs-dental-storage.adapter';
+import { PiscinaDentalWorker } from './infrastructure/adapters/piscina-worker.adapter';
+import { IDentalStorage } from './domain/ports/dental-storage.port';
+import { IDentalWorker } from './domain/ports/dental-worker.port';
 import dentalConfig from '@config/dental.config';
 
 @Module({
@@ -11,6 +15,14 @@ import dentalConfig from '@config/dental.config';
   providers: [
     DentalService,
     PiscinaProvider,
+    {
+      provide: IDentalStorage,
+      useClass: FileSystemDentalStorage,
+    },
+    {
+      provide: IDentalWorker,
+      useClass: PiscinaDentalWorker,
+    },
   ],
 })
 export class DentalModule {}
