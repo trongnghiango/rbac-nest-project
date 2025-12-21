@@ -39,8 +39,6 @@ import { DentalModule } from '@modules/dental/dental.module';
       ],
     }),
 
-    // ✅ CẤU HÌNH SERVE STATIC (QUAN TRỌNG)
-    // Biến folder 'uploads/dental/converted' thành đường dẫn '/models'
     ServeStaticModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => [
@@ -48,8 +46,14 @@ import { DentalModule } from '@modules/dental/dental.module';
           rootPath: path.resolve(
             config.get('dental.outputDir') || 'uploads/dental/converted',
           ),
-          serveRoot: '/models', // Tiền tố URL
-          exclude: ['/api/(.*)'], // Không chặn các API khác
+          serveRoot: '/models',
+          exclude: ['/api/(.*)'],
+          serveStaticOptions: {
+            setHeaders: (res) => {
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            },
+          },
         },
       ],
       inject: [ConfigService],

@@ -5,8 +5,10 @@ import { DentalService } from './application/services/dental.service';
 import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
 import { FileSystemDentalStorage } from './infrastructure/adapters/fs-dental-storage.adapter';
 import { PiscinaDentalWorker } from './infrastructure/adapters/piscina-worker.adapter';
+import { DrizzleOrthoRepository } from './infrastructure/persistence/drizzle-ortho.repository';
 import { IDentalStorage } from './domain/ports/dental-storage.port';
 import { IDentalWorker } from './domain/ports/dental-worker.port';
+import { IOrthoRepository } from './domain/repositories/ortho.repository';
 import dentalConfig from '@config/dental.config';
 
 @Module({
@@ -22,6 +24,11 @@ import dentalConfig from '@config/dental.config';
     {
       provide: IDentalWorker,
       useClass: PiscinaDentalWorker,
+    },
+    // ✅ Đăng ký Repository mới
+    {
+      provide: IOrthoRepository,
+      useClass: DrizzleOrthoRepository,
     },
   ],
 })

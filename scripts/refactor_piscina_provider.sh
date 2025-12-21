@@ -1,3 +1,17 @@
+#!/bin/bash
+
+# Màu sắc
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+
+log "🏊 FIXING PISCINA SYNTAX ERROR (REMOVING EXTRA BACKSLASHES)..."
+
+# LƯU Ý: Dưới đây là code TypeScript chuẩn, không có ký tự thoát thừa.
+cat > src/modules/dental/infrastructure/workers/piscina.provider.ts << 'EOF'
 import { Provider, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as path from 'path';
@@ -21,11 +35,7 @@ export const PiscinaProvider: Provider = {
     let workerPath: string;
 
     if (isProduction) {
-      const prodPath1 = path.join(
-        projectRoot,
-        'dist',
-        workerRelativePath + '.js',
-      );
+      const prodPath1 = path.join(projectRoot, 'dist', workerRelativePath + '.js');
       const prodPath2 = path.join(
         projectRoot,
         'dist',
@@ -64,3 +74,6 @@ export const PiscinaProvider: Provider = {
   },
   inject: [ConfigService],
 };
+EOF
+
+success "✅ FIXED! File content is now clean TypeScript."

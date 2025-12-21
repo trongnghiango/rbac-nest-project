@@ -19,20 +19,17 @@ import { redisStore } from 'cache-manager-redis-yet';
 
         console.log(`🔌 Connecting to Redis at ${host}:${port}...`);
 
-        // 1. Tạo Store
+        // Sử dụng redis-yet (chuẩn mới)
         const store = await redisStore({
           socket: { host, port },
           ttl,
         });
+
         console.log('✅ Redis Store Created!');
 
-        // 2. Load thư viện
+        // Fix lỗi import cache-manager (CommonJS vs ESM)
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const cm = require('cache-manager');
-
-        // 3. Ưu tiên createCache (v5), fallback sang caching (v4)
-        // QUAN TRỌNG: Truyền object config thay vì instance nếu cần thiết,
-        // nhưng với redis-yet thì truyền instance là chuẩn.
         const createCache =
           cm.createCache ||
           (cm.default && cm.default.createCache) ||
@@ -40,13 +37,9 @@ import { redisStore } from 'cache-manager-redis-yet';
 
         if (!createCache) throw new Error('Cannot find createCache function');
 
-        // Tạo cache manager từ store
         const cache = createCache(store);
-
-        // Gán ngược store vào cache object nếu thư viện không tự gán (để Adapter check được)
-        if (!cache.store) {
-          cache.store = store;
-        }
+        // Gán ngược store để Adapter check được
+        if (!cache.store) cache.store = store;
 
         return cache;
       },
