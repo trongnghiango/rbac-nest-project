@@ -1,17 +1,16 @@
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import Piscina from 'piscina';
+import * as fs from 'fs-extra';
 import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const AdmZip = require('adm-zip');
 import { v4 as uuidv4 } from 'uuid';
-
-import {
-  ILogger,
-  LOGGER_TOKEN,
-} from '@core/shared/application/ports/logger.port';
-import { IDentalStorage } from '../../domain/ports/dental-storage.port';
-import {
-  IDentalWorker,
-  ConversionJob,
-} from '../../domain/ports/dental-worker.port';
+import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
+import { ConversionTask } from '../../infrastructure/workers/conversion.worker';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
 
 export interface ModelStep {
   index: number;
@@ -21,163 +20,176 @@ export interface ModelStep {
 
 @Injectable()
 export class DentalService {
+  private readonly uploadDir: string;
+  private readonly outputDir: string;
   private readonly encryptionKey: string;
   private readonly appUrl: string;
 
   constructor(
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
-    @Inject(IDentalStorage) private readonly storage: IDentalStorage,
-    @Inject(IDentalWorker) private readonly worker: IDentalWorker,
+    @Inject(PISCINA_POOL) private readonly pool: Piscina,
+    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository, // Inject Repository
     private readonly config: ConfigService,
   ) {
+    const rawUploadDir = this.config.get('dental.uploadDir');
+    const rawOutputDir = this.config.get('dental.outputDir');
+    this.appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, "");
+
+    if (!rawUploadDir || !rawOutputDir) throw new Error('Dental configuration missing');
+
+    this.uploadDir = path.resolve(rawUploadDir);
+    this.outputDir = path.resolve(rawOutputDir);
     this.encryptionKey = this.config.get('dental.encryptionKey')!;
-    this.appUrl = process.env.APP_URL || 'http://localhost:3000';
-    this.storage.ensureDirectories();
+
+    fs.ensureDirSync(this.uploadDir);
+    fs.ensureDirSync(this.outputDir);
   }
 
-  async processZipUpload(file: Express.Multer.File, clientId: string) {
+  // ✅ LOGIC MỚI: Nhận DTO, Tạo DB record trước, sau đó xử lý file
+  async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
     if (!file) throw new BadRequestException('No file uploaded');
 
-    const jobId = uuidv4();
-    this.logger.info(`Processing ZIP for client ${clientId}`, {
-      jobId,
-      file: file.originalname,
+    // 1. Lưu thông tin vào DB để lấy Case ID
+    const caseId = await this.orthoRepo.createFullCase({
+        patientName: dto.patientName,
+        patientCode: dto.patientCode,
+        clinicName: dto.clinicName,
+        doctorName: dto.doctorName,
+        gender: dto.gender,
+        dob: dto.dob ? new Date(dto.dob) : undefined,
+        productType: dto.productType,
+        notes: dto.notes
     });
 
-    const extractPath = path.join(
-      this.storage.getUploadDir(),
-      `extract_${jobId}`,
-    );
+    this.logger.info(`Created Case ID: ${caseId} for Patient: ${dto.patientName}`);
+
+    const jobId = uuidv4();
+    const extractPath = path.join(this.uploadDir, `extract_${jobId}`);
 
     try {
-      // 1. Extract (Qua Storage Port)
-      await this.storage.extractZip(file.path, extractPath);
+        const zip = new AdmZip(file.path);
+        zip.extractAllTo(extractPath, true);
 
-      // 2. Scan (Qua Storage Port)
-      const objFiles = await this.storage.findObjFilesRecursively(extractPath);
-      this.logger.info(`Found ${objFiles.length} OBJ files`, { jobId });
+        const objFiles = await this.findFilesRecursively(extractPath, '.obj');
+        this.logger.info(`Found ${objFiles.length} OBJ files`, { jobId });
 
-      // 3. Prepare Tasks
-      const tasks = objFiles.map((objPath) => {
-        const relPath = path.relative(extractPath, objPath);
-        const baseName = path.basename(objPath, '.obj');
+        // 2. Chuẩn bị task convert
+        // Output Dir bây giờ dựa trên Case ID (Database ID) thay vì clientId tùy ý
+        const tasks = objFiles.map(objPath => {
+            const relPath = path.relative(extractPath, objPath);
+            const baseName = path.basename(objPath, '.obj');
 
-        // Logic parse Index & Type
-        const { type, index } = this.parseFileInfo(
-          baseName,
-          path.dirname(objPath),
-        );
+            // Logic parse type và index (giữ nguyên logic cũ vì nó tốt)
+            let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
+            let index = 0;
+            if (baseName.toLowerCase().includes('mandibular')) type = 'Mandibular';
 
-        const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
-        const targetDir = path.join(
-          this.storage.getOutputDir(),
-          clientId,
-          type,
-        );
+            const parentDir = path.dirname(objPath);
+            const dirMatch = parentDir.match(/(\d+)/);
+            const fileMatch = baseName.match(/(\d+)/);
 
-        const task: ConversionJob = {
-          objFilePath: objPath,
-          outputDir: targetDir,
-          baseName: standardizedName,
-          encryptionKey: this.encryptionKey,
-          config: {
-            ratio: this.config.get('dental.simplificationRatio'),
-            threshold: this.config.get('dental.errorThreshold'),
-            timeout: this.config.get('dental.timeout'),
-          },
+            if (dirMatch) index = parseInt(dirMatch[1], 10);
+            else if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+            const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
+
+            // LƯU VÀO FOLDER THEO CASE ID
+            const targetDir = path.join(this.outputDir, caseId, type);
+
+            return {
+                objFilePath: objPath,
+                outputDir: targetDir,
+                baseName: standardizedName,
+                encryptionKey: this.encryptionKey,
+                config: {
+                    ratio: this.config.get('dental.simplificationRatio'),
+                    threshold: this.config.get('dental.errorThreshold'),
+                    timeout: this.config.get('dental.timeout'),
+                },
+                // Metadata để dùng sau này lưu vào DB steps (nếu cần mở rộng worker trả về)
+                meta: { index, type }
+            };
+        });
+
+        // 3. Chạy Worker
+        await Promise.allSettled(tasks.map(t => this.pool.run(t)));
+
+        // 4. (Optional) Lưu thông tin Steps vào DB
+        // Hiện tại Worker chỉ trả về success/fail.
+        // Để Pro hơn, ta có thể xây dựng map steps và gọi orthoRepo.saveSteps(caseId, ...)
+        // Nhưng tạm thời để Frontend list file hoạt động, ta chỉ cần file nằm đúng chỗ.
+
+        // Update Status thành DONE (Cần thêm hàm update status trong repo, tạm bỏ qua)
+
+        return {
+            message: 'Case created and processing started',
+            caseId: caseId,
+            jobId
         };
-        return task;
-      });
 
-      // 4. Execute Workers (Qua Worker Port)
-      const results = await Promise.allSettled(
-        tasks.map((t) => this.worker.runTask(t)),
-      );
-
-      const successCount = results.filter(
-        (r) => r.status === 'fulfilled',
-      ).length;
-      const failCount = results.filter((r) => r.status === 'rejected').length;
-
-      this.logger.info(`Job ${jobId} finished.`, {
-        success: successCount,
-        failed: failCount,
-      });
-
-      return {
-        message: 'Processing completed',
-        jobId,
-        stats: {
-          total: tasks.length,
-          success: successCount,
-          failed: failCount,
-        },
-      };
     } catch (error: any) {
-      this.logger.error(`Error processing zip`, error, { jobId });
-      throw new BadRequestException(`Failed: ${error.message}`);
+        this.logger.error(`Error processing case ${caseId}`, error);
+        throw new BadRequestException(`Processing failed: ${error.message}`);
     } finally {
-      // Cleanup (Qua Storage Port)
-      await Promise.all([
-        this.storage.removeDirectory(extractPath),
-        this.storage.removeFile(file.path),
-      ]);
+        await Promise.all([
+            fs.remove(extractPath).catch(() => {}),
+            fs.remove(file.path).catch(() => {})
+        ]);
     }
   }
 
-  async listModels(clientId: string): Promise<ModelStep[]> {
-    const clientDir = path.join(this.storage.getOutputDir(), clientId);
-    const allEncFiles = await this.storage.findEncFilesRecursively(clientDir);
+  async listModels(caseId: string): Promise<ModelStep[]> {
+      // Logic list models bây giờ dựa vào Case ID (số ID trong DB)
+      const clientDir = path.join(this.outputDir, caseId);
 
-    const stepsMap = new Map<number, ModelStep>();
+      if (!fs.existsSync(clientDir)) return [];
 
-    allEncFiles.forEach((fullPath) => {
-      const filename = path.basename(fullPath);
-      const relativePath = path.relative(this.storage.getOutputDir(), fullPath);
+      const allEncFiles = await this.findFilesRecursively(clientDir, '.enc');
+      const stepsMap = new Map<number, ModelStep>();
 
-      const urlPath = relativePath.split(path.sep).join('/');
-      const encodedUrlPath = urlPath
-        .split('/')
-        .map(encodeURIComponent)
-        .join('/');
-      const url = `${this.appUrl}/models/${encodedUrlPath}`;
+      allEncFiles.forEach(fullPath => {
+          const filename = path.basename(fullPath).toLowerCase();
+          const relativePath = path.relative(this.outputDir, fullPath);
+          const urlPath = relativePath.split(path.sep).map(encodeURIComponent).join('/');
+          const url = `${this.appUrl}/models/${urlPath}`;
 
-      const { type, index } = this.parseFileInfo(
-        filename,
-        path.dirname(fullPath),
-      );
+          let index = 0;
+          let type: 'maxillary' | 'mandibular' | null = null;
+          if (filename.includes('maxillary')) type = 'maxillary';
+          else if (filename.includes('mandibular')) type = 'mandibular';
 
-      if (!stepsMap.has(index)) {
-        stepsMap.set(index, { index, maxillary: null, mandibular: null });
-      }
+          if (!type) return;
 
-      const entry = stepsMap.get(index)!;
-      if (type === 'Maxillary') entry.maxillary = url;
-      else entry.mandibular = url;
-    });
+          const fileMatch = filename.match(/(\d+)/);
+          const parentDirName = path.basename(path.dirname(fullPath));
+          const dirMatch = parentDirName.match(/(\d+)/);
 
-    return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+          if (dirMatch) index = parseInt(dirMatch[1], 10);
+          else if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+          if (!stepsMap.has(index)) stepsMap.set(index, { index, maxillary: null, mandibular: null });
+          const entry = stepsMap.get(index)!;
+          if (type === 'maxillary') entry.maxillary = url;
+          else entry.mandibular = url;
+      });
+
+      return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
   }
 
-  // Helper tách logic parse tên file (Pure Domain Logic)
-  private parseFileInfo(
-    filename: string,
-    dirPath: string,
-  ): { type: 'Maxillary' | 'Mandibular'; index: number } {
-    let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
-    let index = 0;
-
-    const lowerName = filename.toLowerCase();
-    if (lowerName.includes('mandibular')) type = 'Mandibular';
-
-    // Ưu tiên tìm trong tên thư mục cha (cho Subsetup)
-    const parentDirName = path.basename(dirPath);
-    const dirMatch = parentDirName.match(/(\d+)/);
-    const fileMatch = filename.match(/(\d+)/);
-
-    if (dirMatch) index = parseInt(dirMatch[1], 10);
-    else if (fileMatch) index = parseInt(fileMatch[1], 10);
-
-    return { type, index };
+  private async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
+    let results: string[] = [];
+    try {
+        const list = await fs.readdir(dir);
+        for (const file of list) {
+            const fullPath = path.resolve(dir, file);
+            const stat = await fs.stat(fullPath);
+            if (stat && stat.isDirectory()) {
+                results = results.concat(await this.findFilesRecursively(fullPath, ext));
+            } else if (file.toLowerCase().endsWith(ext)) {
+                results.push(fullPath);
+            }
+        }
+    } catch (e) { }
+    return results;
   }
 }
