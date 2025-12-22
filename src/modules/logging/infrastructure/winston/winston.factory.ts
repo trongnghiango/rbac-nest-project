@@ -132,7 +132,7 @@ export class WinstonFactory {
       transports.push(
         new winston.transports.Console({
           format: winston.format.combine(
-            winston.format.timestamp({ format: 'HH:mm:ss' }),
+            winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
             masker(),
             winston.format.colorize({ all: true }),
             consoleFormat,

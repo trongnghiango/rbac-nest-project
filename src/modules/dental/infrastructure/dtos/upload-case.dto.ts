@@ -1,19 +1,28 @@
-import { IsString, IsOptional, IsEnum, IsDateString, IsNotEmpty } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsNotEmpty,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export enum Gender {
   Male = 'Male',
   Female = 'Female',
-  Other = 'Other'
+  Other = 'Other',
 }
 
 export enum ProductType {
   Aligner = 'aligner',
-  Retainer = 'retainer'
+  Retainer = 'retainer',
 }
 
 export class UploadCaseDto {
-  @ApiProperty({ description: 'Full Name of the Patient', example: 'Nguyen Van A' })
+  @ApiProperty({
+    description: 'Full Name of the Patient',
+    example: 'Nguyen Van A',
+  })
   @IsString()
   @IsNotEmpty()
   patientName: string;
@@ -28,7 +37,11 @@ export class UploadCaseDto {
   @IsEnum(Gender)
   gender?: Gender;
 
-  @ApiProperty({ description: 'Date of Birth (ISO)', required: false, example: '1990-01-01' })
+  @ApiProperty({
+    description: 'Date of Birth (ISO)',
+    required: false,
+    example: '1990-01-01',
+  })
   @IsOptional()
   @IsDateString()
   dob?: string;
@@ -38,12 +51,20 @@ export class UploadCaseDto {
   @IsNotEmpty()
   clinicName: string;
 
-  @ApiProperty({ description: 'Doctor Name', required: false, example: 'Dr. House' })
+  @ApiProperty({
+    description: 'Doctor Name',
+    required: false,
+    example: 'Dr. House',
+  })
   @IsOptional()
   @IsString()
   doctorName?: string;
 
-  @ApiProperty({ description: 'Product Type', enum: ProductType, default: ProductType.Aligner })
+  @ApiProperty({
+    description: 'Product Type',
+    enum: ProductType,
+    default: ProductType.Aligner,
+  })
   @IsOptional()
   @IsEnum(ProductType)
   productType: ProductType = ProductType.Aligner;

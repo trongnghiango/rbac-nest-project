@@ -1,4 +1,4 @@
-import { Injectable, Inject, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
 import * as fs from 'fs-extra';
@@ -8,14 +8,16 @@ const AdmZip = require('adm-zip');
 import { v4 as uuidv4 } from 'uuid';
 import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
-import { ConversionTask } from '../../infrastructure/workers/conversion.worker';
 import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
 import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
+import { parseMovementExcel } from '../utils/movement.parser';
 
 export interface ModelStep {
   index: number;
   maxillary: string | null;
   mandibular: string | null;
+  // ✅ NEW: Thêm trường teethData trả về Frontend
+  teethData?: Record<string, any>;
 }
 
 @Injectable()
@@ -28,7 +30,7 @@ export class DentalService {
   constructor(
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     @Inject(PISCINA_POOL) private readonly pool: Piscina,
-    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository, // Inject Repository
+    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
     private readonly config: ConfigService,
   ) {
     const rawUploadDir = this.config.get('dental.uploadDir');
@@ -45,23 +47,21 @@ export class DentalService {
     fs.ensureDirSync(this.outputDir);
   }
 
-  // ✅ LOGIC MỚI: Nhận DTO, Tạo DB record trước, sau đó xử lý file
+  // ... (processZipUpload giữ nguyên) ...
   async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
     if (!file) throw new BadRequestException('No file uploaded');
 
-    // 1. Lưu thông tin vào DB để lấy Case ID
     const caseId = await this.orthoRepo.createFullCase({
         patientName: dto.patientName,
         patientCode: dto.patientCode,
         clinicName: dto.clinicName,
         doctorName: dto.doctorName,
         gender: dto.gender,
-        dob: dto.dob ? new Date(dto.dob) : undefined,
         productType: dto.productType,
         notes: dto.notes
     });
 
-    this.logger.info(`Created Case ID: ${caseId} for Patient: ${dto.patientName}`);
+    this.logger.info(`Processing upload for PatientCode: ${dto.patientCode} -> CaseID: ${caseId}`);
 
     const jobId = uuidv4();
     const extractPath = path.join(this.uploadDir, `extract_${jobId}`);
@@ -71,29 +71,25 @@ export class DentalService {
         zip.extractAllTo(extractPath, true);
 
         const objFiles = await this.findFilesRecursively(extractPath, '.obj');
-        this.logger.info(`Found ${objFiles.length} OBJ files`, { jobId });
+        // if (objFiles.length === 0) throw new Error("No .obj files found"); // Cho phép upload 0 file nếu chỉ muốn tạo case
 
-        // 2. Chuẩn bị task convert
-        // Output Dir bây giờ dựa trên Case ID (Database ID) thay vì clientId tùy ý
         const tasks = objFiles.map(objPath => {
-            const relPath = path.relative(extractPath, objPath);
             const baseName = path.basename(objPath, '.obj');
+            const parentDirPath = path.dirname(objPath);
+            const parentDirName = path.basename(parentDirPath);
 
-            // Logic parse type và index (giữ nguyên logic cũ vì nó tốt)
             let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
-            let index = 0;
             if (baseName.toLowerCase().includes('mandibular')) type = 'Mandibular';
 
-            const parentDir = path.dirname(objPath);
-            const dirMatch = parentDir.match(/(\d+)/);
-            const fileMatch = baseName.match(/(\d+)/);
+            let index = 0;
+            const explicitFolderMatch = parentDirName.match(/(?:Subsetup|Stage|Step)[^0-9]*(\d+)/i);
+            const fileNumberMatch = baseName.match(/[ _-](\d+)$/);
 
-            if (dirMatch) index = parseInt(dirMatch[1], 10);
-            else if (fileMatch) index = parseInt(fileMatch[1], 10);
+            if (explicitFolderMatch) index = parseInt(explicitFolderMatch[1], 10);
+            else if (fileNumberMatch) index = parseInt(fileNumberMatch[1], 10);
+            else if (/^\d+$/.test(parentDirName)) index = parseInt(parentDirName, 10);
 
             const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
-
-            // LƯU VÀO FOLDER THEO CASE ID
             const targetDir = path.join(this.outputDir, caseId, type);
 
             return {
@@ -106,47 +102,101 @@ export class DentalService {
                     threshold: this.config.get('dental.errorThreshold'),
                     timeout: this.config.get('dental.timeout'),
                 },
-                // Metadata để dùng sau này lưu vào DB steps (nếu cần mở rộng worker trả về)
                 meta: { index, type }
             };
         });
 
-        // 3. Chạy Worker
         await Promise.allSettled(tasks.map(t => this.pool.run(t)));
-
-        // 4. (Optional) Lưu thông tin Steps vào DB
-        // Hiện tại Worker chỉ trả về success/fail.
-        // Để Pro hơn, ta có thể xây dựng map steps và gọi orthoRepo.saveSteps(caseId, ...)
-        // Nhưng tạm thời để Frontend list file hoạt động, ta chỉ cần file nằm đúng chỗ.
-
-        // Update Status thành DONE (Cần thêm hàm update status trong repo, tạm bỏ qua)
-
-        return {
-            message: 'Case created and processing started',
-            caseId: caseId,
-            jobId
-        };
-
+        return { message: 'Processing completed', caseId: caseId, patientCode: dto.patientCode };
     } catch (error: any) {
         this.logger.error(`Error processing case ${caseId}`, error);
         throw new BadRequestException(`Processing failed: ${error.message}`);
     } finally {
-        await Promise.all([
-            fs.remove(extractPath).catch(() => {}),
-            fs.remove(file.path).catch(() => {})
-        ]);
+        await Promise.all([ fs.remove(extractPath).catch(() => {}), fs.remove(file.path).catch(() => {}) ]);
     }
   }
 
-  async listModels(caseId: string): Promise<ModelStep[]> {
-      // Logic list models bây giờ dựa vào Case ID (số ID trong DB)
-      const clientDir = path.join(this.outputDir, caseId);
+  // ✅ NEW: Xử lý Upload Excel Movement
+  async processMovementExcel(file: Express.Multer.File, caseId: string) {
+      this.logger.info(`Processing Movement Excel for Case: ${caseId}`);
+      try {
+          const stepsDataMap = parseMovementExcel(file.buffer);
+          let count = 0;
 
-      if (!fs.existsSync(clientDir)) return [];
+          // Lưu từng step vào DB
+          for (const [stepIndex, teethData] of stepsDataMap.entries()) {
+              await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+              count++;
+          }
 
-      const allEncFiles = await this.findFilesRecursively(clientDir, '.enc');
+          this.logger.info(`Updated movement data for ${count} steps.`);
+          return { message: 'Movement data updated successfully', stepsCount: count };
+
+      } catch (error: any) {
+          this.logger.error(`Excel Parse Error`, error);
+          throw new BadRequestException(`Failed to parse excel: ${error.message}`);
+      }
+  }
+
+  async getCaseDetails(clientIdOrCode: string, specificCaseId?: string) {
+      if (specificCaseId) {
+           const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
+           if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
+           return this.orthoRepo.getCaseDetails(specificCaseId, true);
+      } else {
+           return this.orthoRepo.getCaseDetails(clientIdOrCode, false);
+      }
+  }
+
+  // ✅ UPDATED: List Models bao gồm cả Movement Data từ DB
+  async listModels(clientIdOrCode: string, specificCaseId?: string): Promise<ModelStep[]> {
+      let targetFolder = '';
+      let dbCaseId = ''; // ID số trong DB
+
+      if (specificCaseId) {
+          const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
+          if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
+          targetFolder = specificCaseId;
+          dbCaseId = specificCaseId;
+      } else {
+          const latestCaseId = await this.orthoRepo.findLatestCaseIdByCode(clientIdOrCode);
+          if (latestCaseId) {
+              targetFolder = latestCaseId;
+              dbCaseId = latestCaseId;
+          } else if (fs.existsSync(path.join(this.outputDir, clientIdOrCode))) {
+              targetFolder = clientIdOrCode;
+              // Legacy folder không có trong DB thì không có movement data
+          }
+      }
+
+      if (!targetFolder) return [];
+
+      // 1. Quét File System để lấy danh sách file 3D
+      const clientDir = path.join(this.outputDir, targetFolder);
+      const allEncFiles = fs.existsSync(clientDir) ? await this.findFilesRecursively(clientDir, '.enc') : [];
+
+      // 2. Query DB để lấy Movement Data (nếu có CaseID hợp lệ)
+      let dbSteps: any[] = [];
+      if (dbCaseId && !isNaN(Number(dbCaseId))) {
+          dbSteps = await this.orthoRepo.getStepsByCaseId(Number(dbCaseId));
+      }
+
+      // 3. Merge Data (File System + DB)
       const stepsMap = new Map<number, ModelStep>();
 
+      // Populate từ DB trước (để lấy teethData)
+      dbSteps.forEach(dbStep => {
+          if (!stepsMap.has(dbStep.stepIndex)) {
+              stepsMap.set(dbStep.stepIndex, {
+                  index: dbStep.stepIndex,
+                  maxillary: null,
+                  mandibular: null,
+                  teethData: dbStep.teethData // ✅ Attach Data
+              });
+          }
+      });
+
+      // Populate từ File System (để lấy URL file)
       allEncFiles.forEach(fullPath => {
           const filename = path.basename(fullPath).toLowerCase();
           const relativePath = path.relative(this.outputDir, fullPath);
@@ -161,19 +211,21 @@ export class DentalService {
           if (!type) return;
 
           const fileMatch = filename.match(/(\d+)/);
-          const parentDirName = path.basename(path.dirname(fullPath));
-          const dirMatch = parentDirName.match(/(\d+)/);
+          if (fileMatch) index = parseInt(fileMatch[1], 10);
 
-          if (dirMatch) index = parseInt(dirMatch[1], 10);
-          else if (fileMatch) index = parseInt(fileMatch[1], 10);
-
-          if (!stepsMap.has(index)) stepsMap.set(index, { index, maxillary: null, mandibular: null });
+          if (!stepsMap.has(index)) {
+              stepsMap.set(index, { index, maxillary: null, mandibular: null });
+          }
           const entry = stepsMap.get(index)!;
           if (type === 'maxillary') entry.maxillary = url;
           else entry.mandibular = url;
       });
 
       return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+  }
+
+  async getHistory(patientCode: string) {
+      return this.orthoRepo.findCasesByPatientCode(patientCode);
   }
 
   private async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
