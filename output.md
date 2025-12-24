@@ -1,26 +1,30 @@
 ## File: src/bootstrap/app.module.ts
 ```
 import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import * as path from 'path';
 
 import databaseConfig from '@config/database.config';
 import appConfig from '@config/app.config';
 import loggingConfig from '@config/logging.config';
-import redisConfig from '@config/redis.config'; // IMPORT CONFIG MỚI
+import redisConfig from '@config/redis.config';
+import eventBusConfig from '@config/event-bus.config';
+import dentalConfig from '@config/dental.config';
 
 import { CoreModule } from '@core/core.module';
 import { SharedModule } from '@modules/shared/shared.module';
 import { DrizzleModule } from '@database/drizzle.module';
 import { LoggingModule } from '@modules/logging/logging.module';
-import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module'; // IMPORT MODULE MỚI
+import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
 import { RequestLoggingMiddleware } from '@api/middleware/request-logging.middleware';
 
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/auth/auth.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
-import eventBusConfig from '@config/event-bus.config';
 import { NotificationModule } from '@modules/notification/notification.module';
+import { DentalModule } from '@modules/dental/dental.module';
 
 @Module({
   imports: [
@@ -33,20 +37,41 @@ import { NotificationModule } from '@modules/notification/notification.module';
         loggingConfig,
         redisConfig,
         eventBusConfig,
+        dentalConfig,
       ],
     }),
+
+    ServeStaticModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => [
+        {
+          rootPath: path.resolve(
+            config.get('dental.outputDir') || 'uploads/dental/converted',
+          ),
+          serveRoot: '/models',
+          exclude: ['/api/(.*)'],
+          serveStaticOptions: {
+            setHeaders: (res) => {
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            },
+          },
+        },
+      ],
+      inject: [ConfigService],
+    }),
+
     CoreModule,
     SharedModule,
     DrizzleModule,
     LoggingModule.forRootAsync(),
-    RedisCacheModule, // ✅ Module Redis Global
-
-    // Đã xóa CacheModule cũ
+    RedisCacheModule,
 
     UserModule,
     AuthModule,
     RbacModule,
     NotificationModule,
+    DentalModule,
     TestModule,
   ],
 })
@@ -54,7 +79,7 @@ export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer
       .apply(RequestLoggingMiddleware)
-      .forRoutes({ path: '(.*)', method: RequestMethod.ALL });
+      .forRoutes({ path: '{*path}', method: RequestMethod.ALL });
   }
 }
 ```
@@ -65,44 +90,52 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import * as fs from 'fs';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const uploadDir = 'uploads/dental/converted';
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const config = app.get(ConfigService);
+  const logger = app.get(LOGGER_TOKEN);
+  app.useLogger(logger);
 
   const prefix: string = config.get('app.apiPrefix', 'api');
   app.setGlobalPrefix(prefix);
 
-  app.enableCors();
+  app.enableCors({
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
 
-  // --- SWAGGER CONFIGURATION ---
   const swaggerConfig = new DocumentBuilder()
     .setTitle('RBAC System API')
     .setDescription('The RBAC System API description')
     .setVersion('1.0')
-    .addBearerAuth() // Thêm nút "Authorize" để nhập Token
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
-  // Đường dẫn tài liệu: /docs
   SwaggerModule.setup('docs', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true, // Giữ token khi refresh trang
-    },
+    swaggerOptions: { persistAuthorization: true },
   });
-  // -----------------------------
 
-  const port: number = config.get('app.port', 3000);
+  const port: number = config.get('app.port', 8080);
   await app.listen(port);
 
-  console.log(`🚀 API is running on: http://localhost:${port}/${prefix}`);
-  console.log(`📚 Swagger Docs:      http://localhost:${port}/docs`);
-  console.log(
-    `📊 Health check:      http://localhost:${port}/${prefix}/test/health`,
-  );
+  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, {
+    context: 'Bootstrap',
+  });
+  logger.info(`📂 Static Files on:   http://localhost:${port}/models`, {
+    context: 'Bootstrap',
+  });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 bootstrap().catch((err) => console.error('Err::', err['message']));
 ```
 
@@ -162,6 +195,12 @@ import {
   type ILogger,
   LOGGER_TOKEN,
 } from '@core/shared/application/ports/logger.port';
+import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
+
+export type AuthResponse = {
+  accessToken: string;
+  user: ReturnType<User['toJSON']>;
+};
 
 @Injectable()
 export class AuthenticationService {
@@ -179,7 +218,7 @@ export class AuthenticationService {
     password: string;
     ip?: string;
     userAgent?: string;
-  }): Promise<any> {
+  }): Promise<AuthResponse> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
     if (!user || !user.isActive)
@@ -231,14 +270,14 @@ export class AuthenticationService {
     return user.toJSON();
   }
 
-  async register(data: any): Promise<any> {
+  async register(data: RegisterDto): Promise<AuthResponse> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
     const hashedPassword = await PasswordUtil.hash(data.password);
 
     const newUser = new User(
-      undefined,
+      data.id,
       data.username,
       data.email,
       hashedPassword,
@@ -257,9 +296,6 @@ export class AuthenticationService {
         throw new InternalServerErrorException('Failed to generate User ID');
 
       this.logger.info('Register:::');
-      await this.eventBus.publish(
-        new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
-      );
 
       const payload: JwtPayload = {
         sub: savedUser.id,
@@ -283,6 +319,7 @@ export class AuthenticationService {
 
       await this.sessionRepository.create(session, tx);
 
+      // Publish Event inside transaction (or use Outbox pattern for better reliability)
       await this.eventBus.publish(
         new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
       );
@@ -350,6 +387,7 @@ import { Injectable, ExecutionContext } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -360,6 +398,18 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   canActivate(
     context: ExecutionContext,
   ): boolean | Promise<boolean> | Observable<boolean> {
+    // 1. Kiểm tra xem route hiện tại (hoặc class controller) có gắn cờ @Public không
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    // 2. Nếu là Public -> Cho qua luôn (return true)
+    if (isPublic) {
+      return true;
+    }
+
+    // 3. Nếu không -> Bắt buộc check Token (gọi logic mặc định của Passport)
     return super.canActivate(context);
   }
 }
@@ -769,19 +819,28 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-// FIX IMPORT: Import cả Token và Interface
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { PasswordUtil } from '../../../shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
+import { UserProfile } from '../../domain/types/user-profile.type';
+
+export interface CreateUserParams {
+  id: number;
+  username: string;
+  email?: string;
+  password?: string;
+  fullName: string;
+}
 
 @Injectable()
 export class UserService {
   constructor(
-    // FIX INJECT: Dùng Symbol IUserRepository
     @Inject(IUserRepository) private userRepository: IUserRepository,
   ) {}
 
-  async createUser(data: any): Promise<any> {
+  async createUser(
+    data: CreateUserParams,
+  ): Promise<ReturnType<User['toJSON']>> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
@@ -828,7 +887,7 @@ export class UserService {
 
   async updateUserProfile(
     userId: number,
-    profileData: any,
+    profileData: UserProfile,
   ): Promise<ReturnType<User['toJSON']>> {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -1357,12 +1416,17 @@ export class PermissionService {
 ## File: src/modules/rbac/application/services/role.service.ts
 ```
 import { Injectable, Inject } from '@nestjs/common';
-// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
 } from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
+
+export interface CreateRoleParams {
+  name: string;
+  description?: string;
+  isSystem?: boolean;
+}
 
 export interface AccessControlItem {
   role: string;
@@ -1374,11 +1438,11 @@ export interface AccessControlItem {
 @Injectable()
 export class RoleService {
   constructor(
-    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
-    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
   ) {}
 
-  async createRole(data: any): Promise<Role> {
+  async createRole(data: CreateRoleParams): Promise<Role> {
     const existing = await this.roleRepo.findByName(data.name);
     if (existing) throw new Error('Role exists');
     const role = new Role(
@@ -1418,27 +1482,37 @@ export class RoleService {
 ## File: src/modules/rbac/application/services/rbac-manager.service.ts
 ```
 import { Injectable, Inject, Logger } from '@nestjs/common';
-// FIX IMPORT
 import {
   IRoleRepository,
   IPermissionRepository,
 } from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
 import { Permission } from '../../domain/entities/permission.entity';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+
+// Helper type for CSV Row
+type RbacCsvRow = {
+  role: string;
+  resource: string;
+  action: string;
+  attributes: string;
+  description: string;
+};
 
 @Injectable()
 export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
 
   constructor(
-    @Inject(IRoleRepository) private roleRepo: IRoleRepository, // FIX: Symbol
-    @Inject(IPermissionRepository) private permRepo: IPermissionRepository, // FIX: Symbol
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
+    @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
   ) {}
 
   async importFromCsv(csvContent: string): Promise<any> {
-    const lines = csvContent
-      .split(/\r?\n/)
-      .filter((line) => line.trim() !== '');
+    // Sử dụng Adapter để parse (Implementation nên dùng thư viện csv-parse)
+    // Hiện tại adapter đang simple split, nhưng service đã decouple
+    let lines = csvContent.split(/\r?\n/).filter((line) => line.trim() !== '');
     if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
       lines.shift();
     }
@@ -1524,7 +1598,6 @@ import {
   ApiTags,
   ApiOperation,
   ApiBearerAuth,
-  ApiBody,
   ApiResponse,
 } from '@nestjs/swagger';
 import { RoleService } from '../../application/services/role.service';
@@ -1533,8 +1606,9 @@ import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard
 import { PermissionGuard } from '../guards/permission.guard';
 import { Permissions } from '../decorators/permission.decorator';
 import { RoleResponseDto } from '../dtos/role.dto';
-import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port'; // Import DTO
-import type { ILogger } from '@core/shared/application/ports/logger.port'; // Import DTO
+import { AssignRoleDto } from '../dtos/assign-role.dto';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
 
 @ApiTags('RBAC - Roles')
 @ApiBearerAuth()
@@ -1557,24 +1631,14 @@ export class RoleController {
   @Permissions('rbac:manage')
   async getAllRoles(): Promise<RoleResponseDto[]> {
     const roles = await this.roleService.findAllRoles();
-    // this.logger.info('Roles::', roles);
     return roles.map((role) => RoleResponseDto.fromDomain(role));
   }
 
   @ApiOperation({ summary: 'Assign role to user' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        userId: { type: 'number', example: 1005 },
-        roleId: { type: 'number', example: 2 },
-      },
-    },
-  })
   @Post('assign')
   @Permissions('rbac:manage')
-  async assignRole(@Body() body: { userId: number; roleId: number }) {
-    await this.permissionService.assignRole(body.userId, body.roleId, 1);
+  async assignRole(@Body() dto: AssignRoleDto) {
+    await this.permissionService.assignRole(dto.userId, dto.roleId, 1);
     return { success: true, message: 'Role assigned' };
   }
 }
@@ -2110,6 +2174,22 @@ export class RoleResponseDto {
 }
 ```
 
+## File: src/modules/rbac/infrastructure/dtos/assign-role.dto.ts
+```
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNumber } from 'class-validator';
+
+export class AssignRoleDto {
+  @ApiProperty({ example: 1005, description: 'User ID' })
+  @IsNumber()
+  userId: number;
+
+  @ApiProperty({ example: 2, description: 'Role ID' })
+  @IsNumber()
+  roleId: number;
+}
+```
+
 ## File: src/modules/rbac/rbac.module.ts
 ```
 import { Module } from '@nestjs/common';
@@ -2251,22 +2331,28 @@ import { ConfigModule } from '@nestjs/config';
 import { DrizzleTransactionManager } from '@core/shared/infrastructure/persistence/drizzle-transaction.manager';
 import { DrizzleModule } from '@database/drizzle.module';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
-import { EventBusModule } from '@core/shared/infrastructure/event-bus/event-bus.module'; // Import Module Mới
+import { EventBusModule } from '@core/shared/infrastructure/event-bus/event-bus.module';
+import { CsvParserAdapter } from '@core/shared/infrastructure/adapters/csv-parser.adapter';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
 
 @Global()
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
     DrizzleModule,
-    EventBusModule, // ✅ Sử dụng EventBusModule chuyên biệt
+    EventBusModule,
   ],
   providers: [
     {
       provide: ITransactionManager,
       useClass: DrizzleTransactionManager,
     },
+    {
+      provide: IFileParser,
+      useClass: CsvParserAdapter,
+    },
   ],
-  exports: [ConfigModule, ITransactionManager, EventBusModule],
+  exports: [ConfigModule, ITransactionManager, EventBusModule, IFileParser],
 })
 export class SharedModule {}
 ```
@@ -2633,7 +2719,7 @@ export class WinstonFactory {
       transports.push(
         new winston.transports.Console({
           format: winston.format.combine(
-            winston.format.timestamp({ format: 'HH:mm:ss' }),
+            winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
             masker(),
             winston.format.colorize({ all: true }),
             consoleFormat,
@@ -2654,7 +2740,7 @@ export class WinstonFactory {
 
 ## File: src/modules/logging/infrastructure/winston/winston-logger.adapter.ts
 ```
-import { Injectable, Inject, Scope } from '@nestjs/common';
+import { Injectable, Inject, LoggerService } from '@nestjs/common';
 import * as winston from 'winston';
 import {
   ILogger,
@@ -2662,68 +2748,115 @@ import {
 } from '@core/shared/application/ports/logger.port';
 import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
 
-// CHUYỂN VỀ DEFAULT SCOPE (SINGLETON) - TỐT CHO HIỆU NĂNG
 @Injectable()
-export class WinstonLoggerAdapter implements ILogger {
+export class WinstonLoggerAdapter implements ILogger, LoggerService {
   private context: LogContext = {};
 
   constructor(
     @Inject('WINSTON_LOGGER') private readonly winstonLogger: winston.Logger,
   ) {}
 
-  // Hàm này tự động lấy RequestID từ "túi thần kỳ" ALS
   private getTraceInfo() {
     return {
       requestId: RequestContextService.getRequestId(),
-      // Có thể lấy thêm userId nếu lưu vào ALS sau bước Auth
     };
   }
 
-  debug(message: string, context?: LogContext): void {
-    this.log('debug', message, context);
+  // --- Helper để chuẩn hóa tham số từ NestJS Core ---
+  private normalizeParams(message: any, ...optionalParams: any[]) {
+    let contextObj: LogContext = {};
+
+    // Xử lý trường hợp NestJS gửi context là string ở tham số cuối
+    if (optionalParams.length > 0) {
+      const lastParam = optionalParams[optionalParams.length - 1];
+      if (typeof lastParam === 'string') {
+        contextObj.context = lastParam; // Gán vào field context
+        // Bỏ string context ra khỏi params để không bị trùng
+        // optionalParams.pop();
+      } else if (typeof lastParam === 'object') {
+        contextObj = { ...lastParam };
+      }
+    }
+
+    // Nếu message là object (NestJS hay log object), stringify nó hoặc gán vào meta
+    const msgStr =
+      typeof message === 'string' ? message : JSON.stringify(message);
+
+    return { msgStr, contextObj };
   }
 
-  info(message: string, context?: LogContext): void {
-    this.log('info', message, context);
+  // --- Implementation cho LoggerService (NestJS Core gọi cái này) ---
+
+  log(message: any, ...optionalParams: any[]) {
+    // Map 'log' của Nest sang 'info' của Winston
+    this.info(message, ...optionalParams);
   }
 
-  warn(message: string, context?: LogContext): void {
-    this.log('warn', message, context);
+  // --- Implementation cho ILogger (App của ta gọi cái này) ---
+
+  debug(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('debug', msgStr, contextObj);
   }
 
-  error(message: string, error?: Error, context?: LogContext): void {
-    const errorMetadata = error
-      ? {
-          name: error.name,
-          message: error.message,
-          stack: error.stack,
-        }
-      : undefined;
-
-    // Merge error metadata vào context để in ra JSON đẹp
-    this.log('error', message, { ...context, ...errorMetadata });
+  info(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('info', msgStr, contextObj);
   }
+
+  warn(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('warn', msgStr, contextObj);
+  }
+
+  error(message: any, ...optionalParams: any[]): void {
+    // NestJS thường gửi stack trace ở tham số thứ 2 hoặc 3
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+
+    // Tìm Error object nếu có trong params
+    const errorObj = optionalParams.find((p) => p instanceof Error);
+    const meta = { ...contextObj };
+
+    if (errorObj) {
+      meta.stack = errorObj.stack;
+      meta.error = errorObj.message;
+    }
+
+    this.callWinston('error', msgStr, meta);
+  }
+
+  // --- Context Methods ---
 
   withContext(context: LogContext): ILogger {
-    // Tạo logger con, vẫn giữ bản chất singleton nhưng merge context tĩnh
     const child = new WinstonLoggerAdapter(this.winstonLogger);
     child.context = { ...this.context, ...context };
     return child;
   }
 
   createChildLogger(module: string): ILogger {
-    return this.withContext({ label: module });
+    return this.withContext({ context: module }); // Map 'label' hoặc 'context' tùy config winston
   }
 
-  private log(level: string, message: string, context?: LogContext): void {
-    // Merge 3 nguồn context:
-    // 1. Context tĩnh của class (this.context)
-    // 2. Trace Info động từ ALS (requestId)
-    // 3. Context truyền vào hàm log
-
+  private callWinston(
+    level: string,
+    message: string,
+    context?: LogContext,
+  ): void {
     this.winstonLogger.log(level, message, {
       ...this.context,
-      ...this.getTraceInfo(), // Tự động inject RequestID
+      ...this.getTraceInfo(),
       ...context,
     });
   }
@@ -2881,6 +3014,7 @@ export class NotificationService {
   }
 
   async getUserNotifications(userId: number) {
+    this.logger.info('user::', { userId });
     return this.repo.findByUserId(userId);
   }
 }
@@ -2978,8 +3112,15 @@ export class NotificationMapper {
 
 ## File: src/modules/notification/infrastructure/persistence/drizzle-notification.repository.ts
 ```
-import { Injectable } from '@nestjs/common';
-import { eq, desc } from 'drizzle-orm';
+import { Inject, Injectable } from '@nestjs/common';
+import { eq, desc, InferSelectModel } from 'drizzle-orm'; // 1. Import InferSelectModel
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
 import { INotificationRepository } from '../../domain/repositories/notification.repository';
 import { Notification } from '../../domain/entities/notification.entity';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
@@ -2987,11 +3128,21 @@ import { notifications } from '@database/schema';
 import { NotificationMapper } from './mappers/notification.mapper';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
+// 2. Định nghĩa kiểu trả về từ DB để tránh 'any'
+type NotificationRecord = InferSelectModel<typeof notifications>;
+
 @Injectable()
 export class DrizzleNotificationRepository
   extends DrizzleBaseRepository
   implements INotificationRepository
 {
+  constructor(
+    @Inject(DRIZZLE) db: NodePgDatabase<typeof schema>,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {
+    super(db);
+  }
+
   async save(
     notification: Notification,
     tx?: Transaction,
@@ -2999,7 +3150,9 @@ export class DrizzleNotificationRepository
     const db = this.getDb(tx);
     const data = NotificationMapper.toPersistence(notification);
 
-    let result;
+    // 3. Khai báo kiểu rõ ràng cho result -> Fix lỗi "Variable implicitly has an 'any' type"
+    let result: NotificationRecord[];
+
     if (data.id) {
       result = await db
         .update(notifications)
@@ -3007,22 +3160,38 @@ export class DrizzleNotificationRepository
         .where(eq(notifications.id, data.id))
         .returning();
     } else {
-      const { id, ...insertData } = data;
-      result = await db
-        .insert(notifications)
-        .values(insertData as typeof notifications.$inferInsert)
-        .returning();
+      // 4. Fix lỗi "'id' assigned but never used": Đổi tên thành '_id' (quy ước biến không dùng)
+      const { id: _id, ...insertData } = data;
+
+      // 5. Fix lỗi "Assertion is unnecessary": Bỏ đoạn 'as typeof ...'
+      result = await db.insert(notifications).values(insertData).returning();
     }
-    return NotificationMapper.toDomain(result[0])!;
+
+    // FIX: Kiểm tra kết quả trả về thay vì dùng '!'
+    const mapped = NotificationMapper.toDomain(result[0]);
+
+    // Nếu mapper trả về null (trường hợp hiếm), ném lỗi để crash sớm thay vì trả về null sai type
+    if (!mapped) {
+      throw new Error('Failed to map notification result from DB');
+    }
+
+    return mapped;
   }
 
   async findByUserId(userId: number): Promise<Notification[]> {
+    // 7. Đảm bảo biến userId được sử dụng trong câu query
     const results = await this.db
       .select()
       .from(notifications)
       .where(eq(notifications.userId, userId))
       .orderBy(desc(notifications.createdAt));
-    return results.map((r) => NotificationMapper.toDomain(r)!);
+
+    // 8. Format code để fix lỗi Prettier
+    // return results.map((r) => NotificationMapper.toDomain(r)!);
+    // FIX: Map dữ liệu và lọc bỏ null một cách an toàn (Type Guard)
+    return results
+      .map((r) => NotificationMapper.toDomain(r))
+      .filter((n): n is Notification => n !== null);
   }
 }
 ```
@@ -3054,19 +3223,26 @@ export class ConsoleEmailAdapter implements IEmailSender {
 
 ## File: src/modules/notification/infrastructure/controllers/notification.controller.ts
 ```
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
 import { User } from '@modules/user/domain/entities/user.entity';
 import { NotificationService } from '../../application/services/notification.service';
+import {
+  type ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationController {
-  constructor(private readonly service: NotificationService) {}
+  constructor(
+    private readonly service: NotificationService,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
 
   @ApiOperation({ summary: 'Get my notifications' })
   @Get()
@@ -3105,6 +3281,1243 @@ import { IEmailSender } from './application/ports/email-sender.port';
   exports: [NotificationService],
 })
 export class NotificationModule {}
+```
+
+## File: src/modules/dental/application/services/dental.service.ts
+```
+import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Piscina from 'piscina';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const AdmZip = require('adm-zip');
+import { v4 as uuidv4 } from 'uuid';
+import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
+import { parseMovementExcel } from '../utils/movement.parser';
+
+export interface ModelStep {
+  index: number;
+  maxillary: string | null;
+  mandibular: string | null;
+  // ✅ NEW: Thêm trường teethData trả về Frontend
+  teethData?: Record<string, any>;
+}
+
+@Injectable()
+export class DentalService {
+  private readonly uploadDir: string;
+  private readonly outputDir: string;
+  private readonly encryptionKey: string;
+  private readonly appUrl: string;
+
+  constructor(
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(PISCINA_POOL) private readonly pool: Piscina,
+    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
+    private readonly config: ConfigService,
+  ) {
+    const rawUploadDir = this.config.get('dental.uploadDir');
+    const rawOutputDir = this.config.get('dental.outputDir');
+    this.appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, "");
+
+    if (!rawUploadDir || !rawOutputDir) throw new Error('Dental configuration missing');
+
+    this.uploadDir = path.resolve(rawUploadDir);
+    this.outputDir = path.resolve(rawOutputDir);
+    this.encryptionKey = this.config.get('dental.encryptionKey')!;
+
+    fs.ensureDirSync(this.uploadDir);
+    fs.ensureDirSync(this.outputDir);
+  }
+
+  // ... (processZipUpload giữ nguyên) ...
+  async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const caseId = await this.orthoRepo.createFullCase({
+        patientName: dto.patientName,
+        patientCode: dto.patientCode,
+        clinicName: dto.clinicName,
+        doctorName: dto.doctorName,
+        gender: dto.gender,
+        productType: dto.productType,
+        notes: dto.notes
+    });
+
+    this.logger.info(`Processing upload for PatientCode: ${dto.patientCode} -> CaseID: ${caseId}`);
+
+    const jobId = uuidv4();
+    const extractPath = path.join(this.uploadDir, `extract_${jobId}`);
+
+    try {
+        const zip = new AdmZip(file.path);
+        zip.extractAllTo(extractPath, true);
+
+        const objFiles = await this.findFilesRecursively(extractPath, '.obj');
+        // if (objFiles.length === 0) throw new Error("No .obj files found"); // Cho phép upload 0 file nếu chỉ muốn tạo case
+
+        const tasks = objFiles.map(objPath => {
+            const baseName = path.basename(objPath, '.obj');
+            const parentDirPath = path.dirname(objPath);
+            const parentDirName = path.basename(parentDirPath);
+
+            let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
+            if (baseName.toLowerCase().includes('mandibular')) type = 'Mandibular';
+
+            let index = 0;
+            const explicitFolderMatch = parentDirName.match(/(?:Subsetup|Stage|Step)[^0-9]*(\d+)/i);
+            const fileNumberMatch = baseName.match(/[ _-](\d+)$/);
+
+            if (explicitFolderMatch) index = parseInt(explicitFolderMatch[1], 10);
+            else if (fileNumberMatch) index = parseInt(fileNumberMatch[1], 10);
+            else if (/^\d+$/.test(parentDirName)) index = parseInt(parentDirName, 10);
+
+            const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
+            const targetDir = path.join(this.outputDir, caseId, type);
+
+            return {
+                objFilePath: objPath,
+                outputDir: targetDir,
+                baseName: standardizedName,
+                encryptionKey: this.encryptionKey,
+                config: {
+                    ratio: this.config.get('dental.simplificationRatio'),
+                    threshold: this.config.get('dental.errorThreshold'),
+                    timeout: this.config.get('dental.timeout'),
+                },
+                meta: { index, type }
+            };
+        });
+
+        await Promise.allSettled(tasks.map(t => this.pool.run(t)));
+        return { message: 'Processing completed', caseId: caseId, patientCode: dto.patientCode };
+    } catch (error: any) {
+        this.logger.error(`Error processing case ${caseId}`, error);
+        throw new BadRequestException(`Processing failed: ${error.message}`);
+    } finally {
+        await Promise.all([ fs.remove(extractPath).catch(() => {}), fs.remove(file.path).catch(() => {}) ]);
+    }
+  }
+
+  // ✅ NEW: Xử lý Upload Excel Movement
+  async processMovementExcel(file: Express.Multer.File, caseId: string) {
+      this.logger.info(`Processing Movement Excel for Case: ${caseId}`);
+      try {
+          const stepsDataMap = parseMovementExcel(file.buffer);
+          let count = 0;
+
+          // Lưu từng step vào DB
+          for (const [stepIndex, teethData] of stepsDataMap.entries()) {
+              await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+              count++;
+          }
+
+          this.logger.info(`Updated movement data for ${count} steps.`);
+          return { message: 'Movement data updated successfully', stepsCount: count };
+
+      } catch (error: any) {
+          this.logger.error(`Excel Parse Error`, error);
+          throw new BadRequestException(`Failed to parse excel: ${error.message}`);
+      }
+  }
+
+  async getCaseDetails(clientIdOrCode: string, specificCaseId?: string) {
+      if (specificCaseId) {
+           const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
+           if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
+           return this.orthoRepo.getCaseDetails(specificCaseId, true);
+      } else {
+           return this.orthoRepo.getCaseDetails(clientIdOrCode, false);
+      }
+  }
+
+  // ✅ UPDATED: List Models bao gồm cả Movement Data từ DB
+  async listModels(clientIdOrCode: string, specificCaseId?: string): Promise<ModelStep[]> {
+      let targetFolder = '';
+      let dbCaseId = ''; // ID số trong DB
+
+      if (specificCaseId) {
+          const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
+          if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
+          targetFolder = specificCaseId;
+          dbCaseId = specificCaseId;
+      } else {
+          const latestCaseId = await this.orthoRepo.findLatestCaseIdByCode(clientIdOrCode);
+          if (latestCaseId) {
+              targetFolder = latestCaseId;
+              dbCaseId = latestCaseId;
+          } else if (fs.existsSync(path.join(this.outputDir, clientIdOrCode))) {
+              targetFolder = clientIdOrCode;
+              // Legacy folder không có trong DB thì không có movement data
+          }
+      }
+
+      if (!targetFolder) return [];
+
+      // 1. Quét File System để lấy danh sách file 3D
+      const clientDir = path.join(this.outputDir, targetFolder);
+      const allEncFiles = fs.existsSync(clientDir) ? await this.findFilesRecursively(clientDir, '.enc') : [];
+
+      // 2. Query DB để lấy Movement Data (nếu có CaseID hợp lệ)
+      let dbSteps: any[] = [];
+      if (dbCaseId && !isNaN(Number(dbCaseId))) {
+          dbSteps = await this.orthoRepo.getStepsByCaseId(Number(dbCaseId));
+      }
+
+      // 3. Merge Data (File System + DB)
+      const stepsMap = new Map<number, ModelStep>();
+
+      // Populate từ DB trước (để lấy teethData)
+      dbSteps.forEach(dbStep => {
+          if (!stepsMap.has(dbStep.stepIndex)) {
+              stepsMap.set(dbStep.stepIndex, {
+                  index: dbStep.stepIndex,
+                  maxillary: null,
+                  mandibular: null,
+                  teethData: dbStep.teethData // ✅ Attach Data
+              });
+          }
+      });
+
+      // Populate từ File System (để lấy URL file)
+      allEncFiles.forEach(fullPath => {
+          const filename = path.basename(fullPath).toLowerCase();
+          const relativePath = path.relative(this.outputDir, fullPath);
+          const urlPath = relativePath.split(path.sep).map(encodeURIComponent).join('/');
+          const url = `${this.appUrl}/models/${urlPath}`;
+
+          let index = 0;
+          let type: 'maxillary' | 'mandibular' | null = null;
+          if (filename.includes('maxillary')) type = 'maxillary';
+          else if (filename.includes('mandibular')) type = 'mandibular';
+
+          if (!type) return;
+
+          const fileMatch = filename.match(/(\d+)/);
+          if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+          if (!stepsMap.has(index)) {
+              stepsMap.set(index, { index, maxillary: null, mandibular: null });
+          }
+          const entry = stepsMap.get(index)!;
+          if (type === 'maxillary') entry.maxillary = url;
+          else entry.mandibular = url;
+      });
+
+      return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+  }
+
+  async getHistory(patientCode: string) {
+      return this.orthoRepo.findCasesByPatientCode(patientCode);
+  }
+
+  private async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
+    let results: string[] = [];
+    try {
+        const list = await fs.readdir(dir);
+        for (const file of list) {
+            const fullPath = path.resolve(dir, file);
+            const stat = await fs.stat(fullPath);
+            if (stat && stat.isDirectory()) {
+                results = results.concat(await this.findFilesRecursively(fullPath, ext));
+            } else if (file.toLowerCase().endsWith(ext)) {
+                results.push(fullPath);
+            }
+        }
+    } catch (e) { }
+    return results;
+  }
+}
+```
+
+## File: src/modules/dental/application/utils/movement.parser.ts
+```
+import * as XLSX from 'xlsx';
+import { BadRequestException } from '@nestjs/common';
+
+// Cấu trúc JSON lưu vào DB
+export interface ToothMoveData {
+  extrusion: number;
+  translationX: number;
+  translationY: number;
+  rotation: number;
+  angulation: number;
+  torque: number;
+}
+
+export const parseMovementExcel = (buffer: Buffer): Map<number, Record<string, ToothMoveData>> => {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+
+    // Chuyển sang JSON: [[Step, Tooth, Ext...], [1, 11, 0.1...]]
+    const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
+
+    // Map: StepIndex -> { ToothID: Data }
+    const stepsMap = new Map<number, Record<string, ToothMoveData>>();
+
+    jsonData.forEach((row) => {
+        // Chuẩn hóa key (viết thường, bỏ khoảng trắng) để dễ map
+        const cleanRow: any = {};
+        Object.keys(row).forEach(k => {
+            cleanRow[k.toLowerCase().trim().replace(/_/g, '')] = row[k];
+        });
+
+        // Lấy Step và Tooth (bắt buộc)
+        const step = parseInt(cleanRow['step'] || cleanRow['stage']);
+        const tooth = String(cleanRow['tooth'] || cleanRow['toothid']);
+
+        if (isNaN(step) || !tooth) return;
+
+        if (!stepsMap.has(step)) {
+            stepsMap.set(step, {});
+        }
+
+        const stepData = stepsMap.get(step)!;
+
+        // Lưu dữ liệu vào object
+        stepData[tooth] = {
+            extrusion: parseFloat(cleanRow['extrusion'] || 0),
+            translationX: parseFloat(cleanRow['translationx'] || cleanRow['transx'] || 0),
+            translationY: parseFloat(cleanRow['translationy'] || cleanRow['transy'] || 0),
+            rotation: parseFloat(cleanRow['rotation'] || cleanRow['rot'] || 0),
+            angulation: parseFloat(cleanRow['angulation'] || cleanRow['ang'] || 0),
+            torque: parseFloat(cleanRow['torque'] || cleanRow['tor'] || 0),
+        };
+    });
+
+    return stepsMap;
+  } catch (error: any) {
+    throw new BadRequestException('Invalid Excel file format. ' + error.message);
+  }
+};
+```
+
+## File: src/modules/dental/infrastructure/controllers/dental.controller.ts
+```
+import { Controller, Post, Get, Query, UploadedFile, UseInterceptors, UseGuards, Body } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiConsumes, ApiBody, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { diskStorage } from 'multer';
+import * as fs from 'fs-extra';
+import { DentalService } from '../../application/services/dental.service';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { UploadCaseDto } from '../dtos/upload-case.dto';
+import { Public } from '@modules/auth/infrastructure/decorators/public.decorator';
+
+const uploadDir = 'uploads/temp';
+try { fs.ensureDirSync(uploadDir); } catch (e) {}
+
+const storage = diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+});
+
+@ApiTags('Dental 3D')
+@ApiBearerAuth()
+@Controller('dental')
+@UseGuards(JwtAuthGuard)
+export class DentalController {
+  constructor(private readonly dentalService: DentalService) {}
+
+  @Post('upload')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: UploadCaseDto })
+  @UseInterceptors(FileInterceptor('file', { storage }))
+  async uploadZip(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadCaseDto
+  ) {
+    return this.dentalService.processZipUpload(file, dto);
+  }
+
+  // ✅ NEW: API Upload Excel Data
+  @Post('upload-movement')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' }, caseId: { type: 'string' } } } })
+  @UseInterceptors(FileInterceptor('file', { storage }))
+  async uploadMovement(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('caseId') caseId: string
+  ) {
+    return this.dentalService.processMovementExcel(file, caseId);
+  }
+
+  @Public()
+  @Get('models')
+  @ApiQuery({ name: 'clientId', description: 'Patient Code' })
+  @ApiQuery({ name: 'caseId', required: false })
+  async listModels(
+    @Query('clientId') clientId: string,
+    @Query('caseId') caseId?: string
+  ) {
+      return this.dentalService.listModels(clientId, caseId);
+  }
+
+  @Public()
+  @Get('case-details')
+  @ApiQuery({ name: 'clientId', description: 'Patient Code' })
+  @ApiQuery({ name: 'caseId', required: false })
+  async getCaseDetails(
+    @Query('clientId') clientId: string,
+    @Query('caseId') caseId?: string
+  ) {
+      return this.dentalService.getCaseDetails(clientId, caseId);
+  }
+
+  @Get('history')
+  @ApiQuery({ name: 'clientId', description: 'Patient Code' })
+  async getHistory(@Query('clientId') clientId: string) {
+      return this.dentalService.getHistory(clientId);
+  }
+}
+```
+
+## File: src/modules/dental/infrastructure/workers/conversion.worker.ts
+```
+import * as path from 'path';
+import * as fs from 'fs-extra';
+import { execFile } from 'child_process';
+import * as util from 'util';
+import * as crypto from 'crypto';
+import { pipeline } from 'stream/promises';
+
+const execFilePromise = util.promisify(execFile);
+
+// ==========================================
+// 1. CONSTANTS & CONFIG
+// ==========================================
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
+const MAX_SEARCH_DEPTH = 10;
+
+// ==========================================
+// 2. CUSTOM EXCEPTIONS
+// ==========================================
+export class WorkerBaseError extends Error {
+  constructor(
+    message: string,
+    public readonly originalError?: unknown,
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    if (originalError instanceof Error) {
+      this.stack += `\nCaused by: ${originalError.stack}`;
+    }
+  }
+}
+
+export class FileSystemError extends WorkerBaseError {}
+export class ConversionProcessError extends WorkerBaseError {}
+export class EncryptionError extends WorkerBaseError {}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+
+  if (typeof error === 'object' && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // ignore
+    }
+  }
+  return String(error as any);
+}
+
+// ==========================================
+// 3. INTERFACES
+// ==========================================
+export interface ConversionConfig {
+  ratio: number;
+  threshold: number;
+  timeout: number;
+}
+
+export interface ConversionTask {
+  objFilePath: string;
+  outputDir: string;
+  baseName: string;
+  encryptionKey: string;
+  config: ConversionConfig;
+}
+
+export interface WorkerResult {
+  success: boolean;
+  path: string;
+}
+
+interface Binaries {
+  obj2gltf: string;
+  gltfTransform: string;
+  gltfPipeline: string;
+}
+
+// ==========================================
+// 4. HELPER FUNCTIONS
+// ==========================================
+
+function findProjectRoot(startDir: string): string {
+  let currentDir = path.resolve(startDir);
+  for (let i = 0; i < MAX_SEARCH_DEPTH; i++) {
+    if (fs.existsSync(path.join(currentDir, 'package.json'))) {
+      return currentDir;
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) break;
+    currentDir = parentDir;
+  }
+  return startDir;
+}
+
+function resolveBinaries(): Binaries {
+  const projectRoot = findProjectRoot(process.cwd());
+  const binPath = path.resolve(projectRoot, 'node_modules', '.bin');
+  const isWin = process.platform === 'win32';
+
+  const getBinPath = (cmd: string) =>
+    path.join(binPath, isWin ? `${cmd}.cmd` : cmd);
+
+  const bins = {
+    obj2gltf: getBinPath('obj2gltf'),
+    gltfTransform: getBinPath('gltf-transform'),
+    gltfPipeline: getBinPath('gltf-pipeline'),
+  };
+
+  if (!fs.existsSync(bins.obj2gltf))
+    throw new FileSystemError(`Binary not found: ${bins.obj2gltf}`);
+
+  return bins;
+}
+
+async function runCommand(
+  bin: string,
+  args: string[],
+  timeout: number,
+): Promise<void> {
+  try {
+    await execFilePromise(bin, args, { timeout });
+  } catch (error: unknown) {
+    const cmdName = path.basename(bin);
+    throw new ConversionProcessError(
+      `Command '${cmdName}' failed: ${getErrorMessage(error)}`,
+      error,
+    );
+  }
+}
+
+async function encryptFileStream(
+  inputPath: string,
+  outputPath: string,
+  keyHex: string,
+): Promise<void> {
+  try {
+    const key = Buffer.from(keyHex);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+
+    const readStream = fs.createReadStream(inputPath);
+    const writeStream = fs.createWriteStream(outputPath);
+
+    // FIX: Arrow function để khớp type
+    if (!writeStream.write(iv)) {
+      await new Promise<void>((resolve) =>
+        writeStream.once('drain', () => resolve()),
+      );
+    }
+
+    await pipeline(readStream, cipher, writeStream, { end: false });
+
+    const authTag = cipher.getAuthTag();
+
+    await new Promise<void>((resolve, reject) => {
+      writeStream.write(authTag, (err) => {
+        if (err) return reject(err);
+        writeStream.end(() => resolve());
+      });
+    });
+  } catch (error: unknown) {
+    throw new EncryptionError(
+      `Encryption failed for ${inputPath}: ${getErrorMessage(error)}`,
+      error,
+    );
+  }
+}
+
+// ==========================================
+// 5. MAIN LOGIC
+// ==========================================
+
+async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
+  const { objFilePath, outputDir, baseName, encryptionKey, config } = task;
+  const tempDir = path.dirname(objFilePath);
+
+  const paths = {
+    initialGlb: path.join(tempDir, `${baseName}.initial.glb`),
+    simplifiedGlb: path.join(tempDir, `${baseName}.simplified.glb`),
+    optimizedGlb: path.join(tempDir, `${baseName}.optimized.glb`),
+    finalEncrypted: path.join(outputDir, `${baseName}.optimized.glb.enc`),
+  };
+
+  const tempFiles = [paths.initialGlb, paths.simplifiedGlb, paths.optimizedGlb];
+
+  try {
+    if (!fs.existsSync(objFilePath)) {
+      throw new FileSystemError(`Input file not found: ${objFilePath}`);
+    }
+
+    const bins = resolveBinaries();
+
+    await runCommand(
+      bins.obj2gltf,
+      ['-i', objFilePath, '-o', paths.initialGlb, '--binary'],
+      config.timeout,
+    );
+
+    await runCommand(
+      bins.gltfTransform,
+      [
+        'simplify',
+        paths.initialGlb,
+        paths.simplifiedGlb,
+        '--ratio',
+        config.ratio.toString(),
+        '--error',
+        config.threshold.toString(),
+      ],
+      config.timeout,
+    );
+
+    await runCommand(
+      bins.gltfPipeline,
+      [
+        '-i',
+        paths.simplifiedGlb,
+        '-o',
+        paths.optimizedGlb,
+        '--draco.compressionLevel=10',
+      ],
+      config.timeout,
+    );
+
+    await fs.ensureDir(outputDir);
+    await encryptFileStream(
+      paths.optimizedGlb,
+      paths.finalEncrypted,
+      encryptionKey,
+    );
+
+    return { success: true, path: paths.finalEncrypted };
+  } catch (error: unknown) {
+    if (error instanceof WorkerBaseError) {
+      throw error;
+    }
+    throw new Error(`Unexpected Worker Error: ${getErrorMessage(error)}`);
+  } finally {
+    await Promise.all(
+      tempFiles.map((f) =>
+        fs.remove(f).catch(() => {
+          /* ignore */
+        }),
+      ),
+    );
+  }
+}
+
+export default convertAndEncrypt;
+```
+
+## File: src/modules/dental/infrastructure/workers/piscina.provider.ts
+```
+import { Provider, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-assignment
+const Piscina = require('piscina');
+
+export const PISCINA_POOL = 'PISCINA_POOL';
+
+export const PiscinaProvider: Provider = {
+  provide: PISCINA_POOL,
+  useFactory: (config: ConfigService) => {
+    const logger = new Logger('PiscinaProvider');
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    const projectRoot = process.cwd();
+    const workerRelativePath =
+      'src/modules/dental/infrastructure/workers/conversion.worker';
+
+    let workerPath: string;
+
+    if (isProduction) {
+      const prodPath1 = path.join(
+        projectRoot,
+        'dist',
+        workerRelativePath + '.js',
+      );
+      const prodPath2 = path.join(
+        projectRoot,
+        'dist',
+        workerRelativePath.replace('src/', '') + '.js',
+      );
+
+      if (fs.existsSync(prodPath1)) {
+        workerPath = prodPath1;
+      } else if (fs.existsSync(prodPath2)) {
+        workerPath = prodPath2;
+      } else {
+        workerPath = path.join(__dirname, 'conversion.worker.js');
+      }
+    } else {
+      workerPath = path.join(projectRoot, workerRelativePath + '.ts');
+    }
+
+    if (!fs.existsSync(workerPath)) {
+      logger.error(
+        `CRITICAL: Worker file not found at calculated path: ${workerPath}`,
+      );
+      const dirContent = fs.readdirSync(__dirname).join(', ');
+      logger.error(`Dirname content: [${dirContent}]`);
+      throw new Error(`Worker file not found: ${workerPath}`);
+    }
+
+    logger.log(`🏊 Initializing Piscina with worker: ${workerPath}`);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return
+    return new Piscina({
+      filename: workerPath,
+      minThreads: config.get<number>('dental.minThreads') || 0,
+      maxThreads: config.get<number>('dental.maxThreads') || 4,
+      execArgv: workerPath.endsWith('.ts') ? ['-r', 'ts-node/register'] : [],
+    });
+  },
+  inject: [ConfigService],
+};
+```
+
+## File: src/modules/dental/infrastructure/adapters/fs-dental-storage.adapter.ts
+```
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const AdmZip = require('adm-zip');
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+
+@Injectable()
+export class FileSystemDentalStorage implements IDentalStorage {
+  private readonly uploadDir: string;
+  private readonly outputDir: string;
+
+  constructor(private readonly config: ConfigService) {
+    const rawUploadDir = this.config.get('dental.uploadDir');
+    const rawOutputDir = this.config.get('dental.outputDir');
+    if (!rawUploadDir || !rawOutputDir)
+      throw new Error('Dental Config Missing');
+
+    this.uploadDir = path.resolve(rawUploadDir);
+    this.outputDir = path.resolve(rawOutputDir);
+  }
+
+  ensureDirectories(): void {
+    fs.ensureDirSync(this.uploadDir);
+    fs.ensureDirSync(this.outputDir);
+  }
+
+  getUploadDir(): string {
+    return this.uploadDir;
+  }
+  getOutputDir(): string {
+    return this.outputDir;
+  }
+
+  async saveTempFile(file: Express.Multer.File): Promise<string> {
+    // Multer đã lưu file rồi, hàm này chỉ để confirm hoặc move nếu cần
+    return file.path;
+  }
+
+  async extractZip(zipPath: string, extractPath: string): Promise<void> {
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(extractPath, true);
+  }
+
+  async removeFile(path: string): Promise<void> {
+    await fs.remove(path).catch(() => {});
+  }
+
+  async removeDirectory(path: string): Promise<void> {
+    await fs.remove(path).catch(() => {});
+  }
+
+  async findObjFilesRecursively(dir: string): Promise<string[]> {
+    return this.findFiles(dir, '.obj');
+  }
+
+  async findEncFilesRecursively(dir: string): Promise<string[]> {
+    return this.findFiles(dir, '.enc');
+  }
+
+  private async findFiles(dir: string, ext: string): Promise<string[]> {
+    let results: string[] = [];
+    try {
+      const list = await fs.readdir(dir);
+      for (const file of list) {
+        const fullPath = path.resolve(dir, file);
+        const stat = await fs.stat(fullPath);
+        if (stat && stat.isDirectory()) {
+          results = results.concat(await this.findFiles(fullPath, ext));
+        } else if (file.toLowerCase().endsWith(ext)) {
+          results.push(fullPath);
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    return results;
+  }
+}
+```
+
+## File: src/modules/dental/infrastructure/adapters/piscina-worker.adapter.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import Piscina from 'piscina';
+import {
+  IDentalWorker,
+  ConversionJob,
+  WorkerResult,
+} from '../../domain/ports/dental-worker.port';
+import { PISCINA_POOL } from '../workers/piscina.provider';
+
+@Injectable()
+export class PiscinaDentalWorker implements IDentalWorker {
+  constructor(@Inject(PISCINA_POOL) private readonly pool: Piscina) {}
+
+  async runTask(task: ConversionJob): Promise<WorkerResult> {
+    return this.pool.run(task);
+  }
+}
+```
+
+## File: src/modules/dental/infrastructure/persistence/drizzle-ortho.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc, and, asc } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import {
+  IOrthoRepository,
+  CreateCaseParams,
+  OrthoCase,
+  FullCaseInput,
+  CaseDetailsDTO
+} from '../../domain/repositories/ortho.repository';
+import {
+  patients,
+  cases,
+  treatmentSteps,
+  clinics,
+  dentists,
+} from '@database/schema/ortho.schema';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleOrthoRepository
+  extends DrizzleBaseRepository
+  implements IOrthoRepository
+{
+  async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
+     const runInTx = async (dbTx: any) => {
+        const clinicCode = data.clinicName.toUpperCase().replace(/\s+/g, '_').substring(0, 10);
+
+        let clinicId: number;
+        const existingClinic = await dbTx.select().from(clinics).where(eq(clinics.clinicCode, clinicCode)).limit(1);
+        if (existingClinic.length > 0) {
+            clinicId = existingClinic[0].id;
+        } else {
+            const [newClinic] = await dbTx.insert(clinics).values({
+                name: data.clinicName,
+                clinicCode: clinicCode,
+            }).returning();
+            clinicId = newClinic.id;
+        }
+
+        let dentistId: number | null = null;
+        if (data.doctorName) {
+            const existingDentist = await dbTx.select().from(dentists)
+                .where(and(eq(dentists.fullName, data.doctorName), eq(dentists.clinicId, clinicId)))
+                .limit(1);
+            if (existingDentist.length > 0) {
+                dentistId = existingDentist[0].id;
+            } else {
+                const [newDentist] = await dbTx.insert(dentists).values({
+                    fullName: data.doctorName,
+                    clinicId: clinicId,
+                }).returning();
+                dentistId = newDentist.id;
+            }
+        }
+
+        let patientId: number;
+        const existingPatient = await dbTx.select().from(patients).where(eq(patients.patientCode, data.patientCode)).limit(1);
+        if (existingPatient.length > 0) {
+            patientId = existingPatient[0].id;
+        } else {
+            const [newPatient] = await dbTx.insert(patients).values({
+                fullName: data.patientName,
+                patientCode: data.patientCode,
+                clinicId: clinicId,
+                gender: data.gender,
+                birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
+            }).returning();
+            patientId = newPatient.id;
+        }
+
+        const [newCase] = await dbTx.insert(cases).values({
+            patientId: patientId,
+            dentistId: dentistId,
+            productType: data.productType,
+            status: 'PROCESSING',
+            notes: data.notes,
+            startedAt: new Date(),
+        }).returning();
+
+        return String(newCase.id);
+     };
+
+     if (tx) return runInTx(tx);
+     return this.db.transaction(runInTx);
+  }
+
+  // ✅ NEW: Hàm Update Movement Data
+  async updateStepMovementData(caseId: string, stepIndex: number, teethData: any, tx?: Transaction): Promise<void> {
+      const db = this.getDb(tx);
+      const cId = Number(caseId);
+
+      // Kiểm tra xem step đã tồn tại chưa
+      const existingStep = await db.select().from(treatmentSteps)
+          .where(and(eq(treatmentSteps.caseId, cId), eq(treatmentSteps.stepIndex, stepIndex)))
+          .limit(1);
+
+      if (existingStep.length > 0) {
+          // Update
+          await db.update(treatmentSteps)
+              .set({ teethData: teethData })
+              .where(eq(treatmentSteps.id, existingStep[0].id));
+      } else {
+          // Insert mới (nếu chưa có model nhưng có data trước)
+          await db.insert(treatmentSteps).values({
+              caseId: cId,
+              stepIndex: stepIndex,
+              teethData: teethData
+          });
+      }
+  }
+
+  async getCaseDetails(identifier: string, isCaseId: boolean, tx?: Transaction): Promise<CaseDetailsDTO | null> {
+      const db = this.getDb(tx);
+      let selection = {
+          patientName: patients.fullName,
+          patientCode: patients.patientCode,
+          caseId: cases.id,
+          doctorName: dentists.fullName,
+          clinicName: clinics.name,
+          createdAt: cases.createdAt
+      };
+
+      let query;
+      if (isCaseId) {
+          query = db.select(selection).from(cases)
+              .innerJoin(patients, eq(cases.patientId, patients.id))
+              .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+              .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+              .where(eq(cases.id, Number(identifier)))
+              .limit(1);
+      } else {
+          query = db.select(selection).from(cases)
+              .innerJoin(patients, eq(cases.patientId, patients.id))
+              .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+              .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+              .where(eq(patients.patientCode, identifier))
+              .orderBy(desc(cases.createdAt))
+              .limit(1);
+      }
+      const result = await query;
+      return result[0] || null;
+  }
+
+  async checkCaseBelongsToPatient(caseId: string, patientCode: string, tx?: Transaction): Promise<boolean> {
+      const db = this.getDb(tx);
+      if (isNaN(Number(caseId))) return false;
+      const result = await db.select({ id: cases.id })
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .where(and(eq(cases.id, Number(caseId)), eq(patients.patientCode, patientCode)))
+        .limit(1);
+      return result.length > 0;
+  }
+
+  async findLatestCaseIdByCode(code: string, tx?: Transaction): Promise<string | null> {
+    const db = this.getDb(tx);
+    if (!isNaN(Number(code))) {
+        const caseById = await db.query.cases.findFirst({ where: eq(cases.id, Number(code)) });
+        if (caseById) return String(caseById.id);
+    }
+    const result = await db.select({ caseId: cases.id })
+    .from(cases)
+    .innerJoin(patients, eq(cases.patientId, patients.id))
+    .where(eq(patients.patientCode, code))
+    .orderBy(desc(cases.createdAt))
+    .limit(1);
+
+    if (result.length > 0) return String(result[0].caseId);
+    return null;
+  }
+
+  async findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<any[]> {
+    const db = this.getDb(tx);
+    return await db.select({
+        caseId: cases.id,
+        status: cases.status,
+        createdAt: cases.createdAt,
+        notes: cases.notes,
+        productType: cases.productType,
+        doctorName: dentists.fullName
+    })
+    .from(cases)
+    .innerJoin(patients, eq(cases.patientId, patients.id))
+    .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+    .where(eq(patients.patientCode, patientCode))
+    .orderBy(desc(cases.createdAt));
+  }
+
+  async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
+    const db = this.getDb(tx);
+    // ✅ QUAN TRỌNG: Select luôn teethData
+    return await db.select()
+        .from(treatmentSteps)
+        .where(eq(treatmentSteps.caseId, caseId))
+        .orderBy(asc(treatmentSteps.stepIndex));
+  }
+
+  // Legacy
+  async findPatientByCode(code: string, tx?: Transaction): Promise<any | null> { return null; }
+  async createPatient(data: any, tx?: Transaction): Promise<any> { return null; }
+  async createCase(data: CreateCaseParams, tx?: Transaction): Promise<OrthoCase> { throw new Error(""); }
+  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> { return null; }
+  async saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void> {}
+}
+```
+
+## File: src/modules/dental/infrastructure/dtos/upload-case.dto.ts
+```
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsNotEmpty,
+} from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+
+export enum Gender {
+  Male = 'Male',
+  Female = 'Female',
+  Other = 'Other',
+}
+
+export enum ProductType {
+  Aligner = 'aligner',
+  Retainer = 'retainer',
+}
+
+export class UploadCaseDto {
+  @ApiProperty({
+    description: 'Full Name of the Patient',
+    example: 'Nguyen Van A',
+  })
+  @IsString()
+  @IsNotEmpty()
+  patientName: string;
+
+  @ApiProperty({ description: 'Unique Patient Code', example: 'PAT-12345' })
+  @IsString()
+  @IsNotEmpty()
+  patientCode: string;
+
+  @ApiProperty({ description: 'Gender', enum: Gender, required: false })
+  @IsOptional()
+  @IsEnum(Gender)
+  gender?: Gender;
+
+  @ApiProperty({
+    description: 'Date of Birth (ISO)',
+    required: false,
+    example: '1990-01-01',
+  })
+  @IsOptional()
+  @IsDateString()
+  dob?: string;
+
+  @ApiProperty({ description: 'Clinic Name', example: 'Smile Dental' })
+  @IsString()
+  @IsNotEmpty()
+  clinicName: string;
+
+  @ApiProperty({
+    description: 'Doctor Name',
+    required: false,
+    example: 'Dr. House',
+  })
+  @IsOptional()
+  @IsString()
+  doctorName?: string;
+
+  @ApiProperty({
+    description: 'Product Type',
+    enum: ProductType,
+    default: ProductType.Aligner,
+  })
+  @IsOptional()
+  @IsEnum(ProductType)
+  productType: ProductType = ProductType.Aligner;
+
+  @ApiProperty({ description: 'Additional Notes', required: false })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiProperty({ type: 'string', format: 'binary' })
+  file: any;
+}
+```
+
+## File: src/modules/dental/domain/ports/dental-worker.port.ts
+```
+export const IDentalWorker = Symbol('IDentalWorker');
+
+export interface ConversionJob {
+  objFilePath: string;
+  outputDir: string;
+  baseName: string;
+  encryptionKey: string;
+  config: {
+    ratio: number;
+    threshold: number;
+    timeout: number;
+  };
+}
+
+export interface WorkerResult {
+  success: boolean;
+  path: string;
+}
+
+export interface IDentalWorker {
+  runTask(task: ConversionJob): Promise<WorkerResult>;
+}
+```
+
+## File: src/modules/dental/domain/ports/dental-storage.port.ts
+```
+export const IDentalStorage = Symbol('IDentalStorage');
+
+export interface DentalFile {
+  path: string;
+  filename: string;
+}
+
+export interface IDentalStorage {
+  ensureDirectories(): void;
+  saveTempFile(file: Express.Multer.File): Promise<string>;
+  extractZip(zipPath: string, extractPath: string): Promise<void>;
+  findObjFilesRecursively(dir: string): Promise<string[]>;
+  findEncFilesRecursively(dir: string): Promise<string[]>;
+  removeFile(path: string): Promise<void>;
+  removeDirectory(path: string): Promise<void>;
+  getUploadDir(): string;
+  getOutputDir(): string;
+}
+```
+
+## File: src/modules/dental/domain/repositories/ortho.repository.ts
+```
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+export interface OrthoCase { id: number; orderId?: string | null; patientId: number; status: string | null; createdAt: Date | null; }
+export interface CreateCaseParams { patientId: number; dentistId?: number; productType: 'aligner' | 'retainer'; scanDate?: Date; }
+export interface FullCaseInput { patientName: string; patientCode: string; gender?: 'Male' | 'Female' | 'Other'; dob?: Date; clinicName: string; doctorName?: string; productType: 'aligner' | 'retainer'; notes?: string; }
+export interface CaseDetailsDTO { patientName: string; patientCode: string; caseId: number; doctorName?: string; clinicName?: string; createdAt: Date; }
+
+export const IOrthoRepository = Symbol('IOrthoRepository');
+
+export interface IOrthoRepository {
+  createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string>;
+  findLatestCaseIdByCode(code: string, tx?: Transaction): Promise<string | null>;
+  checkCaseBelongsToPatient(caseId: string, patientCode: string, tx?: Transaction): Promise<boolean>;
+  findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<any[]>;
+  getCaseDetails(identifier: string, isCaseId: boolean, tx?: Transaction): Promise<CaseDetailsDTO | null>;
+  getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
+
+  // ✅ NEW
+  updateStepMovementData(caseId: string, stepIndex: number, teethData: any, tx?: Transaction): Promise<void>;
+
+  // Legacy
+  findPatientByCode(code: string, tx?: Transaction): Promise<any | null>;
+  createPatient(data: any, tx?: Transaction): Promise<any>;
+  createCase(data: any, tx?: Transaction): Promise<any>;
+  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
+  saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+}
+```
+
+## File: src/modules/dental/dental.module.ts
+```
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { DentalController } from './infrastructure/controllers/dental.controller';
+import { DentalService } from './application/services/dental.service';
+import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
+import { FileSystemDentalStorage } from './infrastructure/adapters/fs-dental-storage.adapter';
+import { PiscinaDentalWorker } from './infrastructure/adapters/piscina-worker.adapter';
+import { DrizzleOrthoRepository } from './infrastructure/persistence/drizzle-ortho.repository';
+import { IDentalStorage } from './domain/ports/dental-storage.port';
+import { IDentalWorker } from './domain/ports/dental-worker.port';
+import { IOrthoRepository } from './domain/repositories/ortho.repository';
+import dentalConfig from '@config/dental.config';
+
+@Module({
+  imports: [ConfigModule.forFeature(dentalConfig)],
+  controllers: [DentalController],
+  providers: [
+    DentalService,
+    PiscinaProvider,
+    {
+      provide: IDentalStorage,
+      useClass: FileSystemDentalStorage,
+    },
+    {
+      provide: IDentalWorker,
+      useClass: PiscinaDentalWorker,
+    },
+    // ✅ Đăng ký Repository mới
+    {
+      provide: IOrthoRepository,
+      useClass: DrizzleOrthoRepository,
+    },
+  ],
+})
+export class DentalModule {}
 ```
 
 ## File: src/core/interceptors/transform-response.interceptor.ts
@@ -3275,6 +4688,8 @@ export const BypassTransform = () => SetMetadata(BYPASS_TRANSFORM_KEY, true);
 
 ## File: src/core/shared/application/ports/file-parser.port.ts
 ```
+export const IFileParser = Symbol('IFileParser');
+
 export interface IFileParser {
   parseCsv<T>(content: string): T[];
 }
@@ -3452,11 +4867,16 @@ import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '@database/schema';
 import { DRIZZLE } from '@database/drizzle.provider';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
 
 @Injectable()
 export class DrizzleBaseRepository {
   constructor(
     @Inject(DRIZZLE) protected readonly db: NodePgDatabase<typeof schema>,
+    // @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
   ) {}
 
   protected getDb(tx?: Transaction): NodePgDatabase<typeof schema> {
@@ -3522,62 +4942,89 @@ export class RequestContextService {
 
 ## File: src/core/shared/infrastructure/cache/redis-cache.adapter.ts
 ```
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache as RootCache } from 'cache-manager';
+import { Cache } from 'cache-manager';
 import { ICacheService } from '../../application/ports/cache.port';
-// 1. Import Logger Port và Token
 import { ILogger, LOGGER_TOKEN } from '../../application/ports/logger.port';
 
-interface ExtendedCache extends Omit<RootCache, 'clear'> {
-  clear?: () => Promise<void | boolean>;
-  reset?: () => Promise<void>;
-}
-
 @Injectable()
-export class RedisCacheAdapter implements ICacheService {
+export class RedisCacheAdapter implements ICacheService, OnModuleInit {
   constructor(
-    @Inject(CACHE_MANAGER) private readonly cacheManager: ExtendedCache,
-    // 2. Inject Logger vào Adapter
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
   ) {}
 
+  onModuleInit() {
+    const store: any = (this.cacheManager as any).store;
+
+    // --- DEBUG BLOCK ---
+    const storeName = store?.name || store?.constructor?.name || 'Unknown';
+    this.logger.info(`🔍 DEBUG: Cache Store Name = [${storeName}]`);
+
+    // Kiểm tra xem có phải Redis không
+    const isRedis = storeName === 'RedisStore' || (store && store.client);
+
+    if (isRedis) {
+      this.logger.info('🚀 CACHE STATUS: REDIS IS ACTIVE (Confirmed)');
+    } else {
+      this.logger.warn(
+        '⚠️ CACHE STATUS: NOT REDIS! INSPECTING STORE OBJECT...',
+      );
+      console.log('Store Keys:', Object.keys(store || {}));
+    }
+    // -------------------
+  }
+
   async get<T>(key: string): Promise<T | undefined> {
-    const start = Date.now();
-    const value = await this.cacheManager.get<T>(key);
+    try {
+      const start = Date.now();
+      const value = await this.cacheManager.get<T>(key);
 
-    // 3. Log Debug (Thay vì Info để tránh spam log production)
-    this.logger.debug(`Redis GET`, {
-      key,
-      hit: !!value,
-      duration: `${Date.now() - start}ms`,
-    });
+      // Chỉ log debug
+      this.logger.debug(`Redis GET`, {
+        key,
+        hit: !!value,
+        duration: `${Date.now() - start}ms`,
+      });
 
-    return value;
+      return value;
+    } catch (error) {
+      this.logger.error(`Redis GET Error`, error as Error);
+      return undefined;
+    }
   }
 
   async set(key: string, value: unknown, ttl?: number): Promise<void> {
-    // Log Debug
-    this.logger.debug(`Redis SET`, { key, ttl });
-
-    await (this.cacheManager as unknown as RootCache).set(key, value, ttl ?? 0);
+    try {
+      const finalTtl = ttl ? ttl * 1000 : undefined;
+      await this.cacheManager.set(key, value, finalTtl as any);
+      this.logger.debug(`Redis SET`, { key });
+    } catch (error) {
+      this.logger.error(`Redis SET Error`, error as Error);
+    }
   }
 
   async del(key: string): Promise<void> {
-    this.logger.debug(`Redis DEL`, { key });
-    await this.cacheManager.del(key);
+    try {
+      await this.cacheManager.del(key);
+      this.logger.debug(`Redis DEL`, { key });
+    } catch (error) {
+      this.logger.error(`Redis DEL Error`, error as Error);
+    }
   }
 
   async reset(): Promise<void> {
-    this.logger.warn(`Redis RESET ALL`); // Warn vì đây là hành động nguy hiểm
-
-    if (this.cacheManager.clear) {
-      await this.cacheManager.clear();
-      return;
-    }
-
-    if (this.cacheManager.reset) {
-      await this.cacheManager.reset();
+    try {
+      const client = this.cacheManager as any;
+      if (client.store && typeof client.store.clear === 'function') {
+        await client.store.clear();
+      } else if (typeof client.reset === 'function') {
+        await client.reset();
+      }
+      this.logger.warn(`Redis RESET ALL`);
+    } catch (error) {
+      this.logger.error(`Redis RESET Error`, error as Error);
     }
   }
 }
@@ -3587,36 +5034,57 @@ export class RedisCacheAdapter implements ICacheService {
 ```
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { CacheModule } from '@nestjs/cache-manager';
-import * as redisStore from 'cache-manager-redis-store';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ICacheService } from '../../application/ports/cache.port';
 import { RedisCacheAdapter } from './redis-cache.adapter';
 import redisConfig from '@config/redis.config';
+import { redisStore } from 'cache-manager-redis-yet';
 
 @Global()
 @Module({
-  imports: [
-    ConfigModule.forFeature(redisConfig),
-    CacheModule.registerAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        store: redisStore,
-        host: configService.get('redis.host'),
-        port: configService.get('redis.port'),
-        ttl: configService.get('redis.ttl'),
-        max: configService.get('redis.max'),
-        // isGlobal: true, // Đã để module Global nên không bắt buộc set ở đây, nhưng set cho chắc
-      }),
-      inject: [ConfigService],
-    }),
-  ],
+  imports: [ConfigModule.forFeature(redisConfig)],
   providers: [
+    {
+      provide: CACHE_MANAGER,
+      useFactory: async (configService: ConfigService) => {
+        const host = configService.get('redis.host');
+        const port = configService.get('redis.port');
+        const ttl = (configService.get('redis.ttl') || 300) * 1000;
+
+        console.log(`🔌 Connecting to Redis at ${host}:${port}...`);
+
+        // Sử dụng redis-yet (chuẩn mới)
+        const store = await redisStore({
+          socket: { host, port },
+          ttl,
+        });
+
+        console.log('✅ Redis Store Created!');
+
+        // Fix lỗi import cache-manager (CommonJS vs ESM)
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const cm = require('cache-manager');
+        const createCache =
+          cm.createCache ||
+          (cm.default && cm.default.createCache) ||
+          cm.caching;
+
+        if (!createCache) throw new Error('Cannot find createCache function');
+
+        const cache = createCache(store);
+        // Gán ngược store để Adapter check được
+        if (!cache.store) cache.store = store;
+
+        return cache;
+      },
+      inject: [ConfigService],
+    },
     {
       provide: ICacheService,
       useClass: RedisCacheAdapter,
     },
   ],
-  exports: [ICacheService],
+  exports: [ICacheService, CACHE_MANAGER],
 })
 export class RedisCacheModule {}
 ```
@@ -3649,10 +5117,34 @@ export class InMemoryEventBusAdapter implements IEventBus {
     eventCls: Type<T> | string,
     handler: (event: T) => Promise<void>,
   ): void {
-    const eventName =
-      typeof eventCls === 'string'
-        ? eventCls
-        : new eventCls({} as any, {} as any).eventName;
+    let eventName: string;
+
+    if (typeof eventCls === 'string') {
+      eventName = eventCls;
+    } else {
+      // ✅ SAFE FIX: Sử dụng Object.create để tránh gọi constructor thực thi logic validate
+      // Điều này ngăn chặn crash app khi khởi tạo Event Class rỗng
+      const instance = Object.create(eventCls.prototype);
+      // Nếu eventName là property instance (được gán trong constructor), ta không lấy được ở đây
+      // NHƯNG, với kiến trúc hiện tại, eventName thường hardcode.
+      // Cách tốt nhất: Fallback về tên Class nếu instance.eventName undefined
+      eventName = instance.eventName || eventCls.name;
+
+      // Nếu trường hợp eventName bắt buộc phải lấy từ instance thật và khác tên class
+      // thì nên refactor Event thành có static property.
+      // Ở đây ta dùng instance giả lập an toàn.
+      if (!eventName) {
+        try {
+          const realInstance = new eventCls({} as any, {} as any);
+          eventName = realInstance.eventName;
+        } catch (e) {
+          eventName = eventCls.name;
+          this.logger.warn(
+            `Could not extract eventName from ${eventCls.name}, using class name.`,
+          );
+        }
+      }
+    }
 
     if (!this.handlers.has(eventName)) {
       this.handlers.set(eventName, []);
@@ -4046,12 +5538,37 @@ export default registerAs('eventBus', () => ({
 }));
 ```
 
+## File: src/config/dental.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('dental', () => ({
+  // Upload & Storage Paths
+  uploadDir: process.env.DENTAL_UPLOAD_DIR || 'uploads/dental/temp',
+  outputDir: process.env.DENTAL_OUTPUT_DIR || 'uploads/dental/converted',
+
+  // Encryption
+  encryptionKey:
+    process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE', // 32 chars
+
+  // Conversion Settings
+  simplificationRatio: 0.3,
+  errorThreshold: 0.0005,
+  timeout: 300000, // 5 mins
+
+  // Worker Pool
+  minThreads: parseInt(process.env.PISCINA_MIN_THREADS || '0', 10),
+  maxThreads: parseInt(process.env.PISCINA_MAX_THREADS || '0', 10),
+}));
+```
+
 ## File: src/database/schema/index.ts
 ```
 export * from './users.schema';
 export * from './sessions.schema';
 export * from './rbac.schema';
 export * from './notifications.schema';
+export * from './ortho.schema';
 ```
 
 ## File: src/database/schema/users.schema.ts
@@ -4244,6 +5761,161 @@ export const notifications = pgTable('notifications', {
   sentAt: timestamp('sentAt'),
   createdAt: timestamp('createdAt').defaultNow(),
 });
+```
+
+## File: src/database/schema/ortho.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  date,
+  boolean,
+  index,
+  pgEnum,
+  numeric,
+  bigint,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from './users.schema'; // Link với bảng Users có sẵn
+
+// --- 1. ENUMS (Khớp với nghiệp vụ) ---
+export const genderEnum = pgEnum('gender', ['Male', 'Female', 'Other']);
+export const productTypeEnum = pgEnum('product_type', ['retainer', 'aligner']);
+export const jawTypeEnum = pgEnum('jaw_type', ['Upper', 'Lower']);
+
+// --- 2. BẢNG CLINICS (Phòng khám) ---
+export const clinics = pgTable('clinics', {
+  id: serial('id').primaryKey(),
+  // Dùng bigint vì users.id thường là bigserial
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+  name: text('name').notNull(),
+  clinicCode: text('clinic_code').notNull().unique(), // VD: NK1
+  address: text('address'),
+  phoneNumber: text('phone_number'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// --- 3. BẢNG DENTISTS (Bác sĩ) ---
+export const dentists = pgTable('dentists', {
+  id: serial('id').primaryKey(),
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+  clinicId: integer('clinic_id').references(() => clinics.id),
+  fullName: text('full_name').notNull(),
+  phoneNumber: text('phone_number'),
+  email: text('email'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// --- 4. BẢNG PATIENTS (Bệnh nhân) ---
+export const patients = pgTable('patients', {
+  id: serial('id').primaryKey(),
+  clinicId: integer('clinic_id').references(() => clinics.id),
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+
+  patientCode: text('patient_code').notNull().unique(), // VD: #NK121789
+  fullName: text('full_name').notNull(),
+  email: text('email'),
+  phoneNumber: text('phone_number'),
+  address: text('address'),
+  birthDate: date('date_of_birth'),
+  gender: genderEnum('gender'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// --- 5. BẢNG CASES (Ca điều trị) ---
+export const cases = pgTable('cases', {
+  id: serial('id').primaryKey(),
+  orderId: text('order_id').unique(), // ORD-2510...
+
+  patientId: integer('patient_id')
+    .references(() => patients.id)
+    .notNull(),
+  dentistId: integer('dentist_id').references(() => dentists.id),
+
+  productType: productTypeEnum('product_type').notNull(),
+  status: text('status').default('PLANNING'),
+
+  notes: text('notes'),
+  price: numeric('price', { precision: 12, scale: 2 }),
+
+  scanDate: timestamp('scan_date'),
+  dateDue: timestamp('date_due'),
+  startedAt: timestamp('started_at'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// --- 6. BẢNG TREATMENT STEPS (Lưu trữ dữ liệu 3D - JSONB) ---
+export const treatmentSteps = pgTable(
+  'treatment_steps',
+  {
+    id: serial('id').primaryKey(),
+    caseId: integer('case_id')
+      .references(() => cases.id)
+      .notNull(),
+    stepIndex: integer('step_index').notNull(), // 0, 1, 2...
+
+    // JSONB chứa toàn bộ thông số di chuyển (Torque, Angulation...)
+    teethData: jsonb('teeth_data').notNull(),
+
+    hasIpr: boolean('has_ipr').default(false),
+    hasAttachments: boolean('has_attachments').default(false),
+
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    caseStepIdx: index('idx_case_step').on(table.caseId, table.stepIndex),
+  }),
+);
+
+// --- RELATIONS ---
+export const clinicsRelations = relations(clinics, ({ one, many }) => ({
+  manager: one(users, { fields: [clinics.userId], references: [users.id] }),
+  dentists: many(dentists),
+  patients: many(patients),
+}));
+
+export const dentistsRelations = relations(dentists, ({ one, many }) => ({
+  user: one(users, { fields: [dentists.userId], references: [users.id] }),
+  clinic: one(clinics, {
+    fields: [dentists.clinicId],
+    references: [clinics.id],
+  }),
+  cases: many(cases),
+}));
+
+export const patientsRelations = relations(patients, ({ one, many }) => ({
+  clinic: one(clinics, {
+    fields: [patients.clinicId],
+    references: [clinics.id],
+  }),
+  user: one(users, { fields: [patients.userId], references: [users.id] }),
+  cases: many(cases),
+}));
+
+export const casesRelations = relations(cases, ({ one, many }) => ({
+  patient: one(patients, {
+    fields: [cases.patientId],
+    references: [patients.id],
+  }),
+  dentist: one(dentists, {
+    fields: [cases.dentistId],
+    references: [dentists.id],
+  }),
+  steps: many(treatmentSteps),
+}));
+
+export const treatmentStepsRelations = relations(treatmentSteps, ({ one }) => ({
+  case: one(cases, { fields: [treatmentSteps.caseId], references: [cases.id] }),
+}));
 ```
 
 ## File: src/database/drizzle.provider.ts
