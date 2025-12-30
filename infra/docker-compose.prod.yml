@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rbac_postgres_prod
+    restart: always
+    env_file:
+      - ../.env.production
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-rbac_system}
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    networks:
+      - rbac_prod_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s # Cho phép DB khởi động chậm chút
+    # Limit resource cho DB để tránh ăn hết RAM server
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  redis:
+    image: redis:7-alpine
+    container_name: rbac_redis_prod
+    restart: always
+    networks:
+      - rbac_prod_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile
+    container_name: rbac_api_prod
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../.env.production
+    environment:
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+      - RUN_MIGRATIONS=true
+      - NODE_ENV=production
+      # Tối ưu Garbage Collection cho Node trong container (đặt thấp hơn limit Docker)
+      - NODE_OPTIONS=--max-old-space-size=1536
+    volumes:
+      - dental_data:/app/uploads
+      - api_logs:/app/logs
+    ports:
+      - "8080:8080"
+    networks:
+      - rbac_prod_net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0' # Cần CPU cho worker 3D
+          memory: 2G  # Cần RAM cho xử lý file lớn
+
+networks:
+  rbac_prod_net:
+    driver: bridge
+
+volumes:
+  pgdata_prod:
+  dental_data:
+  api_logs:

@@ -9,6 +9,7 @@ import { DrizzleOrthoRepository } from './infrastructure/persistence/drizzle-ort
 import { IDentalStorage } from './domain/ports/dental-storage.port';
 import { IDentalWorker } from './domain/ports/dental-worker.port';
 import { IOrthoRepository } from './domain/repositories/ortho.repository';
+import { DentalGateway } from './infrastructure/gateways/dental.gateway';
 import dentalConfig from '@config/dental.config';
 
 @Module({
@@ -17,6 +18,7 @@ import dentalConfig from '@config/dental.config';
   providers: [
     DentalService,
     PiscinaProvider,
+    DentalGateway, // ✅ Added Gateway
     {
       provide: IDentalStorage,
       useClass: FileSystemDentalStorage,
@@ -25,7 +27,6 @@ import dentalConfig from '@config/dental.config';
       provide: IDentalWorker,
       useClass: PiscinaDentalWorker,
     },
-    // ✅ Đăng ký Repository mới
     {
       provide: IOrthoRepository,
       useClass: DrizzleOrthoRepository,

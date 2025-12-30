@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
 const AdmZip = require('adm-zip');
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -19,12 +19,12 @@ import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
 import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
 import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
 import { parseMovementExcel } from '../utils/movement.parser';
+import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
 
 export interface ModelStep {
   index: number;
   maxillary: string | null;
   mandibular: string | null;
-  // ✅ NEW: Thêm trường teethData trả về Frontend
   teethData?: Record<string, any>;
 }
 
@@ -32,7 +32,6 @@ export interface ModelStep {
 export class DentalService {
   private readonly uploadDir: string;
   private readonly outputDir: string;
-  private readonly encryptionKey: string;
   private readonly appUrl: string;
 
   constructor(
@@ -40,245 +39,211 @@ export class DentalService {
     @Inject(PISCINA_POOL) private readonly pool: Piscina,
     @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
     private readonly config: ConfigService,
+    private readonly dentalGateway: DentalGateway, // ✅ Inject Gateway
   ) {
-    const rawUploadDir = this.config.get('dental.uploadDir');
-    const rawOutputDir = this.config.get('dental.outputDir');
-    this.appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(
+    this.uploadDir = path.resolve(
+      this.config.get('dental.uploadDir') || 'uploads/dental/temp',
+    );
+    this.outputDir = path.resolve(
+      this.config.get('dental.outputDir') || 'uploads/dental/converted',
+    );
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
       /\/$/,
       '',
     );
-
-    if (!rawUploadDir || !rawOutputDir)
-      throw new Error('Dental configuration missing');
-
-    this.uploadDir = path.resolve(rawUploadDir);
-    this.outputDir = path.resolve(rawOutputDir);
-    this.encryptionKey = this.config.get('dental.encryptionKey')!;
-
     fs.ensureDirSync(this.uploadDir);
     fs.ensureDirSync(this.outputDir);
   }
 
-  // ... (processZipUpload giữ nguyên) ...
   async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
     if (!file) throw new BadRequestException('No file uploaded');
 
-    const caseId = await this.orthoRepo.createFullCase({
-      patientName: dto.patientName,
-      patientCode: dto.patientCode,
-      clinicName: dto.clinicName,
-      doctorName: dto.doctorName,
-      gender: dto.gender,
-      productType: dto.productType,
-      notes: dto.notes,
-    });
+    const isOverwrite = String(dto.overwrite) === 'true';
+    let caseId: string | null = null;
 
-    this.logger.info(
-      `Processing upload for PatientCode: ${dto.patientCode} -> CaseID: ${caseId}`,
-    );
+    if (isOverwrite) {
+      caseId = await this.orthoRepo.findLatestCaseIdByCode(dto.patientCode);
+      if (caseId) {
+        this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
+        await fs.remove(path.join(this.outputDir, caseId)).catch(() => {});
+        await (this.orthoRepo as any).deleteStepsByCaseId(Number(caseId));
+      }
+    }
 
-    const jobId = uuidv4();
-    const extractPath = path.join(this.uploadDir, `extract_${jobId}`);
+    if (!caseId) {
+      caseId = await this.orthoRepo.createFullCase({
+        patientName: dto.patientName,
+        patientCode: dto.patientCode,
+        clinicName: dto.clinicName,
+        doctorName: dto.doctorName,
+        gender: dto.gender,
+        productType: dto.productType,
+        notes: dto.notes,
+      });
+    }
 
+    const extractPath = path.join(this.uploadDir, `extract_${uuidv4()}`);
+
+    // 1. Giải nén ngay lập tức
     try {
       const zip = new AdmZip(file.path);
       zip.extractAllTo(extractPath, true);
+    } catch (e: any) {
+      throw new BadRequestException('Invalid Zip File: ' + e.message);
+    }
 
-      const objFiles = await this.findFilesRecursively(extractPath, '.obj');
-      // if (objFiles.length === 0) throw new Error("No .obj files found"); // Cho phép upload 0 file nếu chỉ muốn tạo case
+    const objFiles = await this.findFilesRecursively(extractPath, '.obj');
 
-      const tasks = objFiles.map((objPath) => {
-        const baseName = path.basename(objPath, '.obj');
-        const parentDirPath = path.dirname(objPath);
-        const parentDirName = path.basename(parentDirPath);
+    // 2. Chuẩn bị Tasks
+    const tasks = objFiles.map((objPath) => {
+      const baseName = path.basename(objPath, '.obj');
+      const parentDir = path.basename(path.dirname(objPath));
 
-        let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
-        if (baseName.toLowerCase().includes('mandibular')) type = 'Mandibular';
+      let type: 'Maxillary' | 'Mandibular' = baseName
+        .toLowerCase()
+        .includes('mandibular')
+        ? 'Mandibular'
+        : 'Maxillary';
 
-        let index = 0;
-        const explicitFolderMatch = parentDirName.match(
-          /(?:Subsetup|Stage|Step)[^0-9]*(\d+)/i,
-        );
-        const fileNumberMatch = baseName.match(/[ _-](\d+)$/);
+      let index = 0;
+      const folderMatch = parentDir.match(/(\d+)/);
+      const fileMatch = baseName.match(/(\d+)/);
 
-        if (explicitFolderMatch) index = parseInt(explicitFolderMatch[1], 10);
-        else if (fileNumberMatch) index = parseInt(fileNumberMatch[1], 10);
-        else if (/^\d+$/.test(parentDirName))
-          index = parseInt(parentDirName, 10);
+      if (folderMatch) index = parseInt(folderMatch[1], 10);
+      else if (fileMatch) index = parseInt(fileMatch[1], 10);
 
-        const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
-        const targetDir = path.join(this.outputDir, caseId, type);
-
-        return {
-          objFilePath: objPath,
-          outputDir: targetDir,
-          baseName: standardizedName,
-          encryptionKey: this.encryptionKey,
-          config: {
-            ratio: this.config.get('dental.simplificationRatio'),
-            threshold: this.config.get('dental.errorThreshold'),
-            timeout: this.config.get('dental.timeout'),
-          },
-          meta: { index, type },
-        };
-      });
-
-      await Promise.allSettled(tasks.map((t) => this.pool.run(t)));
       return {
-        message: 'Processing completed',
-        caseId: caseId,
-        patientCode: dto.patientCode,
+        objFilePath: objPath,
+        outputDir: path.join(this.outputDir, caseId!, type),
+        baseName: `${type}_${index.toString().padStart(3, '0')}`,
+        encryptionKey: this.config.get('dental.encryptionKey'),
+        config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
+        meta: { index, type },
       };
-    } catch (error: any) {
-      this.logger.error(`Error processing case ${caseId}`, error);
-      throw new BadRequestException(`Processing failed: ${error.message}`);
-    } finally {
-      await Promise.all([
-        fs.remove(extractPath).catch(() => {}),
-        fs.remove(file.path).catch(() => {}),
-      ]);
-    }
+    });
+
+    this.logger.info(
+      `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
+    );
+
+    // 3. 🔥 FIRE AND FORGET: Chạy background, không await
+    this.runBackgroundConversion(tasks, caseId!, extractPath, file.path);
+
+    // 4. Trả về kết quả ngay lập tức
+    return {
+      success: true,
+      message: 'Processing started in background',
+      caseId,
+      stepCount: tasks.length / 2,
+      status: 'PROCESSING',
+    };
   }
 
-  // ✅ NEW: Xử lý Upload Excel Movement
-  async processMovementExcel(file: Express.Multer.File, caseId: string) {
-    this.logger.info(`Processing Movement Excel for Case: ${caseId}`);
-    try {
-      // Đọc dữ liệu từ ổ cứng vì buffer bị undefined khi dùng diskStorage
-      const fileBuffer = await fs.readFile(file.path);
-      const stepsDataMap = parseMovementExcel(fileBuffer);
-      let count = 0;
+  // ✅ Hàm xử lý chạy ngầm và bắn Socket
+  private async runBackgroundConversion(
+    tasks: any[],
+    caseId: string,
+    extractPath: string,
+    zipFilePath: string,
+  ) {
+    let completed = 0;
+    const total = tasks.length;
 
-      for (const [stepIndex, teethData] of stepsDataMap.entries()) {
-        await this.orthoRepo.updateStepMovementData(
-          caseId,
-          stepIndex,
-          teethData,
-        );
-        count++;
-      }
+    // Chạy tuần tự hoặc song song tùy ý, ở đây dùng Promise.allSettled để tối đa hiệu năng
+    const promises = tasks.map(async (task) => {
+      try {
+        const result = await this.pool.run(task);
+        completed++;
 
-      // Xóa file tạm sau khi thành công
-      await fs.remove(file.path).catch(() => {});
-
-      this.logger.info(`Updated movement data for ${count} steps.`);
-      return {
-        message: 'Movement data updated successfully',
-        stepsCount: count,
-      };
-    } catch (error: any) {
-      // Đảm bảo xóa file tạm kể cả khi lỗi
-      if (file?.path) await fs.remove(file.path).catch(() => {});
-      this.logger.error(`Excel Parse Error`, error);
-      throw new BadRequestException(`Failed to parse file: ${error.message}`);
-    }
-  }
-
-  async getCaseDetails(clientIdOrCode: string, specificCaseId?: string) {
-    if (specificCaseId) {
-      const isValid = await this.orthoRepo.checkCaseBelongsToPatient(
-        specificCaseId,
-        clientIdOrCode,
-      );
-      if (!isValid)
-        throw new NotFoundException(
-          `Case not found for patient ${clientIdOrCode}`,
-        );
-      return this.orthoRepo.getCaseDetails(specificCaseId, true);
-    } else {
-      return this.orthoRepo.getCaseDetails(clientIdOrCode, false);
-    }
-  }
-
-  // ✅ UPDATED: List Models bao gồm cả Movement Data từ DB
-  async listModels(
-    clientIdOrCode: string,
-    specificCaseId?: string,
-  ): Promise<ModelStep[]> {
-    let targetFolder = '';
-    let dbCaseId = ''; // ID số trong DB
-
-    if (specificCaseId) {
-      const isValid = await this.orthoRepo.checkCaseBelongsToPatient(
-        specificCaseId,
-        clientIdOrCode,
-      );
-      if (!isValid)
-        throw new NotFoundException(
-          `Case not found for patient ${clientIdOrCode}`,
-        );
-      targetFolder = specificCaseId;
-      dbCaseId = specificCaseId;
-    } else {
-      const latestCaseId =
-        await this.orthoRepo.findLatestCaseIdByCode(clientIdOrCode);
-      if (latestCaseId) {
-        targetFolder = latestCaseId;
-        dbCaseId = latestCaseId;
-      } else if (fs.existsSync(path.join(this.outputDir, clientIdOrCode))) {
-        targetFolder = clientIdOrCode;
-        // Legacy folder không có trong DB thì không có movement data
-      }
-    }
-
-    if (!targetFolder) return [];
-
-    // 1. Quét File System để lấy danh sách file 3D
-    const clientDir = path.join(this.outputDir, targetFolder);
-    const allEncFiles = fs.existsSync(clientDir)
-      ? await this.findFilesRecursively(clientDir, '.enc')
-      : [];
-
-    // 2. Query DB để lấy Movement Data (nếu có CaseID hợp lệ)
-    let dbSteps: any[] = [];
-    if (dbCaseId && !isNaN(Number(dbCaseId))) {
-      dbSteps = await this.orthoRepo.getStepsByCaseId(Number(dbCaseId));
-    }
-
-    // 3. Merge Data (File System + DB)
-    const stepsMap = new Map<number, ModelStep>();
-
-    // Populate từ DB trước (để lấy teethData)
-    dbSteps.forEach((dbStep) => {
-      if (!stepsMap.has(dbStep.stepIndex)) {
-        stepsMap.set(dbStep.stepIndex, {
-          index: dbStep.stepIndex,
-          maxillary: null,
-          mandibular: null,
-          teethData: dbStep.teethData, // ✅ Attach Data
+        // 🔥 Emit Progress Event
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'progress',
+          file: task.baseName,
+          percent: Math.round((completed / total) * 100),
+          url: `${this.appUrl}/models/${caseId}/${task.meta.type}/${path.basename(result.path)}`,
+          type: task.meta.type,
+          index: task.meta.index,
+        });
+      } catch (error: any) {
+        this.logger.error(`Error converting ${task.baseName}`, error);
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'error',
+          file: task.baseName,
+          error: error.message,
         });
       }
     });
 
-    // Populate từ File System (để lấy URL file)
-    allEncFiles.forEach((fullPath) => {
-      const filename = path.basename(fullPath).toLowerCase();
-      const relativePath = path.relative(this.outputDir, fullPath);
-      const urlPath = relativePath
+    await Promise.allSettled(promises);
+
+    // 🔥 Emit Complete Event
+    this.dentalGateway.notifyComplete(caseId, { status: 'completed' });
+    this.logger.info(`Case ${caseId} processing completed.`);
+
+    // Cleanup sau khi xong hết
+    await fs.remove(extractPath).catch(() => {});
+    await fs.remove(zipFilePath).catch(() => {});
+  }
+
+  async processMovementExcel(file: Express.Multer.File, caseId: string) {
+    const fileBuffer = await fs.readFile(file.path);
+    const stepsDataMap = parseMovementExcel(fileBuffer);
+    for (const [stepIndex, teethData] of stepsDataMap.entries()) {
+      await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+    }
+    await fs.remove(file.path).catch(() => {});
+    return { message: 'Movement data updated', count: stepsDataMap.size };
+  }
+
+  async listModels(clientId: string, caseId?: string): Promise<ModelStep[]> {
+    const id =
+      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    if (!id) return [];
+
+    const clientDir = path.join(this.outputDir, id);
+    const allEncFiles = fs.existsSync(clientDir)
+      ? await this.findFilesRecursively(clientDir, '.enc')
+      : [];
+    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
+
+    const stepsMap = new Map<number, ModelStep>();
+
+    dbSteps.forEach((s) => {
+      stepsMap.set(s.stepIndex, {
+        index: s.stepIndex,
+        maxillary: null,
+        mandibular: null,
+        teethData: s.teethData,
+      });
+    });
+
+    allEncFiles.forEach((fp) => {
+      const filename = path.basename(fp).toLowerCase();
+      const matches = filename.match(/(\d+)/g);
+      const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
+
+      const relPath = path
+        .relative(this.outputDir, fp)
         .split(path.sep)
-        .map(encodeURIComponent)
         .join('/');
-      const url = `${this.appUrl}/models/${urlPath}`;
-
-      let index = 0;
-      let type: 'maxillary' | 'mandibular' | null = null;
-      if (filename.includes('maxillary')) type = 'maxillary';
-      else if (filename.includes('mandibular')) type = 'mandibular';
-
-      if (!type) return;
-
-      const fileMatch = filename.match(/(\d+)/);
-      if (fileMatch) index = parseInt(fileMatch[1], 10);
+      const url = `${this.appUrl}/models/${relPath}`;
 
       if (!stepsMap.has(index)) {
         stepsMap.set(index, { index, maxillary: null, mandibular: null });
       }
+
       const entry = stepsMap.get(index)!;
-      if (type === 'maxillary') entry.maxillary = url;
-      else entry.mandibular = url;
+      if (filename.includes('maxillary')) entry.maxillary = url;
+      else if (filename.includes('mandibular')) entry.mandibular = url;
     });
 
     return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+  }
+
+  async getCaseDetails(clientId: string, caseId?: string) {
+    const id =
+      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    return id ? this.orthoRepo.getCaseDetails(id, true) : null;
   }
 
   async getHistory(patientCode: string) {
@@ -290,20 +255,18 @@ export class DentalService {
     ext: string,
   ): Promise<string[]> {
     let results: string[] = [];
-    try {
-      const list = await fs.readdir(dir);
-      for (const file of list) {
-        const fullPath = path.resolve(dir, file);
-        const stat = await fs.stat(fullPath);
-        if (stat && stat.isDirectory()) {
-          results = results.concat(
-            await this.findFilesRecursively(fullPath, ext),
-          );
-        } else if (file.toLowerCase().endsWith(ext)) {
-          results.push(fullPath);
-        }
+    if (!fs.existsSync(dir)) return results;
+    const list = await fs.readdir(dir);
+    for (const file of list) {
+      const fullPath = path.resolve(dir, file);
+      if (fs.statSync(fullPath).isDirectory()) {
+        results = results.concat(
+          await this.findFilesRecursively(fullPath, ext),
+        );
+      } else if (file.toLowerCase().endsWith(ext)) {
+        results.push(fullPath);
       }
-    } catch (e) {}
+    }
     return results;
   }
 }

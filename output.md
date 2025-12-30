@@ -82,6 +82,7 @@ export class AppModule {
       .forRoutes({ path: '{*path}', method: RequestMethod.ALL });
   }
 }
+
 ```
 
 ## File: src/bootstrap/main.ts
@@ -137,6 +138,7 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => console.error('Err::', err['message']));
+
 ```
 
 ## File: src/modules/auth/domain/entities/session.entity.ts
@@ -156,6 +158,7 @@ export class Session {
     return new Date() > this.expiresAt;
   }
 }
+
 ```
 
 ## File: src/modules/auth/domain/repositories/session.repository.ts
@@ -170,6 +173,7 @@ export interface ISessionRepository {
   findByUserId(userId: number): Promise<Session[]>;
   deleteByUserId(userId: number): Promise<void>;
 }
+
 ```
 
 ## File: src/modules/auth/application/services/authentication.service.ts
@@ -328,6 +332,7 @@ export class AuthenticationService {
     });
   }
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/controllers/auth.controller.ts
@@ -379,6 +384,7 @@ export class AuthController {
     return { user: user.toJSON() };
   }
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/guards/jwt-auth.guard.ts
@@ -413,6 +419,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     return super.canActivate(context);
   }
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/decorators/current-user.decorator.ts
@@ -437,6 +444,7 @@ export const CurrentUser = createParamDecorator(
 //     return request.user;
 //   },
 // );
+
 ```
 
 ## File: src/modules/auth/infrastructure/decorators/public.decorator.ts
@@ -445,6 +453,7 @@ import { SetMetadata } from '@nestjs/common';
 
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
 ```
 
 ## File: src/modules/auth/infrastructure/strategies/jwt.strategy.ts
@@ -482,6 +491,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     };
   }
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/dtos/auth.dto.ts
@@ -532,6 +542,7 @@ export class RegisterDto {
   @IsEmail()
   email?: string;
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/persistence/mappers/session.mapper.ts
@@ -568,6 +579,7 @@ export class SessionMapper {
     };
   }
 }
+
 ```
 
 ## File: src/modules/auth/infrastructure/persistence/drizzle-session.repository.ts
@@ -613,6 +625,7 @@ export class DrizzleSessionRepository
     await this.db.delete(sessions).where(eq(sessions.userId, userId));
   }
 }
+
 ```
 
 ## File: src/modules/auth/auth.module.ts
@@ -652,6 +665,7 @@ import { ISessionRepository } from './domain/repositories/session.repository';
   exports: [JwtAuthGuard, AuthenticationService, JwtModule],
 })
 export class AuthModule {}
+
 ```
 
 ## File: src/modules/user/domain/entities/user.entity.ts
@@ -752,6 +766,7 @@ export class User {
     };
   }
 }
+
 ```
 
 ## File: src/modules/user/domain/repositories/user.repository.ts
@@ -775,6 +790,7 @@ export interface IUserRepository {
   exists(id: number, tx?: Transaction): Promise<boolean>;
   count(): Promise<number>;
 }
+
 ```
 
 ## File: src/modules/user/domain/types/user-profile.type.ts
@@ -794,6 +810,7 @@ export interface UserProfile {
     notifications: boolean;
   };
 }
+
 ```
 
 ## File: src/modules/user/domain/events/user-created.event.ts
@@ -809,6 +826,7 @@ export class UserCreatedEvent implements IDomainEvent {
     public readonly payload: { user: User },
   ) {}
 }
+
 ```
 
 ## File: src/modules/user/application/services/user.service.ts
@@ -904,6 +922,7 @@ export class UserService {
     await this.userRepository.save(user);
   }
 }
+
 ```
 
 ## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
@@ -950,6 +969,7 @@ export class UserMapper {
     };
   }
 }
+
 ```
 
 ## File: src/modules/user/infrastructure/persistence/drizzle-user.repository.ts
@@ -1040,6 +1060,7 @@ export class DrizzleUserRepository
     return 0;
   }
 }
+
 ```
 
 ## File: src/modules/user/infrastructure/controllers/user.controller.ts
@@ -1086,6 +1107,7 @@ export class UserController {
     return this.userService.getUserById(id);
   }
 }
+
 ```
 
 ## File: src/modules/user/infrastructure/dtos/update-profile.dto.ts
@@ -1150,6 +1172,7 @@ export class UpdateProfileDto {
   @Type(() => SettingsDto)
   settings?: SettingsDto;
 }
+
 ```
 
 ## File: src/modules/user/user.module.ts
@@ -1174,6 +1197,7 @@ import { IUserRepository } from './domain/repositories/user.repository';
   exports: [UserService, IUserRepository], // FIX: Export Symbol
 })
 export class UserModule {}
+
 ```
 
 ## File: src/modules/rbac/domain/entities/role.entity.ts
@@ -1202,6 +1226,7 @@ export class Role {
     }
   }
 }
+
 ```
 
 ## File: src/modules/rbac/domain/entities/permission.entity.ts
@@ -1218,6 +1243,7 @@ export class Permission {
     public createdAt?: Date,
   ) {}
 }
+
 ```
 
 ## File: src/modules/rbac/domain/entities/user-role.entity.ts
@@ -1239,6 +1265,7 @@ export class UserRole {
     return new Date() < this.expiresAt;
   }
 }
+
 ```
 
 ## File: src/modules/rbac/domain/repositories/rbac.repository.ts
@@ -1277,6 +1304,7 @@ export interface IUserRoleRepository {
   ): Promise<UserRole | null>;
   delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
 }
+
 ```
 
 ## File: src/modules/rbac/domain/constants/rbac.constants.ts
@@ -1331,6 +1359,7 @@ export const ROLE_HIERARCHY: Record<SystemRole, number> = {
 };
 
 export const DEFAULT_ROLE = SystemRole.USER;
+
 ```
 
 ## File: src/modules/rbac/application/services/permission.service.ts
@@ -1411,6 +1440,7 @@ export class PermissionService {
     }
   }
 }
+
 ```
 
 ## File: src/modules/rbac/application/services/role.service.ts
@@ -1477,6 +1507,7 @@ export class RoleService {
     return acl;
   }
 }
+
 ```
 
 ## File: src/modules/rbac/application/services/rbac-manager.service.ts
@@ -1589,6 +1620,7 @@ export class RbacManagerService {
     return lines.join('\n');
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/controllers/role.controller.ts
@@ -1642,6 +1674,7 @@ export class RoleController {
     return { success: true, message: 'Role assigned' };
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/controllers/rbac-manager.controller.ts
@@ -1729,6 +1762,7 @@ export class RbacManagerController {
     return new StreamableFile(Buffer.from(csvData));
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/guards/permission.guard.ts
@@ -1781,6 +1815,7 @@ export class PermissionGuard implements CanActivate {
     return true;
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/decorators/permission.decorator.ts
@@ -1790,6 +1825,7 @@ import { SetMetadata } from '@nestjs/common';
 export const PERMISSIONS_KEY = 'permissions';
 export const Permissions = (...permissions: string[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
+
 ```
 
 ## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
@@ -1909,6 +1945,7 @@ export class RbacMapper {
     };
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/persistence/repositories/drizzle-rbac.repositories.ts
@@ -2098,6 +2135,7 @@ export class DrizzleUserRoleRepository
       .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/dtos/role.dto.ts
@@ -2172,6 +2210,7 @@ export class RoleResponseDto {
     return dto;
   }
 }
+
 ```
 
 ## File: src/modules/rbac/infrastructure/dtos/assign-role.dto.ts
@@ -2188,6 +2227,7 @@ export class AssignRoleDto {
   @IsNumber()
   roleId: number;
 }
+
 ```
 
 ## File: src/modules/rbac/rbac.module.ts
@@ -2230,6 +2270,7 @@ import {
   exports: [PermissionService, PermissionGuard, RoleService],
 })
 export class RbacModule {}
+
 ```
 
 ## File: src/modules/shared/types/common.types.ts
@@ -2264,6 +2305,7 @@ export type UserContext = {
   roles: string[];
   permissions: string[];
 };
+
 ```
 
 ## File: src/modules/shared/exceptions/rbac.exceptions.ts
@@ -2297,6 +2339,7 @@ export class InvalidCredentialsException extends HttpException {
     super('Invalid credentials', HttpStatus.UNAUTHORIZED);
   }
 }
+
 ```
 
 ## File: src/modules/shared/utils/password.util.ts
@@ -2322,6 +2365,7 @@ export class PasswordUtil {
     return regex.test(password);
   }
 }
+
 ```
 
 ## File: src/modules/shared/shared.module.ts
@@ -2355,6 +2399,7 @@ import { IFileParser } from '@core/shared/application/ports/file-parser.port';
   exports: [ConfigModule, ITransactionManager, EventBusModule, IFileParser],
 })
 export class SharedModule {}
+
 ```
 
 ## File: src/modules/test/seeders/database.seeder.ts
@@ -2375,7 +2420,11 @@ export class DatabaseSeeder implements OnModuleInit {
   constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
 
   async onModuleInit() {
-    if (process.env.NODE_ENV !== 'development') return;
+    if (
+      process.env.RUN_SEEDS !== 'true' &&
+      process.env.NODE_ENV !== 'development'
+    )
+      return;
     console.log('🌱 Seeding database (Drizzle)...');
 
     await this.seedPermissions();
@@ -2487,6 +2536,7 @@ export class DatabaseSeeder implements OnModuleInit {
     console.log(' - Admin role assigned');
   }
 }
+
 ```
 
 ## File: src/modules/test/controllers/test.controller.ts
@@ -2557,6 +2607,7 @@ export class TestController {
     };
   }
 }
+
 ```
 
 ## File: src/modules/test/test.module.ts
@@ -2581,6 +2632,133 @@ export class TestModule implements OnModuleInit {
     await this.s.onModuleInit();
   }
 }
+
+```
+
+## File: src/modules/logging/infrastructure/winston/winston-logger.adapter.ts
+```
+import { Injectable, Inject, LoggerService } from '@nestjs/common';
+import * as winston from 'winston';
+import {
+  ILogger,
+  LogContext,
+} from '@core/shared/application/ports/logger.port';
+import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
+
+@Injectable()
+export class WinstonLoggerAdapter implements ILogger, LoggerService {
+  private context: LogContext = {};
+
+  constructor(
+    @Inject('WINSTON_LOGGER') private readonly winstonLogger: winston.Logger,
+  ) {}
+
+  private getTraceInfo() {
+    return {
+      requestId: RequestContextService.getRequestId(),
+    };
+  }
+
+  // --- Helper để chuẩn hóa tham số từ NestJS Core ---
+  private normalizeParams(message: any, ...optionalParams: any[]) {
+    let contextObj: LogContext = {};
+
+    // Xử lý trường hợp NestJS gửi context là string ở tham số cuối
+    if (optionalParams.length > 0) {
+      const lastParam = optionalParams[optionalParams.length - 1];
+      if (typeof lastParam === 'string') {
+        contextObj.context = lastParam; // Gán vào field context
+        // Bỏ string context ra khỏi params để không bị trùng
+        // optionalParams.pop();
+      } else if (typeof lastParam === 'object') {
+        contextObj = { ...lastParam };
+      }
+    }
+
+    // Nếu message là object (NestJS hay log object), stringify nó hoặc gán vào meta
+    const msgStr =
+      typeof message === 'string' ? message : JSON.stringify(message);
+
+    return { msgStr, contextObj };
+  }
+
+  // --- Implementation cho LoggerService (NestJS Core gọi cái này) ---
+
+  log(message: any, ...optionalParams: any[]) {
+    // Map 'log' của Nest sang 'info' của Winston
+    this.info(message, ...optionalParams);
+  }
+
+  // --- Implementation cho ILogger (App của ta gọi cái này) ---
+
+  debug(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('debug', msgStr, contextObj);
+  }
+
+  info(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('info', msgStr, contextObj);
+  }
+
+  warn(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('warn', msgStr, contextObj);
+  }
+
+  error(message: any, ...optionalParams: any[]): void {
+    // NestJS thường gửi stack trace ở tham số thứ 2 hoặc 3
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+
+    // Tìm Error object nếu có trong params
+    const errorObj = optionalParams.find((p) => p instanceof Error);
+    const meta = { ...contextObj };
+
+    if (errorObj) {
+      meta.stack = errorObj.stack;
+      meta.error = errorObj.message;
+    }
+
+    this.callWinston('error', msgStr, meta);
+  }
+
+  // --- Context Methods ---
+
+  withContext(context: LogContext): ILogger {
+    const child = new WinstonLoggerAdapter(this.winstonLogger);
+    child.context = { ...this.context, ...context };
+    return child;
+  }
+
+  createChildLogger(module: string): ILogger {
+    return this.withContext({ context: module }); // Map 'label' hoặc 'context' tùy config winston
+  }
+
+  private callWinston(
+    level: string,
+    message: string,
+    context?: LogContext,
+  ): void {
+    this.winstonLogger.log(level, message, {
+      ...this.context,
+      ...this.getTraceInfo(),
+      ...context,
+    });
+  }
+}
+
 ```
 
 ## File: src/modules/logging/infrastructure/winston/winston.factory.ts
@@ -2736,131 +2914,7 @@ export class WinstonFactory {
     });
   }
 }
-```
 
-## File: src/modules/logging/infrastructure/winston/winston-logger.adapter.ts
-```
-import { Injectable, Inject, LoggerService } from '@nestjs/common';
-import * as winston from 'winston';
-import {
-  ILogger,
-  LogContext,
-} from '@core/shared/application/ports/logger.port';
-import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
-
-@Injectable()
-export class WinstonLoggerAdapter implements ILogger, LoggerService {
-  private context: LogContext = {};
-
-  constructor(
-    @Inject('WINSTON_LOGGER') private readonly winstonLogger: winston.Logger,
-  ) {}
-
-  private getTraceInfo() {
-    return {
-      requestId: RequestContextService.getRequestId(),
-    };
-  }
-
-  // --- Helper để chuẩn hóa tham số từ NestJS Core ---
-  private normalizeParams(message: any, ...optionalParams: any[]) {
-    let contextObj: LogContext = {};
-
-    // Xử lý trường hợp NestJS gửi context là string ở tham số cuối
-    if (optionalParams.length > 0) {
-      const lastParam = optionalParams[optionalParams.length - 1];
-      if (typeof lastParam === 'string') {
-        contextObj.context = lastParam; // Gán vào field context
-        // Bỏ string context ra khỏi params để không bị trùng
-        // optionalParams.pop();
-      } else if (typeof lastParam === 'object') {
-        contextObj = { ...lastParam };
-      }
-    }
-
-    // Nếu message là object (NestJS hay log object), stringify nó hoặc gán vào meta
-    const msgStr =
-      typeof message === 'string' ? message : JSON.stringify(message);
-
-    return { msgStr, contextObj };
-  }
-
-  // --- Implementation cho LoggerService (NestJS Core gọi cái này) ---
-
-  log(message: any, ...optionalParams: any[]) {
-    // Map 'log' của Nest sang 'info' của Winston
-    this.info(message, ...optionalParams);
-  }
-
-  // --- Implementation cho ILogger (App của ta gọi cái này) ---
-
-  debug(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(
-      message,
-      ...optionalParams,
-    );
-    this.callWinston('debug', msgStr, contextObj);
-  }
-
-  info(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(
-      message,
-      ...optionalParams,
-    );
-    this.callWinston('info', msgStr, contextObj);
-  }
-
-  warn(message: any, ...optionalParams: any[]): void {
-    const { msgStr, contextObj } = this.normalizeParams(
-      message,
-      ...optionalParams,
-    );
-    this.callWinston('warn', msgStr, contextObj);
-  }
-
-  error(message: any, ...optionalParams: any[]): void {
-    // NestJS thường gửi stack trace ở tham số thứ 2 hoặc 3
-    const { msgStr, contextObj } = this.normalizeParams(
-      message,
-      ...optionalParams,
-    );
-
-    // Tìm Error object nếu có trong params
-    const errorObj = optionalParams.find((p) => p instanceof Error);
-    const meta = { ...contextObj };
-
-    if (errorObj) {
-      meta.stack = errorObj.stack;
-      meta.error = errorObj.message;
-    }
-
-    this.callWinston('error', msgStr, meta);
-  }
-
-  // --- Context Methods ---
-
-  withContext(context: LogContext): ILogger {
-    const child = new WinstonLoggerAdapter(this.winstonLogger);
-    child.context = { ...this.context, ...context };
-    return child;
-  }
-
-  createChildLogger(module: string): ILogger {
-    return this.withContext({ context: module }); // Map 'label' hoặc 'context' tùy config winston
-  }
-
-  private callWinston(
-    level: string,
-    message: string,
-    context?: LogContext,
-  ): void {
-    this.winstonLogger.log(level, message, {
-      ...this.context,
-      ...this.getTraceInfo(),
-      ...context,
-    });
-  }
-}
 ```
 
 ## File: src/modules/logging/logging.module.ts
@@ -2895,6 +2949,7 @@ export class LoggingModule {
     };
   }
 }
+
 ```
 
 ## File: src/modules/notification/domain/entities/notification.entity.ts
@@ -2925,6 +2980,7 @@ export class Notification {
     this.status = NotificationStatus.FAILED;
   }
 }
+
 ```
 
 ## File: src/modules/notification/domain/repositories/notification.repository.ts
@@ -2938,6 +2994,7 @@ export interface INotificationRepository {
   save(notification: Notification, tx?: Transaction): Promise<Notification>;
   findByUserId(userId: number): Promise<Notification[]>;
 }
+
 ```
 
 ## File: src/modules/notification/domain/enums/notification.enum.ts
@@ -2953,6 +3010,7 @@ export enum NotificationStatus {
   SENT = 'SENT',
   FAILED = 'FAILED',
 }
+
 ```
 
 ## File: src/modules/notification/application/services/notification.service.ts
@@ -3018,6 +3076,7 @@ export class NotificationService {
     return this.repo.findByUserId(userId);
   }
 }
+
 ```
 
 ## File: src/modules/notification/application/listeners/user-registered.listener.ts
@@ -3056,6 +3115,7 @@ export class UserRegisteredListener {
     }
   }
 }
+
 ```
 
 ## File: src/modules/notification/application/ports/email-sender.port.ts
@@ -3065,6 +3125,7 @@ export const IEmailSender = Symbol('IEmailSender');
 export interface IEmailSender {
   send(to: string, subject: string, body: string): Promise<boolean>;
 }
+
 ```
 
 ## File: src/modules/notification/infrastructure/persistence/mappers/notification.mapper.ts
@@ -3108,6 +3169,7 @@ export class NotificationMapper {
     };
   }
 }
+
 ```
 
 ## File: src/modules/notification/infrastructure/persistence/drizzle-notification.repository.ts
@@ -3194,6 +3256,7 @@ export class DrizzleNotificationRepository
       .filter((n): n is Notification => n !== null);
   }
 }
+
 ```
 
 ## File: src/modules/notification/infrastructure/adapters/console-email.adapter.ts
@@ -3219,6 +3282,7 @@ export class ConsoleEmailAdapter implements IEmailSender {
     return true; // Luôn thành công
   }
 }
+
 ```
 
 ## File: src/modules/notification/infrastructure/controllers/notification.controller.ts
@@ -3251,6 +3315,7 @@ export class NotificationController {
     return this.service.getUserNotifications(user.id);
   }
 }
+
 ```
 
 ## File: src/modules/notification/notification.module.ts
@@ -3281,9 +3346,10 @@ import { IEmailSender } from './application/ports/email-sender.port';
   exports: [NotificationService],
 })
 export class NotificationModule {}
+
 ```
 
-## File: src/modules/dental/application/services/dental.service.ts
+## File: src/modules/dental/application/services/dental.service.ts.bak
 ```
 import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -3532,9 +3598,312 @@ export class DentalService {
     return results;
   }
 }
+
+```
+
+## File: src/modules/dental/application/services/dental.service.ts
+```
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import Piscina from 'piscina';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
+const AdmZip = require('adm-zip');
+import { v4 as uuidv4 } from 'uuid';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
+import { parseMovementExcel } from '../utils/movement.parser';
+
+export interface ModelStep {
+  index: number;
+  maxillary: string | null;
+  mandibular: string | null;
+  teethData?: Record<string, any>;
+}
+
+@Injectable()
+export class DentalService {
+  private readonly uploadDir: string;
+  private readonly outputDir: string;
+  private readonly appUrl: string;
+
+  constructor(
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(PISCINA_POOL) private readonly pool: Piscina,
+    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
+    private readonly config: ConfigService,
+  ) {
+    this.uploadDir = path.resolve(
+      this.config.get('dental.uploadDir') || 'uploads/dental/temp',
+    );
+    this.outputDir = path.resolve(
+      this.config.get('dental.outputDir') || 'uploads/dental/converted',
+    );
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
+      /\/$/,
+      '',
+    );
+    fs.ensureDirSync(this.uploadDir);
+    fs.ensureDirSync(this.outputDir);
+  }
+
+  async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const isOverwrite = String(dto.overwrite) === 'true';
+    let caseId: string | null = null;
+
+    if (isOverwrite) {
+      caseId = await this.orthoRepo.findLatestCaseIdByCode(dto.patientCode);
+      if (caseId) {
+        this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
+        await fs.remove(path.join(this.outputDir, caseId)).catch(() => {});
+        await (this.orthoRepo as any).deleteStepsByCaseId(Number(caseId));
+      }
+    }
+
+    if (!caseId) {
+      caseId = await this.orthoRepo.createFullCase({
+        patientName: dto.patientName,
+        patientCode: dto.patientCode,
+        clinicName: dto.clinicName,
+        doctorName: dto.doctorName,
+        gender: dto.gender,
+        productType: dto.productType,
+        notes: dto.notes,
+      });
+    }
+
+    const extractPath = path.join(this.uploadDir, `extract_${uuidv4()}`);
+    try {
+      const zip = new AdmZip(file.path);
+      zip.extractAllTo(extractPath, true);
+      const objFiles = await this.findFilesRecursively(extractPath, '.obj');
+
+      const tasks = objFiles.map((objPath) => {
+        const baseName = path.basename(objPath, '.obj');
+        const parentDir = path.basename(path.dirname(objPath));
+
+        let type: 'Maxillary' | 'Mandibular' = baseName
+          .toLowerCase()
+          .includes('mandibular')
+          ? 'Mandibular'
+          : 'Maxillary';
+
+        // LOGIC NHẬN DIỆN INDEX THÔNG MINH:
+        // 1. Ưu tiên số trong tên thư mục cha (ví dụ: "Stage 5" -> 5)
+        // 2. Nếu không có, tìm số trong tên file (ví dụ: "Maxillary_10" -> 10)
+        let index = 0;
+        const folderMatch = parentDir.match(/(\d+)/);
+        const fileMatch = baseName.match(/(\d+)/);
+
+        if (folderMatch) index = parseInt(folderMatch[1], 10);
+        else if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+        return {
+          objFilePath: objPath,
+          outputDir: path.join(this.outputDir, caseId!, type),
+          baseName: `${type}_${index.toString().padStart(3, '0')}`,
+          encryptionKey: this.config.get('dental.encryptionKey'),
+          config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
+          meta: { index, type },
+        };
+      });
+
+      this.logger.info(
+        `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
+      );
+      await Promise.allSettled(tasks.map((t) => this.pool.run(t)));
+
+      return {
+        message: 'Processing started',
+        caseId,
+        stepCount: tasks.length / 2,
+      };
+    } catch (error: any) {
+      throw new BadRequestException(error.message);
+    } finally {
+      await fs.remove(extractPath).catch(() => {});
+      await fs.remove(file.path).catch(() => {});
+    }
+  }
+
+  async processMovementExcel(file: Express.Multer.File, caseId: string) {
+    const fileBuffer = await fs.readFile(file.path);
+    const stepsDataMap = parseMovementExcel(fileBuffer);
+    for (const [stepIndex, teethData] of stepsDataMap.entries()) {
+      await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+    }
+    await fs.remove(file.path).catch(() => {});
+    return { message: 'Movement data updated', count: stepsDataMap.size };
+  }
+
+  async listModels(clientId: string, caseId?: string): Promise<ModelStep[]> {
+    const id =
+      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    if (!id) return [];
+
+    const clientDir = path.join(this.outputDir, id);
+    const allEncFiles = fs.existsSync(clientDir)
+      ? await this.findFilesRecursively(clientDir, '.enc')
+      : [];
+    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
+
+    const stepsMap = new Map<number, ModelStep>();
+
+    // Nạp data từ DB trước
+    dbSteps.forEach((s) => {
+      stepsMap.set(s.stepIndex, {
+        index: s.stepIndex,
+        maxillary: null,
+        mandibular: null,
+        teethData: s.teethData,
+      });
+    });
+
+    // Nạp link file 3D từ ổ cứng
+    allEncFiles.forEach((fp) => {
+      const filename = path.basename(fp).toLowerCase();
+      // Lấy con số cuối cùng trong tên file (đảm bảo là Index của step)
+      const matches = filename.match(/(\d+)/g);
+      const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
+
+      const relPath = path
+        .relative(this.outputDir, fp)
+        .split(path.sep)
+        .join('/');
+      const url = `${this.appUrl}/models/${relPath}`;
+
+      if (!stepsMap.has(index)) {
+        stepsMap.set(index, { index, maxillary: null, mandibular: null });
+      }
+
+      const entry = stepsMap.get(index)!;
+      if (filename.includes('maxillary')) entry.maxillary = url;
+      else if (filename.includes('mandibular')) entry.mandibular = url;
+    });
+
+    return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+  }
+
+  async getCaseDetails(clientId: string, caseId?: string) {
+    const id =
+      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    return id ? this.orthoRepo.getCaseDetails(id, true) : null;
+  }
+
+  async getHistory(patientCode: string) {
+    return this.orthoRepo.findCasesByPatientCode(patientCode);
+  }
+
+  private async findFilesRecursively(
+    dir: string,
+    ext: string,
+  ): Promise<string[]> {
+    let results: string[] = [];
+    if (!fs.existsSync(dir)) return results;
+    const list = await fs.readdir(dir);
+    for (const file of list) {
+      const fullPath = path.resolve(dir, file);
+      if (fs.statSync(fullPath).isDirectory()) {
+        results = results.concat(
+          await this.findFilesRecursively(fullPath, ext),
+        );
+      } else if (file.toLowerCase().endsWith(ext)) {
+        results.push(fullPath);
+      }
+    }
+    return results;
+  }
+}
+
 ```
 
 ## File: src/modules/dental/application/utils/movement.parser.ts
+```
+import * as XLSX from 'xlsx';
+import { BadRequestException } from '@nestjs/common';
+
+export interface ToothMoveData {
+  extrusion: number;
+  translationX: number;
+  translationY: number;
+  rotation: number;
+  angulation: number;
+  torque: number;
+}
+
+export const parseMovementExcel = (
+  buffer: Buffer,
+): Map<number, Record<string, ToothMoveData>> => {
+  try {
+    if (!buffer || buffer.length === 0) {
+      throw new Error('File content is empty');
+    }
+
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      throw new Error('No sheets found in file');
+    }
+
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
+
+    const stepsMap = new Map<number, Record<string, ToothMoveData>>();
+
+    jsonData.forEach((row) => {
+      const cleanRow: any = {};
+      Object.keys(row).forEach((k) => {
+        cleanRow[k.toLowerCase().trim().replace(/_/g, '')] = row[k];
+      });
+
+      const step = parseInt(cleanRow['step'] || cleanRow['stage']);
+      const tooth = String(cleanRow['tooth'] || cleanRow['toothid']);
+
+      if (isNaN(step) || !tooth || tooth === 'undefined') return;
+
+      if (!stepsMap.has(step)) {
+        stepsMap.set(step, {});
+      }
+
+      const stepData = stepsMap.get(step)!;
+
+      stepData[tooth] = {
+        extrusion: parseFloat(cleanRow['extrusion'] || 0),
+        translationX: parseFloat(
+          cleanRow['translationx'] || cleanRow['transx'] || 0,
+        ),
+        translationY: parseFloat(
+          cleanRow['translationy'] || cleanRow['transy'] || 0,
+        ),
+        rotation: parseFloat(cleanRow['rotation'] || cleanRow['rot'] || 0),
+        angulation: parseFloat(cleanRow['angulation'] || cleanRow['ang'] || 0),
+        torque: parseFloat(cleanRow['torque'] || cleanRow['tor'] || 0),
+      };
+    });
+
+    return stepsMap;
+  } catch (error: any) {
+    throw new BadRequestException('Invalid Excel/CSV format: ' + error.message);
+  }
+};
+
+```
+
+## File: src/modules/dental/application/utils/movement.parser.ts.bak
 ```
 import * as XLSX from 'xlsx';
 import { BadRequestException } from '@nestjs/common';
@@ -3596,13 +3965,29 @@ export const parseMovementExcel = (buffer: Buffer): Map<number, Record<string, T
     throw new BadRequestException('Invalid Excel file format. ' + error.message);
   }
 };
+
 ```
 
 ## File: src/modules/dental/infrastructure/controllers/dental.controller.ts
 ```
-import { Controller, Post, Get, Query, UploadedFile, UseInterceptors, UseGuards, Body } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+  UseGuards,
+  Body,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiConsumes, ApiBody, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiConsumes,
+  ApiBody,
+  ApiBearerAuth,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import * as fs from 'fs-extra';
 import { DentalService } from '../../application/services/dental.service';
@@ -3611,7 +3996,9 @@ import { UploadCaseDto } from '../dtos/upload-case.dto';
 import { Public } from '@modules/auth/infrastructure/decorators/public.decorator';
 
 const uploadDir = 'uploads/temp';
-try { fs.ensureDirSync(uploadDir); } catch (e) {}
+try {
+  fs.ensureDirSync(uploadDir);
+} catch (e) {}
 
 const storage = diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
@@ -3631,7 +4018,7 @@ export class DentalController {
   @UseInterceptors(FileInterceptor('file', { storage }))
   async uploadZip(
     @UploadedFile() file: Express.Multer.File,
-    @Body() dto: UploadCaseDto
+    @Body() dto: UploadCaseDto,
   ) {
     return this.dentalService.processZipUpload(file, dto);
   }
@@ -3639,11 +4026,19 @@ export class DentalController {
   // ✅ NEW: API Upload Excel Data
   @Post('upload-movement')
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' }, caseId: { type: 'string' } } } })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        caseId: { type: 'string' },
+      },
+    },
+  })
   @UseInterceptors(FileInterceptor('file', { storage }))
   async uploadMovement(
     @UploadedFile() file: Express.Multer.File,
-    @Body('caseId') caseId: string
+    @Body('caseId') caseId: string,
   ) {
     return this.dentalService.processMovementExcel(file, caseId);
   }
@@ -3654,9 +4049,9 @@ export class DentalController {
   @ApiQuery({ name: 'caseId', required: false })
   async listModels(
     @Query('clientId') clientId: string,
-    @Query('caseId') caseId?: string
+    @Query('caseId') caseId?: string,
   ) {
-      return this.dentalService.listModels(clientId, caseId);
+    return this.dentalService.listModels(clientId, caseId);
   }
 
   @Public()
@@ -3665,17 +4060,18 @@ export class DentalController {
   @ApiQuery({ name: 'caseId', required: false })
   async getCaseDetails(
     @Query('clientId') clientId: string,
-    @Query('caseId') caseId?: string
+    @Query('caseId') caseId?: string,
   ) {
-      return this.dentalService.getCaseDetails(clientId, caseId);
+    return this.dentalService.getCaseDetails(clientId, caseId);
   }
 
   @Get('history')
   @ApiQuery({ name: 'clientId', description: 'Patient Code' })
   async getHistory(@Query('clientId') clientId: string) {
-      return this.dentalService.getHistory(clientId);
+    return this.dentalService.getHistory(clientId);
   }
 }
+
 ```
 
 ## File: src/modules/dental/infrastructure/workers/conversion.worker.ts
@@ -3933,6 +4329,7 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
 }
 
 export default convertAndEncrypt;
+
 ```
 
 ## File: src/modules/dental/infrastructure/workers/piscina.provider.ts
@@ -4003,6 +4400,7 @@ export const PiscinaProvider: Provider = {
   },
   inject: [ConfigService],
 };
+
 ```
 
 ## File: src/modules/dental/infrastructure/adapters/fs-dental-storage.adapter.ts
@@ -4087,6 +4485,7 @@ export class FileSystemDentalStorage implements IDentalStorage {
     return results;
   }
 }
+
 ```
 
 ## File: src/modules/dental/infrastructure/adapters/piscina-worker.adapter.ts
@@ -4108,6 +4507,7 @@ export class PiscinaDentalWorker implements IDentalWorker {
     return this.pool.run(task);
   }
 }
+
 ```
 
 ## File: src/modules/dental/infrastructure/persistence/drizzle-ortho.repository.ts
@@ -4120,7 +4520,7 @@ import {
   CreateCaseParams,
   OrthoCase,
   FullCaseInput,
-  CaseDetailsDTO
+  CaseDetailsDTO,
 } from '../../domain/repositories/ortho.repository';
 import {
   patients,
@@ -4137,269 +4537,331 @@ export class DrizzleOrthoRepository
   implements IOrthoRepository
 {
   async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
-     const runInTx = async (dbTx: any) => {
-        const clinicCode = data.clinicName.toUpperCase().replace(/\s+/g, '_').substring(0, 10);
+    const runInTx = async (dbTx: any) => {
+      const clinicCode = data.clinicName
+        .toUpperCase()
+        .replace(/\s+/g, '_')
+        .substring(0, 10);
 
-        let clinicId: number;
-        const existingClinic = await dbTx.select().from(clinics).where(eq(clinics.clinicCode, clinicCode)).limit(1);
-        if (existingClinic.length > 0) {
-            clinicId = existingClinic[0].id;
+      let clinicId: number;
+      const existingClinic = await dbTx
+        .select()
+        .from(clinics)
+        .where(eq(clinics.clinicCode, clinicCode))
+        .limit(1);
+      if (existingClinic.length > 0) {
+        clinicId = existingClinic[0].id;
+      } else {
+        const [newClinic] = await dbTx
+          .insert(clinics)
+          .values({
+            name: data.clinicName,
+            clinicCode: clinicCode,
+          })
+          .returning();
+        clinicId = newClinic.id;
+      }
+
+      let dentistId: number | null = null;
+      if (data.doctorName) {
+        const existingDentist = await dbTx
+          .select()
+          .from(dentists)
+          .where(
+            and(
+              eq(dentists.fullName, data.doctorName),
+              eq(dentists.clinicId, clinicId),
+            ),
+          )
+          .limit(1);
+        if (existingDentist.length > 0) {
+          dentistId = existingDentist[0].id;
         } else {
-            const [newClinic] = await dbTx.insert(clinics).values({
-                name: data.clinicName,
-                clinicCode: clinicCode,
-            }).returning();
-            clinicId = newClinic.id;
+          const [newDentist] = await dbTx
+            .insert(dentists)
+            .values({
+              fullName: data.doctorName,
+              clinicId: clinicId,
+            })
+            .returning();
+          dentistId = newDentist.id;
         }
+      }
 
-        let dentistId: number | null = null;
-        if (data.doctorName) {
-            const existingDentist = await dbTx.select().from(dentists)
-                .where(and(eq(dentists.fullName, data.doctorName), eq(dentists.clinicId, clinicId)))
-                .limit(1);
-            if (existingDentist.length > 0) {
-                dentistId = existingDentist[0].id;
-            } else {
-                const [newDentist] = await dbTx.insert(dentists).values({
-                    fullName: data.doctorName,
-                    clinicId: clinicId,
-                }).returning();
-                dentistId = newDentist.id;
-            }
-        }
+      let patientId: number;
+      const existingPatient = await dbTx
+        .select()
+        .from(patients)
+        .where(eq(patients.patientCode, data.patientCode))
+        .limit(1);
+      if (existingPatient.length > 0) {
+        patientId = existingPatient[0].id;
+      } else {
+        const [newPatient] = await dbTx
+          .insert(patients)
+          .values({
+            fullName: data.patientName,
+            patientCode: data.patientCode,
+            clinicId: clinicId,
+            gender: data.gender,
+            birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
+          })
+          .returning();
+        patientId = newPatient.id;
+      }
 
-        let patientId: number;
-        const existingPatient = await dbTx.select().from(patients).where(eq(patients.patientCode, data.patientCode)).limit(1);
-        if (existingPatient.length > 0) {
-            patientId = existingPatient[0].id;
-        } else {
-            const [newPatient] = await dbTx.insert(patients).values({
-                fullName: data.patientName,
-                patientCode: data.patientCode,
-                clinicId: clinicId,
-                gender: data.gender,
-                birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
-            }).returning();
-            patientId = newPatient.id;
-        }
+      const [newCase] = await dbTx
+        .insert(cases)
+        .values({
+          patientId: patientId,
+          dentistId: dentistId,
+          productType: data.productType,
+          status: 'PROCESSING',
+          notes: data.notes,
+          startedAt: new Date(),
+        })
+        .returning();
 
-        const [newCase] = await dbTx.insert(cases).values({
-            patientId: patientId,
-            dentistId: dentistId,
-            productType: data.productType,
-            status: 'PROCESSING',
-            notes: data.notes,
-            startedAt: new Date(),
-        }).returning();
+      return String(newCase.id);
+    };
 
-        return String(newCase.id);
-     };
-
-     if (tx) return runInTx(tx);
-     return this.db.transaction(runInTx);
+    if (tx) return runInTx(tx);
+    return this.db.transaction(runInTx);
   }
 
   // ✅ NEW: Hàm Update Movement Data
-  async updateStepMovementData(caseId: string, stepIndex: number, teethData: any, tx?: Transaction): Promise<void> {
-      const db = this.getDb(tx);
-      const cId = Number(caseId);
+  async updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: any,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    const cId = Number(caseId);
 
-      // Kiểm tra xem step đã tồn tại chưa
-      const existingStep = await db.select().from(treatmentSteps)
-          .where(and(eq(treatmentSteps.caseId, cId), eq(treatmentSteps.stepIndex, stepIndex)))
-          .limit(1);
+    // Kiểm tra xem step đã tồn tại chưa
+    const existingStep = await db
+      .select()
+      .from(treatmentSteps)
+      .where(
+        and(
+          eq(treatmentSteps.caseId, cId),
+          eq(treatmentSteps.stepIndex, stepIndex),
+        ),
+      )
+      .limit(1);
 
-      if (existingStep.length > 0) {
-          // Update
-          await db.update(treatmentSteps)
-              .set({ teethData: teethData })
-              .where(eq(treatmentSteps.id, existingStep[0].id));
-      } else {
-          // Insert mới (nếu chưa có model nhưng có data trước)
-          await db.insert(treatmentSteps).values({
-              caseId: cId,
-              stepIndex: stepIndex,
-              teethData: teethData
-          });
-      }
+    if (existingStep.length > 0) {
+      // Update
+      await db
+        .update(treatmentSteps)
+        .set({ teethData: teethData })
+        .where(eq(treatmentSteps.id, existingStep[0].id));
+    } else {
+      // Insert mới (nếu chưa có model nhưng có data trước)
+      await db.insert(treatmentSteps).values({
+        caseId: cId,
+        stepIndex: stepIndex,
+        teethData: teethData,
+      });
+    }
   }
 
-  async getCaseDetails(identifier: string, isCaseId: boolean, tx?: Transaction): Promise<CaseDetailsDTO | null> {
-      const db = this.getDb(tx);
-      let selection = {
-          patientName: patients.fullName,
-          patientCode: patients.patientCode,
-          caseId: cases.id,
-          doctorName: dentists.fullName,
-          clinicName: clinics.name,
-          createdAt: cases.createdAt
-      };
-
-      let query;
-      if (isCaseId) {
-          query = db.select(selection).from(cases)
-              .innerJoin(patients, eq(cases.patientId, patients.id))
-              .leftJoin(dentists, eq(cases.dentistId, dentists.id))
-              .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-              .where(eq(cases.id, Number(identifier)))
-              .limit(1);
-      } else {
-          query = db.select(selection).from(cases)
-              .innerJoin(patients, eq(cases.patientId, patients.id))
-              .leftJoin(dentists, eq(cases.dentistId, dentists.id))
-              .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-              .where(eq(patients.patientCode, identifier))
-              .orderBy(desc(cases.createdAt))
-              .limit(1);
-      }
-      const result = await query;
-      return result[0] || null;
+  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
   }
 
-  async checkCaseBelongsToPatient(caseId: string, patientCode: string, tx?: Transaction): Promise<boolean> {
-      const db = this.getDb(tx);
-      if (isNaN(Number(caseId))) return false;
-      const result = await db.select({ id: cases.id })
+  async getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null> {
+    const db = this.getDb(tx);
+    let selection = {
+      patientName: patients.fullName,
+      patientCode: patients.patientCode,
+      caseId: cases.id,
+      doctorName: dentists.fullName,
+      clinicName: clinics.name,
+      createdAt: cases.createdAt,
+    };
+
+    let query;
+    if (isCaseId) {
+      query = db
+        .select(selection)
         .from(cases)
         .innerJoin(patients, eq(cases.patientId, patients.id))
-        .where(and(eq(cases.id, Number(caseId)), eq(patients.patientCode, patientCode)))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(cases.id, Number(identifier)))
         .limit(1);
-      return result.length > 0;
+    } else {
+      query = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(patients.patientCode, identifier))
+        .orderBy(desc(cases.createdAt))
+        .limit(1);
+    }
+    const result = await query;
+    return result[0] || null;
   }
 
-  async findLatestCaseIdByCode(code: string, tx?: Transaction): Promise<string | null> {
+  async checkCaseBelongsToPatient(
+    caseId: string,
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<boolean> {
+    const db = this.getDb(tx);
+    if (isNaN(Number(caseId))) return false;
+    const result = await db
+      .select({ id: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(
+        and(
+          eq(cases.id, Number(caseId)),
+          eq(patients.patientCode, patientCode),
+        ),
+      )
+      .limit(1);
+    return result.length > 0;
+  }
+
+  async findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null> {
     const db = this.getDb(tx);
     if (!isNaN(Number(code))) {
-        const caseById = await db.query.cases.findFirst({ where: eq(cases.id, Number(code)) });
-        if (caseById) return String(caseById.id);
+      const caseById = await db.query.cases.findFirst({
+        where: eq(cases.id, Number(code)),
+      });
+      if (caseById) return String(caseById.id);
     }
-    const result = await db.select({ caseId: cases.id })
-    .from(cases)
-    .innerJoin(patients, eq(cases.patientId, patients.id))
-    .where(eq(patients.patientCode, code))
-    .orderBy(desc(cases.createdAt))
-    .limit(1);
+    const result = await db
+      .select({ caseId: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(eq(patients.patientCode, code))
+      .orderBy(desc(cases.createdAt))
+      .limit(1);
 
     if (result.length > 0) return String(result[0].caseId);
     return null;
   }
 
-  async findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<any[]> {
+  async findCasesByPatientCode(
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<any[]> {
     const db = this.getDb(tx);
-    return await db.select({
+    return await db
+      .select({
         caseId: cases.id,
         status: cases.status,
         createdAt: cases.createdAt,
         notes: cases.notes,
         productType: cases.productType,
-        doctorName: dentists.fullName
-    })
-    .from(cases)
-    .innerJoin(patients, eq(cases.patientId, patients.id))
-    .leftJoin(dentists, eq(cases.dentistId, dentists.id))
-    .where(eq(patients.patientCode, patientCode))
-    .orderBy(desc(cases.createdAt));
+        doctorName: dentists.fullName,
+      })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+      .where(eq(patients.patientCode, patientCode))
+      .orderBy(desc(cases.createdAt));
   }
 
   async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
     const db = this.getDb(tx);
     // ✅ QUAN TRỌNG: Select luôn teethData
-    return await db.select()
-        .from(treatmentSteps)
-        .where(eq(treatmentSteps.caseId, caseId))
-        .orderBy(asc(treatmentSteps.stepIndex));
+    return await db
+      .select()
+      .from(treatmentSteps)
+      .where(eq(treatmentSteps.caseId, caseId))
+      .orderBy(asc(treatmentSteps.stepIndex));
   }
 
   // Legacy
-  async findPatientByCode(code: string, tx?: Transaction): Promise<any | null> { return null; }
-  async createPatient(data: any, tx?: Transaction): Promise<any> { return null; }
-  async createCase(data: CreateCaseParams, tx?: Transaction): Promise<OrthoCase> { throw new Error(""); }
-  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> { return null; }
-  async saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void> {}
+  async findPatientByCode(code: string, tx?: Transaction): Promise<any | null> {
+    return null;
+  }
+  async createPatient(data: any, tx?: Transaction): Promise<any> {
+    return null;
+  }
+  async createCase(
+    data: CreateCaseParams,
+    tx?: Transaction,
+  ): Promise<OrthoCase> {
+    throw new Error('');
+  }
+  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> {
+    return null;
+  }
+  async saveSteps(
+    caseId: number,
+    steps: any[],
+    tx?: Transaction,
+  ): Promise<void> {}
 }
+
 ```
 
 ## File: src/modules/dental/infrastructure/dtos/upload-case.dto.ts
 ```
-import {
-  IsString,
-  IsOptional,
-  IsEnum,
-  IsDateString,
-  IsNotEmpty,
-} from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsOptional, IsNotEmpty, IsEnum } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export enum Gender {
   Male = 'Male',
   Female = 'Female',
   Other = 'Other',
 }
-
 export enum ProductType {
   Aligner = 'aligner',
   Retainer = 'retainer',
 }
 
 export class UploadCaseDto {
-  @ApiProperty({
-    description: 'Full Name of the Patient',
-    example: 'Nguyen Van A',
-  })
+  @ApiProperty({ example: 'Nguyen Van A' })
   @IsString()
   @IsNotEmpty()
   patientName: string;
-
-  @ApiProperty({ description: 'Unique Patient Code', example: 'PAT-12345' })
+  @ApiProperty({ example: 'PAT-12345' })
   @IsString()
   @IsNotEmpty()
   patientCode: string;
-
-  @ApiProperty({ description: 'Gender', enum: Gender, required: false })
-  @IsOptional()
-  @IsEnum(Gender)
-  gender?: Gender;
-
-  @ApiProperty({
-    description: 'Date of Birth (ISO)',
-    required: false,
-    example: '1990-01-01',
-  })
-  @IsOptional()
-  @IsDateString()
-  dob?: string;
-
-  @ApiProperty({ description: 'Clinic Name', example: 'Smile Dental' })
+  @ApiProperty({ example: 'Smile Dental' })
   @IsString()
   @IsNotEmpty()
   clinicName: string;
-
-  @ApiProperty({
-    description: 'Doctor Name',
-    required: false,
-    example: 'Dr. House',
-  })
+  @ApiPropertyOptional({ example: 'Dr. Strange' })
   @IsOptional()
   @IsString()
   doctorName?: string;
-
-  @ApiProperty({
-    description: 'Product Type',
-    enum: ProductType,
-    default: ProductType.Aligner,
-  })
+  @ApiPropertyOptional({ enum: Gender, example: Gender.Male })
   @IsOptional()
-  @IsEnum(ProductType)
-  productType: ProductType = ProductType.Aligner;
-
-  @ApiProperty({ description: 'Additional Notes', required: false })
+  gender?: any;
+  @ApiPropertyOptional({ example: '1990-01-01' }) @IsOptional() dob?: string;
+  @ApiPropertyOptional({ enum: ProductType, example: ProductType.Aligner })
+  @IsOptional()
+  productType?: any;
+  @ApiPropertyOptional({ example: 'Ghi chú ca lâm sàng' })
   @IsOptional()
   @IsString()
   notes?: string;
-
-  @ApiProperty({ type: 'string', format: 'binary' })
-  file: any;
+  @ApiPropertyOptional({ example: 'false', description: 'Ghi đè case cũ?' })
+  @IsOptional()
+  @IsString()
+  overwrite?: string;
+  @ApiProperty({ type: 'string', format: 'binary' }) file: any;
 }
+
 ```
 
 ## File: src/modules/dental/domain/ports/dental-worker.port.ts
@@ -4426,6 +4888,7 @@ export interface WorkerResult {
 export interface IDentalWorker {
   runTask(task: ConversionJob): Promise<WorkerResult>;
 }
+
 ```
 
 ## File: src/modules/dental/domain/ports/dental-storage.port.ts
@@ -4448,29 +4911,73 @@ export interface IDentalStorage {
   getUploadDir(): string;
   getOutputDir(): string;
 }
+
 ```
 
 ## File: src/modules/dental/domain/repositories/ortho.repository.ts
 ```
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
-export interface OrthoCase { id: number; orderId?: string | null; patientId: number; status: string | null; createdAt: Date | null; }
-export interface CreateCaseParams { patientId: number; dentistId?: number; productType: 'aligner' | 'retainer'; scanDate?: Date; }
-export interface FullCaseInput { patientName: string; patientCode: string; gender?: 'Male' | 'Female' | 'Other'; dob?: Date; clinicName: string; doctorName?: string; productType: 'aligner' | 'retainer'; notes?: string; }
-export interface CaseDetailsDTO { patientName: string; patientCode: string; caseId: number; doctorName?: string; clinicName?: string; createdAt: Date; }
+export interface OrthoCase {
+  id: number;
+  orderId?: string | null;
+  patientId: number;
+  status: string | null;
+  createdAt: Date | null;
+}
+export interface CreateCaseParams {
+  patientId: number;
+  dentistId?: number;
+  productType: 'aligner' | 'retainer';
+  scanDate?: Date;
+}
+export interface FullCaseInput {
+  patientName: string;
+  patientCode: string;
+  gender?: 'Male' | 'Female' | 'Other';
+  dob?: Date;
+  clinicName: string;
+  doctorName?: string;
+  productType: 'aligner' | 'retainer';
+  notes?: string;
+}
+export interface CaseDetailsDTO {
+  patientName: string;
+  patientCode: string;
+  caseId: number;
+  doctorName?: string;
+  clinicName?: string;
+  createdAt: Date;
+}
 
 export const IOrthoRepository = Symbol('IOrthoRepository');
 
 export interface IOrthoRepository {
   createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string>;
-  findLatestCaseIdByCode(code: string, tx?: Transaction): Promise<string | null>;
-  checkCaseBelongsToPatient(caseId: string, patientCode: string, tx?: Transaction): Promise<boolean>;
+  findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null>;
+  checkCaseBelongsToPatient(
+    caseId: string,
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<boolean>;
   findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<any[]>;
-  getCaseDetails(identifier: string, isCaseId: boolean, tx?: Transaction): Promise<CaseDetailsDTO | null>;
+  getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null>;
   getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
 
   // ✅ NEW
-  updateStepMovementData(caseId: string, stepIndex: number, teethData: any, tx?: Transaction): Promise<void>;
+  updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: any,
+    tx?: Transaction,
+  ): Promise<void>;
 
   // Legacy
   findPatientByCode(code: string, tx?: Transaction): Promise<any | null>;
@@ -4478,7 +4985,9 @@ export interface IOrthoRepository {
   createCase(data: any, tx?: Transaction): Promise<any>;
   findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
   saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+  deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
 }
+
 ```
 
 ## File: src/modules/dental/dental.module.ts
@@ -4518,6 +5027,7 @@ import dentalConfig from '@config/dental.config';
   ],
 })
 export class DentalModule {}
+
 ```
 
 ## File: src/core/interceptors/transform-response.interceptor.ts
@@ -4591,6 +5101,7 @@ export class TransformResponseInterceptor<T> implements NestInterceptor<
     );
   }
 }
+
 ```
 
 ## File: src/core/filters/http-exception.filter.ts
@@ -4604,78 +5115,43 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-// 1. Định nghĩa Interface cho cấu trúc lỗi mặc định của NestJS
-interface NestErrorResponse {
-  statusCode: number;
-  message: string | string[];
-  error: string;
-}
-
-// 2. Định nghĩa Interface cho cấu trúc response trả về client
-interface ApiResponse {
-  success: boolean;
-  statusCode: number;
-  message: string;
-  errors: string | string[] | null;
-  path: string;
-  timestamp: string;
-}
-
-@Catch(HttpException)
+@Catch() // Bỏ trống để bắt mọi loại lỗi (kể cả lỗi Database)
 export class HttpExceptionFilter implements ExceptionFilter {
-  catch(exception: HttpException, host: ArgumentsHost) {
+  catch(exception: any, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const status = exception.getStatus
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status =
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    // 3. Lấy response gốc (có thể là string hoặc object)
-    const exceptionResponse = exception.getResponse();
+    let message = 'Internal server error';
+    let errors = null;
 
-    // 4. Khởi tạo giá trị mặc định
-    let message = 'Error';
-    let errors: string | string[] | null = null;
-
-    // 5. Xử lý Logic Type-Safe
-    if (typeof exceptionResponse === 'string') {
-      // Trường hợp 1: throw new BadRequestException('Lỗi gì đó')
-      message = exceptionResponse;
-    } else if (
-      typeof exceptionResponse === 'object' &&
-      exceptionResponse !== null
-    ) {
-      // Trường hợp 2: Lỗi từ class-validator hoặc NestJS chuẩn
-      // Ép kiểu an toàn về Interface đã định nghĩa
-      const responseObj = exceptionResponse as NestErrorResponse;
-
-      // Logic cũ của bạn: Ưu tiên lấy 'error' làm message chính (VD: "Bad Request")
-      // Nếu không có 'error', lấy 'message' (nếu nó là string)
-      if (responseObj.error) {
-        message = responseObj.error;
-      } else if (typeof responseObj.message === 'string') {
-        message = responseObj.message;
-      }
-
-      // 'errors' chứa chi tiết (VD: mảng các field validate sai)
-      errors = responseObj.message || null;
+    if (exception instanceof HttpException) {
+      const res: any = exception.getResponse();
+      message =
+        typeof res === 'string' ? res : res.message || res.error || message;
+      errors = res.message || null;
+    } else {
+      // Đây là lỗi hệ thống (Database, v.v.)
+      console.error('🔥 System Error:', exception);
+      message = exception.message || 'Database Transaction Error';
     }
 
-    // 6. Tạo response body theo Interface chuẩn
-    const responseBody: ApiResponse = {
+    response.status(status).json({
       success: false,
       statusCode: status,
       message: message,
       errors: errors,
       path: request.url,
       timestamp: new Date().toISOString(),
-    };
-
-    response.status(status).json(responseBody);
+    });
   }
 }
+
 ```
 
 ## File: src/core/decorators/bypass-transform.decorator.ts
@@ -4684,6 +5160,7 @@ import { SetMetadata } from '@nestjs/common';
 
 export const BYPASS_TRANSFORM_KEY = 'bypass_transform';
 export const BypassTransform = () => SetMetadata(BYPASS_TRANSFORM_KEY, true);
+
 ```
 
 ## File: src/core/shared/application/ports/file-parser.port.ts
@@ -4693,6 +5170,7 @@ export const IFileParser = Symbol('IFileParser');
 export interface IFileParser {
   parseCsv<T>(content: string): T[];
 }
+
 ```
 
 ## File: src/core/shared/application/ports/transaction-manager.port.ts
@@ -4706,6 +5184,7 @@ export const ITransactionManager = Symbol('ITransactionManager');
 export interface ITransactionManager {
   runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }
+
 ```
 
 ## File: src/core/shared/application/ports/repository.port.ts
@@ -4729,6 +5208,7 @@ export interface IPaginatedRepository<T, ID> extends IRepository<T, ID> {
     sort?: { field: string; order: 'ASC' | 'DESC' },
   ): Promise<{ data: T[]; total: number; page: number; totalPages: number }>;
 }
+
 ```
 
 ## File: src/core/shared/application/ports/event-bus.port.ts
@@ -4747,6 +5227,7 @@ export interface IEventBus {
     handler: (event: T) => Promise<void>,
   ): void;
 }
+
 ```
 
 ## File: src/core/shared/application/ports/logger.port.ts
@@ -4779,6 +5260,7 @@ export interface ILogger {
   withContext(context: LogContext): ILogger;
   createChildLogger(module: string): ILogger;
 }
+
 ```
 
 ## File: src/core/shared/application/ports/cache.port.ts
@@ -4793,6 +5275,7 @@ export interface ICacheService {
   del(key: string): Promise<void>;
   reset(): Promise<void>;
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/adapters/csv-parser.adapter.ts
@@ -4811,6 +5294,7 @@ export class CsvParserAdapter implements IFileParser {
     return []; // Placeholder implementation logic moved from service
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/adapters/in-memory-event-bus.adapter.ts
@@ -4858,6 +5342,7 @@ export class InMemoryEventBus implements IEventBus {
     }
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/persistence/drizzle-base.repository.ts
@@ -4883,6 +5368,7 @@ export class DrizzleBaseRepository {
     return tx ? (tx as NodePgDatabase<typeof schema>) : this.db;
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/persistence/drizzle-transaction.manager.ts
@@ -4906,6 +5392,7 @@ export class DrizzleTransactionManager implements ITransactionManager {
     });
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/context/request-context.service.ts
@@ -4938,6 +5425,7 @@ export class RequestContextService {
     return this.als.getStore();
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/cache/redis-cache.adapter.ts
@@ -5028,6 +5516,7 @@ export class RedisCacheAdapter implements ICacheService, OnModuleInit {
     }
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/cache/redis-cache.module.ts
@@ -5087,6 +5576,7 @@ import { redisStore } from 'cache-manager-redis-yet';
   exports: [ICacheService, CACHE_MANAGER],
 })
 export class RedisCacheModule {}
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/adapters/in-memory-event-bus.adapter.ts
@@ -5153,6 +5643,7 @@ export class InMemoryEventBusAdapter implements IEventBus {
     this.logger.log(`Subscribed to event: ${eventName}`);
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/adapters/rabbitmq-event-bus.adapter.ts
@@ -5191,6 +5682,7 @@ export class RabbitMQEventBusAdapter
     this.logger.log(`[RabbitMQ] Subscribing to: ${eventCls}`);
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/adapters/kafka-event-bus.adapter.ts
@@ -5218,6 +5710,7 @@ export class KafkaEventBusAdapter implements IEventBus, OnModuleInit {
     this.logger.log(`[Kafka] Subscribing to: ${eventCls}`);
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/decorators/event-handler.decorator.ts
@@ -5230,6 +5723,7 @@ export const EVENT_HANDLER_METADATA = 'EVENT_HANDLER_METADATA';
 
 export const EventHandler = (event: Type<IDomainEvent> | string) =>
   SetMetadata(EVENT_HANDLER_METADATA, event);
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/event.explorer.ts
@@ -5277,6 +5771,7 @@ export class EventExplorer implements OnModuleInit {
       });
   }
 }
+
 ```
 
 ## File: src/core/shared/infrastructure/event-bus/event-bus.module.ts
@@ -5318,6 +5813,7 @@ import eventBusConfig from '@config/event-bus.config';
   exports: [IEventBus],
 })
 export class EventBusModule {}
+
 ```
 
 ## File: src/core/shared/domain/value-objects/money.vo.ts
@@ -5376,6 +5872,7 @@ export class Money {
     }
   }
 }
+
 ```
 
 ## File: src/core/shared/domain/events/domain-event.interface.ts
@@ -5386,6 +5883,7 @@ export interface IDomainEvent {
   readonly occurredAt: Date;
   readonly payload: Record<string, any>;
 }
+
 ```
 
 ## File: src/core/shared/utils/password.util.ts
@@ -5403,6 +5901,7 @@ export class PasswordUtil {
     return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(p);
   }
 }
+
 ```
 
 ## File: src/core/shared/types/common.types.ts
@@ -5437,6 +5936,7 @@ export type UserContext = {
   roles: string[];
   permissions: string[];
 };
+
 ```
 
 ## File: src/core/core.module.ts
@@ -5472,6 +5972,7 @@ import { RequestContextService } from './shared/infrastructure/context/request-c
   exports: [RequestContextService],
 })
 export class CoreModule {}
+
 ```
 
 ## File: src/config/app.config.ts
@@ -5483,6 +5984,7 @@ export default registerAs('app', () => ({
   port: parseInt(process.env.PORT || '3000', 10),
   apiPrefix: 'api',
 }));
+
 ```
 
 ## File: src/config/database.config.ts
@@ -5504,6 +6006,7 @@ export default registerAs('database', () => {
     database: process.env.DB_NAME || 'rbac_system',
   };
 });
+
 ```
 
 ## File: src/config/logging.config.ts
@@ -5513,6 +6016,7 @@ import { registerAs } from '@nestjs/config';
 export default registerAs('logging', () => ({
   level: process.env.LOG_LEVEL || 'info',
 }));
+
 ```
 
 ## File: src/config/redis.config.ts
@@ -5526,6 +6030,7 @@ export default registerAs('redis', () => ({
   ttl: parseInt(process.env.RBAC_CACHE_TTL || '300', 10),
   max: parseInt(process.env.RBAC_CACHE_MAX || '1000', 10),
 }));
+
 ```
 
 ## File: src/config/event-bus.config.ts
@@ -5536,6 +6041,7 @@ export default registerAs('eventBus', () => ({
   // 'memory' | 'rabbitmq' | 'kafka'
   type: process.env.EVENT_BUS_TYPE || 'memory',
 }));
+
 ```
 
 ## File: src/config/dental.config.ts
@@ -5560,6 +6066,7 @@ export default registerAs('dental', () => ({
   minThreads: parseInt(process.env.PISCINA_MIN_THREADS || '0', 10),
   maxThreads: parseInt(process.env.PISCINA_MAX_THREADS || '0', 10),
 }));
+
 ```
 
 ## File: src/database/schema/index.ts
@@ -5569,6 +6076,7 @@ export * from './sessions.schema';
 export * from './rbac.schema';
 export * from './notifications.schema';
 export * from './ortho.schema';
+
 ```
 
 ## File: src/database/schema/users.schema.ts
@@ -5595,6 +6103,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('createdAt').defaultNow(),
   updatedAt: timestamp('updatedAt').defaultNow(),
 });
+
 ```
 
 ## File: src/database/schema/sessions.schema.ts
@@ -5625,6 +6134,7 @@ export const sessions = pgTable(
     };
   },
 );
+
 ```
 
 ## File: src/database/schema/rbac.schema.ts
@@ -5738,6 +6248,7 @@ export const userRolesRelations = relations(userRoles, ({ one }) => ({
   // Nếu cần query user từ bảng nối này, cần import 'users' cẩn thận.
   // Hiện tại chỉ cần 'role' để Drizzle hiểu graph khi query từ Role.
 }));
+
 ```
 
 ## File: src/database/schema/notifications.schema.ts
@@ -5761,6 +6272,7 @@ export const notifications = pgTable('notifications', {
   sentAt: timestamp('sentAt'),
   createdAt: timestamp('createdAt').defaultNow(),
 });
+
 ```
 
 ## File: src/database/schema/ortho.schema.ts
@@ -5916,6 +6428,7 @@ export const casesRelations = relations(cases, ({ one, many }) => ({
 export const treatmentStepsRelations = relations(treatmentSteps, ({ one }) => ({
   case: one(cases, { fields: [treatmentSteps.caseId], references: [cases.id] }),
 }));
+
 ```
 
 ## File: src/database/drizzle.provider.ts
@@ -5947,6 +6460,7 @@ export const drizzleProvider = {
     return drizzle(pool, { schema });
   },
 };
+
 ```
 
 ## File: src/database/drizzle.module.ts
@@ -5962,6 +6476,7 @@ import { ConfigModule } from '@nestjs/config';
   exports: [drizzleProvider],
 })
 export class DrizzleModule {}
+
 ```
 
 ## File: src/api/middleware/request-logging.middleware.ts
@@ -6018,5 +6533,6 @@ export class RequestLoggingMiddleware implements NestMiddleware {
     });
   }
 }
+
 ```
 

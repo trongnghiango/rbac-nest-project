@@ -153,6 +153,11 @@ export class DrizzleOrthoRepository
     }
   }
 
+  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
+  }
+
   async getCaseDetails(
     identifier: string,
     isCaseId: boolean,

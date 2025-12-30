@@ -13,11 +13,11 @@ show_help() {
     echo "Options:"
     echo "  -p, --path=<directory>  Specify the directory to scan (default: current directory)"
     echo "  -o, --out=<file>        Specify the output markdown file (default: output.md)"
-    echo "  -i, --ignore=<pattern>  Pattern to ignore files/directories (can be used multiple times)"
+    echo "  -i, --ignore=<pattern>  Pattern to ignore files/directories (Regex supported)"
     echo "  -h, --help              Display this help message"
     echo ""
     echo "Example:"
-    echo "  $0 --path=/path/to/dir --out=result.md --ignore='*.log' --ignore='node_modules'"
+    echo "  $0 --path=src --out=result.md --ignore='node_modules' --ignore='\.log$'"
     exit 0
 }
 
@@ -34,44 +34,29 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 # Error checking
-# Check if path exists and is a directory
 if [ ! -d "$PATH_DIR" ]; then
-    echo "Error: Directory '$PATH_DIR' does not exist or is not a directory" >&2
+    echo "Error: Directory '$PATH_DIR' does not exist" >&2
     exit 1
 fi
 
-# Check if path is readable
-if [ ! -r "$PATH_DIR" ]; then
-    echo "Error: Directory '$PATH_DIR' is not readable" >&2
-    exit 1
-fi
-
-# Check if output file's directory is writable
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
-if [ ! -w "$OUTPUT_DIR" ]; then
-    echo "Error: Cannot write to output directory '$OUTPUT_DIR'" >&2
+if [ ! -w "$OUTPUT_DIR" ] && [ ! -w "." ]; then
+    echo "Error: Cannot write to output directory" >&2
     exit 1
 fi
 
-# Check if output file already exists
-if [ -f "$OUTPUT_FILE" ]; then
-    read -p "Warning: Output file '$OUTPUT_FILE' already exists. Overwrite? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo "Operation cancelled" >&2
-        exit 1
-    fi
-fi
-
-# Create or clear the output file
-> "$OUTPUT_FILE" 2>/dev/null || {
-    echo "Error: Failed to create/clear output file '$OUTPUT_FILE'" >&2
-    exit 1
-}
+# Create/Clear output file
+> "$OUTPUT_FILE"
 
 # Function to check if file should be ignored
 should_ignore() {
     local file="$1"
+    # Check output file
+    if [[ "$file" == *"$OUTPUT_FILE" ]]; then return 0; fi
+
+    # Check ignore patterns
     for pattern in "${IGNORE_PATTERNS[@]}"; do
+        # Use simple string match or regex
         if [[ "$file" =~ $pattern ]]; then
             return 0
         fi
@@ -79,43 +64,47 @@ should_ignore() {
     return 1
 }
 
-# Function to process each file
-process_file() {
+# Check if file is binary
+is_binary() {
     local file="$1"
-    # Skip the output file itself and ignored files
-    if [ "$file" != "$OUTPUT_FILE" ] && ! should_ignore "$file"; then
-        # Check if file is readable
-        if [ -r "$file" ]; then
-            echo "## File: $file" >> "$OUTPUT_FILE"
-            echo '```' >> "$OUTPUT_FILE"
-            cat "$file" >> "$OUTPUT_FILE" 2>/dev/null || {
-                echo "Warning: Failed to read file '$file'" >&2
-            }
-            echo '```' >> "$OUTPUT_FILE"
-            echo "" >> "$OUTPUT_FILE"
-        else
-            echo "Warning: File '$file' is not readable" >&2
+    # Cách 1: Dùng grep để check NULL byte (phổ biến nhất)
+    if grep -Iq . "$file" 2>/dev/null; then
+        return 1 # Là text
+    else
+        # Nếu file rỗng thì coi là text, còn nếu có content mà grep -I fail thì là binary
+        if [ -s "$file" ]; then
+             return 0 # Là binary
         fi
+        return 1 # File rỗng, coi là text
     fi
 }
 
-# Export the function and variables so they can be used by find
-export -f process_file
-export -f should_ignore
-export OUTPUT_FILE
-export IGNORE_PATTERNS
+echo "Scanning directory: $PATH_DIR"
+echo "Output file: $OUTPUT_FILE"
 
-# Build find command with ignore patterns
-FIND_CMD="find \"$PATH_DIR\" -type f"
-for pattern in "${IGNORE_PATTERNS[@]}"; do
-    FIND_CMD+=" -not -path \"*/$pattern/*\" -not -name \"$pattern\""
+# Process files using find + while loop (to keep array scope valid)
+# -print0 handles filenames with spaces correctly
+find "$PATH_DIR" -type f -print0 | while IFS= read -r -d '' file; do
+
+    # 1. Check Ignore Patterns
+    if should_ignore "$file"; then
+        continue
+    fi
+
+    # 2. Check Binary Files (Images, compiled files, etc.)
+    if is_binary "$file"; then
+        echo "Skipping binary file: $file"
+        continue
+    fi
+
+    # 3. Write to output
+    echo "Processing: $file"
+    echo "## File: $file" >> "$OUTPUT_FILE"
+    echo '```' >> "$OUTPUT_FILE"
+    cat "$file" >> "$OUTPUT_FILE"
+    echo -e "\n\`\`\`\n" >> "$OUTPUT_FILE"
+
 done
-FIND_CMD+=" -exec bash -c 'process_file \"{}\"' \;"
 
-# Execute find command
-eval "$FIND_CMD" 2>/dev/null || {
-    echo "Error: Failed to process files in '$PATH_DIR'" >&2
-    exit 1
-}
+echo "Done! All contents combined into '$OUTPUT_FILE'"
 
-echo "All file contents have been combined into '$OUTPUT_FILE'"

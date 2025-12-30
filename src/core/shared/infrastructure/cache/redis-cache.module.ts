@@ -17,28 +17,45 @@ import { redisStore } from 'cache-manager-redis-yet';
         const port = configService.get('redis.port');
         const ttl = (configService.get('redis.ttl') || 300) * 1000;
 
-        console.log(`🔌 Connecting to Redis at ${host}:${port}...`);
-
-        // Sử dụng redis-yet (chuẩn mới)
+        // Cấu hình Redis Store
         const store = await redisStore({
-          socket: { host, port },
+          socket: {
+            host,
+            port,
+            // Thử kết nối lại tối đa sau mỗi 3 giây
+            reconnectStrategy: (retries) => Math.min(retries * 50, 3000),
+          },
           ttl,
         });
 
-        console.log('✅ Redis Store Created!');
+        // 👇 TRUY CẬP VÀO CLIENT GỐC ĐỂ LẮNG NGHE SỰ KIỆN 👇
+        const client = (store as any).client;
+        if (client) {
+          // 1. Khi bị lỗi kết nối (để tránh crash app)
+          client.on('error', (err: any) => {
+            console.error(`❌ [Redis] Connection Error: ${err.message}`);
+          });
 
-        // Fix lỗi import cache-manager (CommonJS vs ESM)
+          // 2. Khi đang cố gắng kết nối lại
+          client.on('reconnecting', () => {
+            console.warn('⏳ [Redis] Lost connection! Reconnecting...');
+          });
+
+          // 3. ✅ KHI ĐÃ KẾT NỐI LẠI THÀNH CÔNG VÀ SẴN SÀNG
+          client.on('ready', () => {
+            console.log('🚀 [Redis] Connection ESTABLISHED & READY!');
+          });
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const cm = require('cache-manager');
         const createCache =
           cm.createCache ||
           (cm.default && cm.default.createCache) ||
           cm.caching;
-
         if (!createCache) throw new Error('Cannot find createCache function');
 
         const cache = createCache(store);
-        // Gán ngược store để Adapter check được
         if (!cache.store) cache.store = store;
 
         return cache;

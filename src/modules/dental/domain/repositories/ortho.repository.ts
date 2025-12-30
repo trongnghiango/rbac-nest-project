@@ -67,4 +67,5 @@ export interface IOrthoRepository {
   createCase(data: any, tx?: Transaction): Promise<any>;
   findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
   saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+  deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
 }
