@@ -16,22 +16,10 @@ import {
   ApiBearerAuth,
   ApiQuery,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
-import * as fs from 'fs-extra';
 import { DentalService } from '../../application/services/dental.service';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { UploadCaseDto } from '../dtos/upload-case.dto';
 import { Public } from '@modules/auth/infrastructure/decorators/public.decorator';
-
-const uploadDir = 'uploads/temp';
-try {
-  fs.ensureDirSync(uploadDir);
-} catch (e) {}
-
-const storage = diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
 
 @ApiTags('Dental 3D')
 @ApiBearerAuth()
@@ -43,7 +31,8 @@ export class DentalController {
   @Post('upload')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: UploadCaseDto })
-  @UseInterceptors(FileInterceptor('file', { storage }))
+  // ✅ Không cần truyền options { storage } nữa, MulterModule sẽ tự xử lý
+  @UseInterceptors(FileInterceptor('file'))
   async uploadZip(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadCaseDto,
@@ -51,7 +40,6 @@ export class DentalController {
     return this.dentalService.processZipUpload(file, dto);
   }
 
-  // ✅ NEW: API Upload Excel Data
   @Post('upload-movement')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -63,12 +51,13 @@ export class DentalController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage }))
+  // ✅ Config tập trung tại Module giúp Controller sạch sẽ
+  @UseInterceptors(FileInterceptor('file'))
   async uploadMovement(
     @UploadedFile() file: Express.Multer.File,
     @Body('caseId') caseId: string,
   ) {
-    return this.dentalService.processMovementExcel(file, caseId);
+    return this.dentalService.processMovementData(file, caseId);
   }
 
   @Public()

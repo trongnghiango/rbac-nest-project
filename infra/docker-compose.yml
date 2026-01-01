@@ -1,65 +1,91 @@
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: rbac_db_dev
+    container_name: rbac_postgres_prod
+    restart: always
+    # 👇 QUAN TRỌNG: Trỏ đúng file .env.production
+    env_file:
+      - ../.env.production
     environment:
-      POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-rbac_system}
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     volumes:
-      - pgdata_dev:/var/lib/postgresql/data
+      - pgdata_prod:/var/lib/postgresql/data
     networks:
-      - rbac_dev_net
+      - rbac_prod_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres}"]
-      interval: 5s
+      # Fix healthcheck để dùng biến môi trường
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   redis:
-    image: redis:alpine
-    container_name: rbac_redis_dev
-    ports:
-      - "6379:6379"
+    image: redis:7-alpine
+    container_name: rbac_redis_prod
+    restart: always
     networks:
-      - rbac_dev_net
+      - rbac_prod_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   api:
     build:
       context: ..
-      dockerfile: infra/docker/Dockerfile.dev
-    container_name: rbac_api_dev
+      # Dùng file Dockerfile (bản merge/prod)
+      dockerfile: infra/docker/Dockerfile
+    container_name: rbac_api_prod
+    restart: always
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # 👇 QUAN TRỌNG: Trỏ đúng file .env.production
     env_file:
-      - ../.env
+      - ../.env.production
     environment:
+      # Truyền lại biến để đảm bảo entrypoint nhận được giá trị từ .env.production
       - DB_HOST=postgres
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT}
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - RUN_MIGRATIONS=true
-      - NODE_ENV=development
+      - NODE_ENV=production
     volumes:
-      - ..:/app
-      # Hack: Sử dụng anonymous volume cho node_modules để tránh
-      # việc node_modules của host (Windows/Mac) ghi đè lên node_modules của container (Alpine/Linux)
-      # Điều này cực quan trọng khi dùng native modules (sharp, worker threads).
-      - /app/node_modules
-      - /app/uploads
+      - dental_data:/app/uploads
+      - api_logs:/app/logs
     ports:
       - "8080:8080"
-      - "9229:9229" # Port Debug
     networks:
-      - rbac_dev_net
-    command: ["/entrypoint.sh"]
+      - rbac_prod_net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
 
 networks:
-  rbac_dev_net:
+  rbac_prod_net:
     driver: bridge
 
 volumes:
-  pgdata_dev:
+  pgdata_prod:
+  dental_data:
+  api_logs:

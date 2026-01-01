@@ -1,15 +1,6 @@
-import {
-  Injectable,
-  Inject,
-  BadRequestException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
-const AdmZip = require('adm-zip');
 import { v4 as uuidv4 } from 'uuid';
 import {
   ILogger,
@@ -18,41 +9,47 @@ import {
 import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
 import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
 import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
-import { parseMovementExcel } from '../utils/movement.parser';
+import { parseMovementData } from '../utils/movement.parser';
 import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
+import {
+  ITransactionManager,
+  Transaction,
+} from '@core/shared/application/ports/transaction-manager.port';
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+import { ConversionBinaries } from '../../domain/ports/dental-worker.port';
+import {
+  TeethMovementRecord,
+  ConversionTaskWithMeta,
+  JawType,
+  CaseHistoryDTO,
+} from '../../domain/types/dental.types';
 
 export interface ModelStep {
   index: number;
   maxillary: string | null;
   mandibular: string | null;
-  teethData?: Record<string, any>;
+  teethData?: TeethMovementRecord; // ✅ Update type safety here
 }
 
 @Injectable()
 export class DentalService {
-  private readonly uploadDir: string;
-  private readonly outputDir: string;
   private readonly appUrl: string;
 
   constructor(
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     @Inject(PISCINA_POOL) private readonly pool: Piscina,
     @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
+    @Inject(ITransactionManager)
+    private readonly txManager: ITransactionManager,
+    @Inject(IDentalStorage) private readonly storage: IDentalStorage,
     private readonly config: ConfigService,
-    private readonly dentalGateway: DentalGateway, // ✅ Inject Gateway
+    private readonly dentalGateway: DentalGateway,
   ) {
-    this.uploadDir = path.resolve(
-      this.config.get('dental.uploadDir') || 'uploads/dental/temp',
-    );
-    this.outputDir = path.resolve(
-      this.config.get('dental.outputDir') || 'uploads/dental/converted',
-    );
     this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
       /\/$/,
       '',
     );
-    fs.ensureDirSync(this.uploadDir);
-    fs.ensureDirSync(this.outputDir);
+    this.storage.ensureDirectories();
   }
 
   async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
@@ -65,43 +62,106 @@ export class DentalService {
       caseId = await this.orthoRepo.findLatestCaseIdByCode(dto.patientCode);
       if (caseId) {
         this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
-        await fs.remove(path.join(this.outputDir, caseId)).catch(() => {});
-        await (this.orthoRepo as any).deleteStepsByCaseId(Number(caseId));
+        const caseDir = this.storage.joinPath(this.storage.outputDir, caseId);
+        await this.storage.remove(caseDir);
+        await this.orthoRepo.deleteStepsByCaseId(Number(caseId));
       }
     }
 
     if (!caseId) {
-      caseId = await this.orthoRepo.createFullCase({
-        patientName: dto.patientName,
-        patientCode: dto.patientCode,
-        clinicName: dto.clinicName,
-        doctorName: dto.doctorName,
-        gender: dto.gender,
-        productType: dto.productType,
-        notes: dto.notes,
-      });
+      caseId = await this.txManager.runInTransaction(
+        async (tx: Transaction) => {
+          const clinicCode = dto.clinicName
+            .toUpperCase()
+            .replace(/\s+/g, '_')
+            .substring(0, 10);
+          let clinic = await this.orthoRepo.findClinicByCode(clinicCode, tx);
+          if (!clinic) {
+            clinic = await this.orthoRepo.createClinic(
+              { name: dto.clinicName, code: clinicCode },
+              tx,
+            );
+          }
+
+          let dentistId: number | undefined;
+          if (dto.doctorName) {
+            let dentist = await this.orthoRepo.findDentist(
+              dto.doctorName,
+              clinic.id,
+              tx,
+            );
+            if (!dentist) {
+              dentist = await this.orthoRepo.createDentist(
+                { fullName: dto.doctorName, clinicId: clinic.id },
+                tx,
+              );
+            }
+            dentistId = dentist.id;
+          }
+
+          let patient = await this.orthoRepo.findPatientByCode(
+            dto.patientCode,
+            tx,
+          );
+          if (!patient) {
+            const dobDate = dto.dob ? new Date(dto.dob) : undefined;
+            patient = await this.orthoRepo.createPatient(
+              {
+                fullName: dto.patientName,
+                patientCode: dto.patientCode,
+                clinicId: clinic.id,
+                gender: dto.gender,
+                dob: dobDate,
+              },
+              tx,
+            );
+          }
+
+          const newCase = await this.orthoRepo.createCase(
+            {
+              patientId: patient.id,
+              dentistId: dentistId ?? null,
+              productType: dto.productType,
+              notes: dto.notes,
+            },
+            tx,
+          );
+          return String(newCase.id);
+        },
+      );
     }
 
-    const extractPath = path.join(this.uploadDir, `extract_${uuidv4()}`);
+    const extractPath = this.storage.joinPath(
+      this.storage.uploadDir,
+      `extract_${uuidv4()}`,
+    );
 
-    // 1. Giải nén ngay lập tức
     try {
-      const zip = new AdmZip(file.path);
-      zip.extractAllTo(extractPath, true);
+      await this.storage.extractZip(file.path, extractPath);
     } catch (e: any) {
       throw new BadRequestException('Invalid Zip File: ' + e.message);
     }
 
-    const objFiles = await this.findFilesRecursively(extractPath, '.obj');
+    const objFiles = await this.storage.findFilesRecursively(
+      extractPath,
+      '.obj',
+    );
 
-    // 2. Chuẩn bị Tasks
-    const tasks = objFiles.map((objPath) => {
-      const baseName = path.basename(objPath, '.obj');
-      const parentDir = path.basename(path.dirname(objPath));
+    // ✅ REFACTOR: Strict type for binaries config
+    const binariesConfig: ConversionBinaries = {
+      obj2gltf: this.config.get<string>('dental.binaries.obj2gltf')!,
+      gltfPipeline: this.config.get<string>('dental.binaries.gltfPipeline')!,
+      gltfTransform: this.config.get<string>('dental.binaries.gltfTransform')!,
+    };
 
-      let type: 'Maxillary' | 'Mandibular' = baseName
-        .toLowerCase()
-        .includes('mandibular')
+    // ✅ REFACTOR: Using defined Type instead of any[]
+    const tasks: ConversionTaskWithMeta[] = objFiles.map((objPath) => {
+      const baseName = this.storage.getBasename(objPath, '.obj');
+      const parentDir = this.storage.getBasename(
+        this.storage.getDirname(objPath),
+      );
+
+      const type: JawType = baseName.toLowerCase().includes('mandibular')
         ? 'Mandibular'
         : 'Maxillary';
 
@@ -112,24 +172,24 @@ export class DentalService {
       if (folderMatch) index = parseInt(folderMatch[1], 10);
       else if (fileMatch) index = parseInt(fileMatch[1], 10);
 
-      return {
+      // Create Job with strictly typed Metadata
+      const job: ConversionTaskWithMeta = {
         objFilePath: objPath,
-        outputDir: path.join(this.outputDir, caseId!, type),
+        outputDir: this.storage.joinPath(this.storage.outputDir, caseId!, type),
         baseName: `${type}_${index.toString().padStart(3, '0')}`,
-        encryptionKey: this.config.get('dental.encryptionKey'),
+        encryptionKey: this.config.get<string>('dental.encryptionKey')!,
         config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
+        binaries: binariesConfig,
         meta: { index, type },
       };
+      return job;
     });
 
     this.logger.info(
       `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
     );
-
-    // 3. 🔥 FIRE AND FORGET: Chạy background, không await
     this.runBackgroundConversion(tasks, caseId!, extractPath, file.path);
 
-    // 4. Trả về kết quả ngay lập tức
     return {
       success: true,
       message: 'Processing started in background',
@@ -139,9 +199,8 @@ export class DentalService {
     };
   }
 
-  // ✅ Hàm xử lý chạy ngầm và bắn Socket
   private async runBackgroundConversion(
-    tasks: any[],
+    tasks: ConversionTaskWithMeta[], // ✅ REFACTOR: Strict Type
     caseId: string,
     extractPath: string,
     zipFilePath: string,
@@ -149,18 +208,18 @@ export class DentalService {
     let completed = 0;
     const total = tasks.length;
 
-    // Chạy tuần tự hoặc song song tùy ý, ở đây dùng Promise.allSettled để tối đa hiệu năng
     const promises = tasks.map(async (task) => {
       try {
         const result = await this.pool.run(task);
         completed++;
+        // We assume result has path (handled in worker)
+        const filename = this.storage.getBasename(result.path);
 
-        // 🔥 Emit Progress Event
         this.dentalGateway.notifyProgress(caseId, {
           status: 'progress',
           file: task.baseName,
           percent: Math.round((completed / total) * 100),
-          url: `${this.appUrl}/models/${caseId}/${task.meta.type}/${path.basename(result.path)}`,
+          url: `${this.appUrl}/models/${caseId}/${task.meta.type}/${filename}`,
           type: task.meta.type,
           index: task.meta.index,
         });
@@ -175,24 +234,36 @@ export class DentalService {
     });
 
     await Promise.allSettled(promises);
-
-    // 🔥 Emit Complete Event
     this.dentalGateway.notifyComplete(caseId, { status: 'completed' });
     this.logger.info(`Case ${caseId} processing completed.`);
 
-    // Cleanup sau khi xong hết
-    await fs.remove(extractPath).catch(() => {});
-    await fs.remove(zipFilePath).catch(() => {});
+    await this.storage.remove(extractPath);
+    await this.storage.remove(zipFilePath);
   }
 
-  async processMovementExcel(file: Express.Multer.File, caseId: string) {
-    const fileBuffer = await fs.readFile(file.path);
-    const stepsDataMap = parseMovementExcel(fileBuffer);
+  async processMovementData(file: Express.Multer.File, caseId: string) {
+    const fileBuffer = await this.storage.readFile(file.path);
+
+    // ✅ REFACTOR: parseMovementData now returns Map<number, TeethMovementRecord>
+    const stepsDataMap = parseMovementData(fileBuffer, file.originalname);
+
+    let count = 0;
     for (const [stepIndex, teethData] of stepsDataMap.entries()) {
-      await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+      // ✅ REFACTOR: Calls repo with strictly typed record
+      await this.orthoRepo.updateStepMovementData(
+        caseId,
+        stepIndex,
+        teethData, // This is now TeethMovementRecord, not any
+      );
+      count++;
     }
-    await fs.remove(file.path).catch(() => {});
-    return { message: 'Movement data updated', count: stepsDataMap.size };
+
+    await this.storage.remove(file.path);
+    return {
+      message: 'Movement data updated successfully',
+      stepsCount: stepsDataMap.size,
+      details: `Parsed ${count} steps from file.`,
+    };
   }
 
   async listModels(clientId: string, caseId?: string): Promise<ModelStep[]> {
@@ -200,12 +271,15 @@ export class DentalService {
       caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
     if (!id) return [];
 
-    const clientDir = path.join(this.outputDir, id);
-    const allEncFiles = fs.existsSync(clientDir)
-      ? await this.findFilesRecursively(clientDir, '.enc')
+    const clientDir = this.storage.joinPath(this.storage.outputDir, id);
+    const exists = await this.storage.exists(clientDir);
+    const allEncFiles = exists
+      ? await this.storage.findFilesRecursively(clientDir, '.enc')
       : [];
-    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
 
+    // Note: getStepsByCaseId still returns generic object,
+    // ideally repo should return TreatmentStep Entity
+    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
     const stepsMap = new Map<number, ModelStep>();
 
     dbSteps.forEach((s) => {
@@ -213,25 +287,20 @@ export class DentalService {
         index: s.stepIndex,
         maxillary: null,
         mandibular: null,
-        teethData: s.teethData,
+        teethData: s.teethData as TeethMovementRecord, // Type assertion if needed
       });
     });
 
     allEncFiles.forEach((fp) => {
-      const filename = path.basename(fp).toLowerCase();
+      const filename = this.storage.getBasename(fp).toLowerCase();
       const matches = filename.match(/(\d+)/g);
       const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
-
-      const relPath = path
-        .relative(this.outputDir, fp)
-        .split(path.sep)
-        .join('/');
+      const relPath = this.storage.getRelativePath(this.storage.outputDir, fp);
       const url = `${this.appUrl}/models/${relPath}`;
 
       if (!stepsMap.has(index)) {
         stepsMap.set(index, { index, maxillary: null, mandibular: null });
       }
-
       const entry = stepsMap.get(index)!;
       if (filename.includes('maxillary')) entry.maxillary = url;
       else if (filename.includes('mandibular')) entry.mandibular = url;
@@ -246,27 +315,8 @@ export class DentalService {
     return id ? this.orthoRepo.getCaseDetails(id, true) : null;
   }
 
-  async getHistory(patientCode: string) {
+  // ✅ REFACTOR: Explicit return type
+  async getHistory(patientCode: string): Promise<CaseHistoryDTO[]> {
     return this.orthoRepo.findCasesByPatientCode(patientCode);
-  }
-
-  private async findFilesRecursively(
-    dir: string,
-    ext: string,
-  ): Promise<string[]> {
-    let results: string[] = [];
-    if (!fs.existsSync(dir)) return results;
-    const list = await fs.readdir(dir);
-    for (const file of list) {
-      const fullPath = path.resolve(dir, file);
-      if (fs.statSync(fullPath).isDirectory()) {
-        results = results.concat(
-          await this.findFilesRecursively(fullPath, ext),
-        );
-      } else if (file.toLowerCase().endsWith(ext)) {
-        results.push(fullPath);
-      }
-    }
-    return results;
   }
 }

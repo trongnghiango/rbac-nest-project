@@ -1,9 +1,40 @@
+
+
+
+
+# Bắt buộc phải ignore node_modules ở máy thật để không copy nhầm vào
 node_modules
-dist
 npm-debug.log
-Dockerfile
-.dockerignore
+yarn-error.log
+
+# Ignore các thư mục build/temp
+dist
+build
+coverage
+.nyc_output
+
+# Ignore Git
 .git
 .gitignore
-test
+.dockerignore
 README.md
+
+# Ignore các file cấu hình môi trường local (quan trọng bảo mật)
+.env
+.env.*
+
+# Ignore các thư mục tài liệu, thiết kế, rác của dự án (VÍ DỤ CỦA BẠN)
+docs/
+design/
+test/
+tai_lieu_tham_khao/
+backup_old_code/
+file_tam_lung_tung/
+
+# Ignore file Docker
+Dockerfile
+Dockerfile.dev
+docker-compose.yml
+
+infra/
+!infra/scripts/

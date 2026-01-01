@@ -47,7 +47,10 @@ import { DentalModule } from '@modules/dental/dental.module';
             config.get('dental.outputDir') || 'uploads/dental/converted',
           ),
           serveRoot: '/models',
-          exclude: ['/api/(.*)'],
+          // 👇 SỬA DÒNG NÀY:
+          // CŨ (Lỗi): exclude: ['/api/(.*)'],
+          // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
+          exclude: ['/api/{*path}'],
           serveStaticOptions: {
             setHeaders: (res) => {
               res.setHeader('Access-Control-Allow-Origin', '*');

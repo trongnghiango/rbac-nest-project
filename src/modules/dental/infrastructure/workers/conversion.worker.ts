@@ -35,88 +35,51 @@ function getErrorMessage(error: unknown): string {
 }
 
 // ==========================================
-// 3. INTERFACES
+// 3. INTERFACES (Imported or Re-defined)
 // ==========================================
-export interface ConversionConfig {
-  ratio: number;
-  threshold: number;
-  timeout: number;
+// Lưu ý: Trong Worker thread độc lập, tốt nhất là define lại interface hoặc import từ file shared không phụ thuộc NestJS
+export interface ConversionBinaries {
+  obj2gltf: string;
+  gltfPipeline: string;
+  gltfTransform: string;
 }
+
 export interface ConversionTask {
   objFilePath: string;
   outputDir: string;
   baseName: string;
   encryptionKey: string;
-  config: ConversionConfig;
+  config: {
+    ratio: number;
+    threshold: number;
+    timeout: number;
+  };
+  // ✅ Nhận binaries từ Main Thread
+  binaries: ConversionBinaries;
 }
+
 export interface WorkerResult {
   success: boolean;
   path: string;
-}
-interface Binaries {
-  obj2gltf: string;
-  gltfTransform: string;
-  gltfPipeline: string;
 }
 
 // ==========================================
 // 4. HELPER FUNCTIONS
 // ==========================================
 
-function findPackageRoot(packageName: string): string {
-  const paths = require.resolve.paths(packageName) || [];
-  paths.push(path.join(process.cwd(), 'node_modules'));
-  for (const lookupPath of paths) {
-    const candidatePath = path.join(lookupPath, packageName);
-    if (fs.existsSync(path.join(candidatePath, 'package.json'))) {
-      return candidatePath;
-    }
-  }
-  throw new Error(`Package '${packageName}' not found in node_modules.`);
-}
-
-function resolvePackageBin(packageName: string): string {
-  try {
-    const packagePath = findPackageRoot(packageName);
-    const pkgJson = fs.readJsonSync(path.join(packagePath, 'package.json'));
-    let relativeBinPath = '';
-
-    if (typeof pkgJson.bin === 'string') {
-      relativeBinPath = pkgJson.bin;
-    } else if (typeof pkgJson.bin === 'object') {
-      const keys = Object.keys(pkgJson.bin);
-      const cleanName = packageName.split('/').pop();
-      if (cleanName && pkgJson.bin[cleanName]) {
-        relativeBinPath = pkgJson.bin[cleanName];
-      } else {
-        relativeBinPath = pkgJson.bin[keys[0]];
-      }
-    }
-    if (!relativeBinPath) throw new Error(`No binary found in ${packageName}`);
-    return path.resolve(packagePath, relativeBinPath);
-  } catch (error: any) {
-    throw new Error(
-      `Failed to resolve binary for ${packageName}: ${error.message}`,
-    );
-  }
-}
-
-function resolveBinaries(): Binaries {
-  return {
-    obj2gltf: resolvePackageBin('obj2gltf'),
-    gltfTransform: resolvePackageBin('@gltf-transform/cli'),
-    gltfPipeline: resolvePackageBin('gltf-pipeline'),
-  };
-}
-
 async function runCommand(
   scriptPath: string,
   args: string[],
   timeout: number,
 ): Promise<void> {
+  // ✅ Validate script existence before running
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Binary not found at path: ${scriptPath}`);
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, ...args], {
-      stdio: 'inherit', // Giữ nguyên log để debug
+      stdio: 'inherit',
       timeout,
       env: process.env,
     });
@@ -135,19 +98,12 @@ async function runCommand(
   });
 }
 
-/**
- * ✅ FIX QUAN TRỌNG: Mã hóa bằng Buffer (Sync logic in Async wrapper)
- * Thay vì dùng Stream dễ gây lỗi race condition (ghi chưa xong đã đóng file),
- * ta đọc toàn bộ file vào RAM -> Mã hóa -> Ghi xuống đĩa.
- * An toàn tuyệt đối cho file < 500MB.
- */
 async function encryptFileBuffer(
   inputPath: string,
   outputPath: string,
   keyHex: string,
 ): Promise<void> {
   try {
-    // 1. Kiểm tra file đầu vào có tồn tại và có dữ liệu không
     const stats = await fs.stat(inputPath);
     if (stats.size === 0) {
       throw new Error(
@@ -158,27 +114,20 @@ async function encryptFileBuffer(
       `🔒 Encrypting file: ${path.basename(inputPath)} (${stats.size} bytes)`,
     );
 
-    // 2. Đọc file
     const fileData = await fs.readFile(inputPath);
-
-    // 3. Chuẩn bị mã hóa
     const key = Buffer.from(keyHex);
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv, {
       authTagLength: AUTH_TAG_LENGTH,
     });
 
-    // 4. Mã hóa
     const encryptedContent = Buffer.concat([
       cipher.update(fileData),
       cipher.final(),
     ]);
     const authTag = cipher.getAuthTag();
-
-    // 5. Ghép: IV + EncryptedContent + AuthTag
     const finalBuffer = Buffer.concat([iv, encryptedContent, authTag]);
 
-    // 6. Ghi file
     await fs.writeFile(outputPath, finalBuffer);
     console.log(`✅ Encrypted success: ${path.basename(outputPath)}`);
   } catch (error: unknown) {
@@ -194,7 +143,8 @@ async function encryptFileBuffer(
 // ==========================================
 
 async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
-  const { objFilePath, outputDir, baseName, encryptionKey, config } = task;
+  const { objFilePath, outputDir, baseName, encryptionKey, config, binaries } =
+    task;
   const tempDir = path.dirname(objFilePath);
 
   const paths = {
@@ -211,18 +161,16 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
     if (!fs.existsSync(objFilePath))
       throw new FileSystemError(`Input file missing: ${objFilePath}`);
 
-    const bins = resolveBinaries();
-
     // Step 1: OBJ -> GLB
     await runCommand(
-      bins.obj2gltf,
+      binaries.obj2gltf,
       ['-i', objFilePath, '-o', paths.initialGlb, '--binary'],
       config.timeout,
     );
 
     // Step 2: Simplify
     await runCommand(
-      bins.gltfTransform,
+      binaries.gltfTransform,
       [
         'simplify',
         paths.initialGlb,
@@ -237,7 +185,7 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
 
     // Step 3: Optimize
     await runCommand(
-      bins.gltfPipeline,
+      binaries.gltfPipeline,
       [
         '-i',
         paths.simplifiedGlb,
@@ -248,10 +196,9 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
       config.timeout,
     );
 
-    // Step 4: Encrypt (Dùng hàm mới)
+    // Step 4: Encrypt
     await fs.ensureDir(outputDir);
 
-    // Kiểm tra kỹ file trước khi mã hóa
     if (!fs.existsSync(paths.optimizedGlb)) {
       throw new Error(
         `Optimization step succeeded but file not found: ${paths.optimizedGlb}`,
@@ -269,7 +216,7 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
     console.error(`❌ WORKER FAILED [${baseName}]:`, getErrorMessage(error));
     throw error;
   } finally {
-    // Cleanup
+    // Cleanup temp files
     await Promise.all(tempFiles.map((f) => fs.remove(f).catch(() => {})));
   }
 }

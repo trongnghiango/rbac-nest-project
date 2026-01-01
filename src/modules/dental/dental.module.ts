@@ -1,5 +1,8 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { Module, OnModuleInit, Inject } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { MulterModule } from '@nestjs/platform-express'; // ✅ Import MulterModule
+import { diskStorage } from 'multer';
+
 import { DentalController } from './infrastructure/controllers/dental.controller';
 import { DentalService } from './application/services/dental.service';
 import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
@@ -13,12 +16,33 @@ import { DentalGateway } from './infrastructure/gateways/dental.gateway';
 import dentalConfig from '@config/dental.config';
 
 @Module({
-  imports: [ConfigModule.forFeature(dentalConfig)],
+  imports: [
+    ConfigModule.forFeature(dentalConfig),
+    // ✅ Cấu hình Multer Asynchronously (Dynamic Config)
+    MulterModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (config: ConfigService) => ({
+        storage: diskStorage({
+          destination: (req, file, cb) => {
+            // Lấy đường dẫn từ Config (đồng bộ với IDentalStorage)
+            const uploadDir =
+              config.get<string>('dental.uploadDir') || 'uploads/dental/temp';
+            cb(null, uploadDir);
+          },
+          filename: (req, file, cb) => {
+            // Giữ logic đặt tên file có timestamp để tránh trùng
+            cb(null, `${Date.now()}-${file.originalname}`);
+          },
+        }),
+      }),
+      inject: [ConfigService],
+    }),
+  ],
   controllers: [DentalController],
   providers: [
     DentalService,
     PiscinaProvider,
-    DentalGateway, // ✅ Added Gateway
+    DentalGateway,
     {
       provide: IDentalStorage,
       useClass: FileSystemDentalStorage,
@@ -33,4 +57,14 @@ import dentalConfig from '@config/dental.config';
     },
   ],
 })
-export class DentalModule {}
+export class DentalModule implements OnModuleInit {
+  constructor(
+    @Inject(IDentalStorage) private readonly dentalStorage: IDentalStorage,
+  ) {}
+
+  // ✅ Lifecycle Hook: Chạy 1 lần duy nhất khi Module khởi tạo
+  // Đảm bảo thư mục tồn tại TRƯỚC khi có bất kỳ request nào.
+  onModuleInit() {
+    this.dentalStorage.ensureDirectories();
+  }
+}

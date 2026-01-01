@@ -13,8 +13,8 @@ import { redisStore } from 'cache-manager-redis-yet';
     {
       provide: CACHE_MANAGER,
       useFactory: async (configService: ConfigService) => {
-        const host = configService.get('redis.host');
-        const port = configService.get('redis.port');
+        const host = configService.get<string>('redis.host');
+        const port = configService.get<number>('redis.port');
         const ttl = (configService.get('redis.ttl') || 300) * 1000;
 
         // Cấu hình Redis Store

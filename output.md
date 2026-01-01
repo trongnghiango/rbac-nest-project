@@ -49,7 +49,10 @@ import { DentalModule } from '@modules/dental/dental.module';
             config.get('dental.outputDir') || 'uploads/dental/converted',
           ),
           serveRoot: '/models',
-          exclude: ['/api/(.*)'],
+          // 👇 SỬA DÒNG NÀY:
+          // CŨ (Lỗi): exclude: ['/api/(.*)'],
+          // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
+          exclude: ['/api/{*path}'],
           serveStaticOptions: {
             setHeaders: (res) => {
               res.setHeader('Access-Control-Allow-Origin', '*');
@@ -975,8 +978,7 @@ export class UserMapper {
 ## File: src/modules/user/infrastructure/persistence/drizzle-user.repository.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
-// FIX IMPORT: Dùng file mới
+import { eq, desc } from 'drizzle-orm';
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
@@ -1018,7 +1020,9 @@ export class DrizzleUserRepository
       .select()
       .from(users)
       .where(eq(users.isActive, true));
-    return result.map((u) => UserMapper.toDomain(u)!);
+    return result
+      .map((u) => UserMapper.toDomain(u))
+      .filter((u): u is User => u !== null);
   }
 
   async save(user: User, tx?: Transaction): Promise<User> {
@@ -1042,22 +1046,57 @@ export class DrizzleUserRepository
     return UserMapper.toDomain(result[0])!;
   }
 
+  // ✅ ĐÃ IMPLEMENT ĐÀNG HOÀNG
   async findAll(): Promise<User[]> {
-    return [];
+    const results = await this.db
+      .select()
+      .from(users)
+      .orderBy(desc(users.createdAt));
+    return results
+      .map((u) => UserMapper.toDomain(u))
+      .filter((u): u is User => u !== null);
   }
-  async update(): Promise<User> {
-    throw new Error('Use save instead');
+
+  // ✅ ĐÃ IMPLEMENT ĐÀNG HOÀNG (Thay vì throw Error)
+  async update(id: number, data: Partial<User>): Promise<User> {
+    // Lưu ý: data ở đây là Partial<User> (Domain Entity),
+    // nên convert sang Persistence Model là việc khó nếu không có full object.
+    // Tuy nhiên, nếu chỉ update vài trường simple, ta có thể map thủ công hoặc dùng save().
+    // Ở đây tôi implement update trực tiếp vào DB các trường có thể map được.
+
+    // Cách an toàn nhất theo DDD: Load -> Modify -> Save.
+    // Nhưng vì Interface yêu cầu update(id, data), ta làm như sau:
+
+    // 1. Map các field update sang DB schema format
+    const updatePayload: any = {};
+    if (data.fullName) updatePayload.fullName = data.fullName;
+    if (data.email) updatePayload.email = data.email;
+    if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
+    updatePayload.updatedAt = new Date();
+
+    const result = await this.db
+      .update(users)
+      .set(updatePayload)
+      .where(eq(users.id, id))
+      .returning();
+
+    if (!result[0]) throw new Error('User not found to update');
+    return UserMapper.toDomain(result[0])!;
   }
+
   async delete(id: number, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
     await db.delete(users).where(eq(users.id, id));
   }
+
   async exists(id: number, tx?: Transaction): Promise<boolean> {
     const u = await this.findById(id, tx);
     return !!u;
   }
+
   async count(): Promise<number> {
-    return 0;
+    const result = await this.db.execute('SELECT COUNT(*) as count FROM users'); // Raw query cho nhanh hoặc dùng count() của drizzle mới
+    return Number(result.rows[0].count);
   }
 }
 
@@ -3349,272 +3388,11 @@ export class NotificationModule {}
 
 ```
 
-## File: src/modules/dental/application/services/dental.service.ts.bak
-```
-import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Piscina from 'piscina';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const AdmZip = require('adm-zip');
-import { v4 as uuidv4 } from 'uuid';
-import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
-import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
-import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
-import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
-import { parseMovementExcel } from '../utils/movement.parser';
-
-export interface ModelStep {
-  index: number;
-  maxillary: string | null;
-  mandibular: string | null;
-  // ✅ NEW: Thêm trường teethData trả về Frontend
-  teethData?: Record<string, any>;
-}
-
-@Injectable()
-export class DentalService {
-  private readonly uploadDir: string;
-  private readonly outputDir: string;
-  private readonly encryptionKey: string;
-  private readonly appUrl: string;
-
-  constructor(
-    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
-    @Inject(PISCINA_POOL) private readonly pool: Piscina,
-    @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
-    private readonly config: ConfigService,
-  ) {
-    const rawUploadDir = this.config.get('dental.uploadDir');
-    const rawOutputDir = this.config.get('dental.outputDir');
-    this.appUrl = (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, "");
-
-    if (!rawUploadDir || !rawOutputDir) throw new Error('Dental configuration missing');
-
-    this.uploadDir = path.resolve(rawUploadDir);
-    this.outputDir = path.resolve(rawOutputDir);
-    this.encryptionKey = this.config.get('dental.encryptionKey')!;
-
-    fs.ensureDirSync(this.uploadDir);
-    fs.ensureDirSync(this.outputDir);
-  }
-
-  // ... (processZipUpload giữ nguyên) ...
-  async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
-    if (!file) throw new BadRequestException('No file uploaded');
-
-    const caseId = await this.orthoRepo.createFullCase({
-        patientName: dto.patientName,
-        patientCode: dto.patientCode,
-        clinicName: dto.clinicName,
-        doctorName: dto.doctorName,
-        gender: dto.gender,
-        productType: dto.productType,
-        notes: dto.notes
-    });
-
-    this.logger.info(`Processing upload for PatientCode: ${dto.patientCode} -> CaseID: ${caseId}`);
-
-    const jobId = uuidv4();
-    const extractPath = path.join(this.uploadDir, `extract_${jobId}`);
-
-    try {
-        const zip = new AdmZip(file.path);
-        zip.extractAllTo(extractPath, true);
-
-        const objFiles = await this.findFilesRecursively(extractPath, '.obj');
-        // if (objFiles.length === 0) throw new Error("No .obj files found"); // Cho phép upload 0 file nếu chỉ muốn tạo case
-
-        const tasks = objFiles.map(objPath => {
-            const baseName = path.basename(objPath, '.obj');
-            const parentDirPath = path.dirname(objPath);
-            const parentDirName = path.basename(parentDirPath);
-
-            let type: 'Maxillary' | 'Mandibular' = 'Maxillary';
-            if (baseName.toLowerCase().includes('mandibular')) type = 'Mandibular';
-
-            let index = 0;
-            const explicitFolderMatch = parentDirName.match(/(?:Subsetup|Stage|Step)[^0-9]*(\d+)/i);
-            const fileNumberMatch = baseName.match(/[ _-](\d+)$/);
-
-            if (explicitFolderMatch) index = parseInt(explicitFolderMatch[1], 10);
-            else if (fileNumberMatch) index = parseInt(fileNumberMatch[1], 10);
-            else if (/^\d+$/.test(parentDirName)) index = parseInt(parentDirName, 10);
-
-            const standardizedName = `${type}_${index.toString().padStart(3, '0')}`;
-            const targetDir = path.join(this.outputDir, caseId, type);
-
-            return {
-                objFilePath: objPath,
-                outputDir: targetDir,
-                baseName: standardizedName,
-                encryptionKey: this.encryptionKey,
-                config: {
-                    ratio: this.config.get('dental.simplificationRatio'),
-                    threshold: this.config.get('dental.errorThreshold'),
-                    timeout: this.config.get('dental.timeout'),
-                },
-                meta: { index, type }
-            };
-        });
-
-        await Promise.allSettled(tasks.map(t => this.pool.run(t)));
-        return { message: 'Processing completed', caseId: caseId, patientCode: dto.patientCode };
-    } catch (error: any) {
-        this.logger.error(`Error processing case ${caseId}`, error);
-        throw new BadRequestException(`Processing failed: ${error.message}`);
-    } finally {
-        await Promise.all([ fs.remove(extractPath).catch(() => {}), fs.remove(file.path).catch(() => {}) ]);
-    }
-  }
-
-  // ✅ NEW: Xử lý Upload Excel Movement
-  async processMovementExcel(file: Express.Multer.File, caseId: string) {
-      this.logger.info(`Processing Movement Excel for Case: ${caseId}`);
-      try {
-          const stepsDataMap = parseMovementExcel(file.buffer);
-          let count = 0;
-
-          // Lưu từng step vào DB
-          for (const [stepIndex, teethData] of stepsDataMap.entries()) {
-              await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
-              count++;
-          }
-
-          this.logger.info(`Updated movement data for ${count} steps.`);
-          return { message: 'Movement data updated successfully', stepsCount: count };
-
-      } catch (error: any) {
-          this.logger.error(`Excel Parse Error`, error);
-          throw new BadRequestException(`Failed to parse excel: ${error.message}`);
-      }
-  }
-
-  async getCaseDetails(clientIdOrCode: string, specificCaseId?: string) {
-      if (specificCaseId) {
-           const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
-           if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
-           return this.orthoRepo.getCaseDetails(specificCaseId, true);
-      } else {
-           return this.orthoRepo.getCaseDetails(clientIdOrCode, false);
-      }
-  }
-
-  // ✅ UPDATED: List Models bao gồm cả Movement Data từ DB
-  async listModels(clientIdOrCode: string, specificCaseId?: string): Promise<ModelStep[]> {
-      let targetFolder = '';
-      let dbCaseId = ''; // ID số trong DB
-
-      if (specificCaseId) {
-          const isValid = await this.orthoRepo.checkCaseBelongsToPatient(specificCaseId, clientIdOrCode);
-          if (!isValid) throw new NotFoundException(`Case not found for patient ${clientIdOrCode}`);
-          targetFolder = specificCaseId;
-          dbCaseId = specificCaseId;
-      } else {
-          const latestCaseId = await this.orthoRepo.findLatestCaseIdByCode(clientIdOrCode);
-          if (latestCaseId) {
-              targetFolder = latestCaseId;
-              dbCaseId = latestCaseId;
-          } else if (fs.existsSync(path.join(this.outputDir, clientIdOrCode))) {
-              targetFolder = clientIdOrCode;
-              // Legacy folder không có trong DB thì không có movement data
-          }
-      }
-
-      if (!targetFolder) return [];
-
-      // 1. Quét File System để lấy danh sách file 3D
-      const clientDir = path.join(this.outputDir, targetFolder);
-      const allEncFiles = fs.existsSync(clientDir) ? await this.findFilesRecursively(clientDir, '.enc') : [];
-
-      // 2. Query DB để lấy Movement Data (nếu có CaseID hợp lệ)
-      let dbSteps: any[] = [];
-      if (dbCaseId && !isNaN(Number(dbCaseId))) {
-          dbSteps = await this.orthoRepo.getStepsByCaseId(Number(dbCaseId));
-      }
-
-      // 3. Merge Data (File System + DB)
-      const stepsMap = new Map<number, ModelStep>();
-
-      // Populate từ DB trước (để lấy teethData)
-      dbSteps.forEach(dbStep => {
-          if (!stepsMap.has(dbStep.stepIndex)) {
-              stepsMap.set(dbStep.stepIndex, {
-                  index: dbStep.stepIndex,
-                  maxillary: null,
-                  mandibular: null,
-                  teethData: dbStep.teethData // ✅ Attach Data
-              });
-          }
-      });
-
-      // Populate từ File System (để lấy URL file)
-      allEncFiles.forEach(fullPath => {
-          const filename = path.basename(fullPath).toLowerCase();
-          const relativePath = path.relative(this.outputDir, fullPath);
-          const urlPath = relativePath.split(path.sep).map(encodeURIComponent).join('/');
-          const url = `${this.appUrl}/models/${urlPath}`;
-
-          let index = 0;
-          let type: 'maxillary' | 'mandibular' | null = null;
-          if (filename.includes('maxillary')) type = 'maxillary';
-          else if (filename.includes('mandibular')) type = 'mandibular';
-
-          if (!type) return;
-
-          const fileMatch = filename.match(/(\d+)/);
-          if (fileMatch) index = parseInt(fileMatch[1], 10);
-
-          if (!stepsMap.has(index)) {
-              stepsMap.set(index, { index, maxillary: null, mandibular: null });
-          }
-          const entry = stepsMap.get(index)!;
-          if (type === 'maxillary') entry.maxillary = url;
-          else entry.mandibular = url;
-      });
-
-      return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
-  }
-
-  async getHistory(patientCode: string) {
-      return this.orthoRepo.findCasesByPatientCode(patientCode);
-  }
-
-  private async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
-    let results: string[] = [];
-    try {
-        const list = await fs.readdir(dir);
-        for (const file of list) {
-            const fullPath = path.resolve(dir, file);
-            const stat = await fs.stat(fullPath);
-            if (stat && stat.isDirectory()) {
-                results = results.concat(await this.findFilesRecursively(fullPath, ext));
-            } else if (file.toLowerCase().endsWith(ext)) {
-                results.push(fullPath);
-            }
-        }
-    } catch (e) { }
-    return results;
-  }
-}
-
-```
-
 ## File: src/modules/dental/application/services/dental.service.ts
 ```
-import {
-  Injectable,
-  Inject,
-  BadRequestException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
-const AdmZip = require('adm-zip');
 import { v4 as uuidv4 } from 'uuid';
 import {
   ILogger,
@@ -3623,39 +3401,47 @@ import {
 import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
 import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
 import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
-import { parseMovementExcel } from '../utils/movement.parser';
+import { parseMovementData } from '../utils/movement.parser';
+import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
+import {
+  ITransactionManager,
+  Transaction,
+} from '@core/shared/application/ports/transaction-manager.port';
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+import { ConversionBinaries } from '../../domain/ports/dental-worker.port';
+import {
+  TeethMovementRecord,
+  ConversionTaskWithMeta,
+  JawType,
+  CaseHistoryDTO,
+} from '../../domain/types/dental.types';
 
 export interface ModelStep {
   index: number;
   maxillary: string | null;
   mandibular: string | null;
-  teethData?: Record<string, any>;
+  teethData?: TeethMovementRecord; // ✅ Update type safety here
 }
 
 @Injectable()
 export class DentalService {
-  private readonly uploadDir: string;
-  private readonly outputDir: string;
   private readonly appUrl: string;
 
   constructor(
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     @Inject(PISCINA_POOL) private readonly pool: Piscina,
     @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
+    @Inject(ITransactionManager)
+    private readonly txManager: ITransactionManager,
+    @Inject(IDentalStorage) private readonly storage: IDentalStorage,
     private readonly config: ConfigService,
+    private readonly dentalGateway: DentalGateway,
   ) {
-    this.uploadDir = path.resolve(
-      this.config.get('dental.uploadDir') || 'uploads/dental/temp',
-    );
-    this.outputDir = path.resolve(
-      this.config.get('dental.outputDir') || 'uploads/dental/converted',
-    );
     this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
       /\/$/,
       '',
     );
-    fs.ensureDirSync(this.uploadDir);
-    fs.ensureDirSync(this.outputDir);
+    this.storage.ensureDirectories();
   }
 
   async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
@@ -3668,85 +3454,208 @@ export class DentalService {
       caseId = await this.orthoRepo.findLatestCaseIdByCode(dto.patientCode);
       if (caseId) {
         this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
-        await fs.remove(path.join(this.outputDir, caseId)).catch(() => {});
-        await (this.orthoRepo as any).deleteStepsByCaseId(Number(caseId));
+        const caseDir = this.storage.joinPath(this.storage.outputDir, caseId);
+        await this.storage.remove(caseDir);
+        await this.orthoRepo.deleteStepsByCaseId(Number(caseId));
       }
     }
 
     if (!caseId) {
-      caseId = await this.orthoRepo.createFullCase({
-        patientName: dto.patientName,
-        patientCode: dto.patientCode,
-        clinicName: dto.clinicName,
-        doctorName: dto.doctorName,
-        gender: dto.gender,
-        productType: dto.productType,
-        notes: dto.notes,
-      });
-    }
+      caseId = await this.txManager.runInTransaction(
+        async (tx: Transaction) => {
+          const clinicCode = dto.clinicName
+            .toUpperCase()
+            .replace(/\s+/g, '_')
+            .substring(0, 10);
+          let clinic = await this.orthoRepo.findClinicByCode(clinicCode, tx);
+          if (!clinic) {
+            clinic = await this.orthoRepo.createClinic(
+              { name: dto.clinicName, code: clinicCode },
+              tx,
+            );
+          }
 
-    const extractPath = path.join(this.uploadDir, `extract_${uuidv4()}`);
-    try {
-      const zip = new AdmZip(file.path);
-      zip.extractAllTo(extractPath, true);
-      const objFiles = await this.findFilesRecursively(extractPath, '.obj');
+          let dentistId: number | undefined;
+          if (dto.doctorName) {
+            let dentist = await this.orthoRepo.findDentist(
+              dto.doctorName,
+              clinic.id,
+              tx,
+            );
+            if (!dentist) {
+              dentist = await this.orthoRepo.createDentist(
+                { fullName: dto.doctorName, clinicId: clinic.id },
+                tx,
+              );
+            }
+            dentistId = dentist.id;
+          }
 
-      const tasks = objFiles.map((objPath) => {
-        const baseName = path.basename(objPath, '.obj');
-        const parentDir = path.basename(path.dirname(objPath));
+          let patient = await this.orthoRepo.findPatientByCode(
+            dto.patientCode,
+            tx,
+          );
+          if (!patient) {
+            const dobDate = dto.dob ? new Date(dto.dob) : undefined;
+            patient = await this.orthoRepo.createPatient(
+              {
+                fullName: dto.patientName,
+                patientCode: dto.patientCode,
+                clinicId: clinic.id,
+                gender: dto.gender,
+                dob: dobDate,
+              },
+              tx,
+            );
+          }
 
-        let type: 'Maxillary' | 'Mandibular' = baseName
-          .toLowerCase()
-          .includes('mandibular')
-          ? 'Mandibular'
-          : 'Maxillary';
-
-        // LOGIC NHẬN DIỆN INDEX THÔNG MINH:
-        // 1. Ưu tiên số trong tên thư mục cha (ví dụ: "Stage 5" -> 5)
-        // 2. Nếu không có, tìm số trong tên file (ví dụ: "Maxillary_10" -> 10)
-        let index = 0;
-        const folderMatch = parentDir.match(/(\d+)/);
-        const fileMatch = baseName.match(/(\d+)/);
-
-        if (folderMatch) index = parseInt(folderMatch[1], 10);
-        else if (fileMatch) index = parseInt(fileMatch[1], 10);
-
-        return {
-          objFilePath: objPath,
-          outputDir: path.join(this.outputDir, caseId!, type),
-          baseName: `${type}_${index.toString().padStart(3, '0')}`,
-          encryptionKey: this.config.get('dental.encryptionKey'),
-          config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
-          meta: { index, type },
-        };
-      });
-
-      this.logger.info(
-        `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
+          const newCase = await this.orthoRepo.createCase(
+            {
+              patientId: patient.id,
+              dentistId: dentistId ?? null,
+              productType: dto.productType,
+              notes: dto.notes,
+            },
+            tx,
+          );
+          return String(newCase.id);
+        },
       );
-      await Promise.allSettled(tasks.map((t) => this.pool.run(t)));
-
-      return {
-        message: 'Processing started',
-        caseId,
-        stepCount: tasks.length / 2,
-      };
-    } catch (error: any) {
-      throw new BadRequestException(error.message);
-    } finally {
-      await fs.remove(extractPath).catch(() => {});
-      await fs.remove(file.path).catch(() => {});
     }
+
+    const extractPath = this.storage.joinPath(
+      this.storage.uploadDir,
+      `extract_${uuidv4()}`,
+    );
+
+    try {
+      await this.storage.extractZip(file.path, extractPath);
+    } catch (e: any) {
+      throw new BadRequestException('Invalid Zip File: ' + e.message);
+    }
+
+    const objFiles = await this.storage.findFilesRecursively(
+      extractPath,
+      '.obj',
+    );
+
+    // ✅ REFACTOR: Strict type for binaries config
+    const binariesConfig: ConversionBinaries = {
+      obj2gltf: this.config.get<string>('dental.binaries.obj2gltf')!,
+      gltfPipeline: this.config.get<string>('dental.binaries.gltfPipeline')!,
+      gltfTransform: this.config.get<string>('dental.binaries.gltfTransform')!,
+    };
+
+    // ✅ REFACTOR: Using defined Type instead of any[]
+    const tasks: ConversionTaskWithMeta[] = objFiles.map((objPath) => {
+      const baseName = this.storage.getBasename(objPath, '.obj');
+      const parentDir = this.storage.getBasename(
+        this.storage.getDirname(objPath),
+      );
+
+      const type: JawType = baseName.toLowerCase().includes('mandibular')
+        ? 'Mandibular'
+        : 'Maxillary';
+
+      let index = 0;
+      const folderMatch = parentDir.match(/(\d+)/);
+      const fileMatch = baseName.match(/(\d+)/);
+
+      if (folderMatch) index = parseInt(folderMatch[1], 10);
+      else if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+      // Create Job with strictly typed Metadata
+      const job: ConversionTaskWithMeta = {
+        objFilePath: objPath,
+        outputDir: this.storage.joinPath(this.storage.outputDir, caseId!, type),
+        baseName: `${type}_${index.toString().padStart(3, '0')}`,
+        encryptionKey: this.config.get<string>('dental.encryptionKey')!,
+        config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
+        binaries: binariesConfig,
+        meta: { index, type },
+      };
+      return job;
+    });
+
+    this.logger.info(
+      `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
+    );
+    this.runBackgroundConversion(tasks, caseId!, extractPath, file.path);
+
+    return {
+      success: true,
+      message: 'Processing started in background',
+      caseId,
+      stepCount: tasks.length / 2,
+      status: 'PROCESSING',
+    };
   }
 
-  async processMovementExcel(file: Express.Multer.File, caseId: string) {
-    const fileBuffer = await fs.readFile(file.path);
-    const stepsDataMap = parseMovementExcel(fileBuffer);
+  private async runBackgroundConversion(
+    tasks: ConversionTaskWithMeta[], // ✅ REFACTOR: Strict Type
+    caseId: string,
+    extractPath: string,
+    zipFilePath: string,
+  ) {
+    let completed = 0;
+    const total = tasks.length;
+
+    const promises = tasks.map(async (task) => {
+      try {
+        const result = await this.pool.run(task);
+        completed++;
+        // We assume result has path (handled in worker)
+        const filename = this.storage.getBasename(result.path);
+
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'progress',
+          file: task.baseName,
+          percent: Math.round((completed / total) * 100),
+          url: `${this.appUrl}/models/${caseId}/${task.meta.type}/${filename}`,
+          type: task.meta.type,
+          index: task.meta.index,
+        });
+      } catch (error: any) {
+        this.logger.error(`Error converting ${task.baseName}`, error);
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'error',
+          file: task.baseName,
+          error: error.message,
+        });
+      }
+    });
+
+    await Promise.allSettled(promises);
+    this.dentalGateway.notifyComplete(caseId, { status: 'completed' });
+    this.logger.info(`Case ${caseId} processing completed.`);
+
+    await this.storage.remove(extractPath);
+    await this.storage.remove(zipFilePath);
+  }
+
+  async processMovementData(file: Express.Multer.File, caseId: string) {
+    const fileBuffer = await this.storage.readFile(file.path);
+
+    // ✅ REFACTOR: parseMovementData now returns Map<number, TeethMovementRecord>
+    const stepsDataMap = parseMovementData(fileBuffer, file.originalname);
+
+    let count = 0;
     for (const [stepIndex, teethData] of stepsDataMap.entries()) {
-      await this.orthoRepo.updateStepMovementData(caseId, stepIndex, teethData);
+      // ✅ REFACTOR: Calls repo with strictly typed record
+      await this.orthoRepo.updateStepMovementData(
+        caseId,
+        stepIndex,
+        teethData, // This is now TeethMovementRecord, not any
+      );
+      count++;
     }
-    await fs.remove(file.path).catch(() => {});
-    return { message: 'Movement data updated', count: stepsDataMap.size };
+
+    await this.storage.remove(file.path);
+    return {
+      message: 'Movement data updated successfully',
+      stepsCount: stepsDataMap.size,
+      details: `Parsed ${count} steps from file.`,
+    };
   }
 
   async listModels(clientId: string, caseId?: string): Promise<ModelStep[]> {
@@ -3754,41 +3663,36 @@ export class DentalService {
       caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
     if (!id) return [];
 
-    const clientDir = path.join(this.outputDir, id);
-    const allEncFiles = fs.existsSync(clientDir)
-      ? await this.findFilesRecursively(clientDir, '.enc')
+    const clientDir = this.storage.joinPath(this.storage.outputDir, id);
+    const exists = await this.storage.exists(clientDir);
+    const allEncFiles = exists
+      ? await this.storage.findFilesRecursively(clientDir, '.enc')
       : [];
-    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
 
+    // Note: getStepsByCaseId still returns generic object,
+    // ideally repo should return TreatmentStep Entity
+    const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
     const stepsMap = new Map<number, ModelStep>();
 
-    // Nạp data từ DB trước
     dbSteps.forEach((s) => {
       stepsMap.set(s.stepIndex, {
         index: s.stepIndex,
         maxillary: null,
         mandibular: null,
-        teethData: s.teethData,
+        teethData: s.teethData as TeethMovementRecord, // Type assertion if needed
       });
     });
 
-    // Nạp link file 3D từ ổ cứng
     allEncFiles.forEach((fp) => {
-      const filename = path.basename(fp).toLowerCase();
-      // Lấy con số cuối cùng trong tên file (đảm bảo là Index của step)
+      const filename = this.storage.getBasename(fp).toLowerCase();
       const matches = filename.match(/(\d+)/g);
       const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
-
-      const relPath = path
-        .relative(this.outputDir, fp)
-        .split(path.sep)
-        .join('/');
+      const relPath = this.storage.getRelativePath(this.storage.outputDir, fp);
       const url = `${this.appUrl}/models/${relPath}`;
 
       if (!stepsMap.has(index)) {
         stepsMap.set(index, { index, maxillary: null, mandibular: null });
       }
-
       const entry = stepsMap.get(index)!;
       if (filename.includes('maxillary')) entry.maxillary = url;
       else if (filename.includes('mandibular')) entry.mandibular = url;
@@ -3803,28 +3707,9 @@ export class DentalService {
     return id ? this.orthoRepo.getCaseDetails(id, true) : null;
   }
 
-  async getHistory(patientCode: string) {
+  // ✅ REFACTOR: Explicit return type
+  async getHistory(patientCode: string): Promise<CaseHistoryDTO[]> {
     return this.orthoRepo.findCasesByPatientCode(patientCode);
-  }
-
-  private async findFilesRecursively(
-    dir: string,
-    ext: string,
-  ): Promise<string[]> {
-    let results: string[] = [];
-    if (!fs.existsSync(dir)) return results;
-    const list = await fs.readdir(dir);
-    for (const file of list) {
-      const fullPath = path.resolve(dir, file);
-      if (fs.statSync(fullPath).isDirectory()) {
-        results = results.concat(
-          await this.findFilesRecursively(fullPath, ext),
-        );
-      } else if (file.toLowerCase().endsWith(ext)) {
-        results.push(fullPath);
-      }
-    }
-    return results;
   }
 }
 
@@ -3833,136 +3718,271 @@ export class DentalService {
 ## File: src/modules/dental/application/utils/movement.parser.ts
 ```
 import * as XLSX from 'xlsx';
+import * as cheerio from 'cheerio';
 import { BadRequestException } from '@nestjs/common';
 
+// ==========================================
+// 1. DATA STRUCTURES
+// ==========================================
 export interface ToothMoveData {
-  extrusion: number;
-  translationX: number;
-  translationY: number;
-  rotation: number;
-  angulation: number;
-  torque: number;
+  rotation: number; // Rotation (deg)
+  angulation: number; // Angulation / Tip (deg)
+  inclination: number; // Inclination / Torque (deg)
+  translationX: number; // Left/ Right (mm)
+  translationY: number; // Forward/ Backward (mm)
+  translationZ: number; // Extrusion/ Intrusion (mm)
+  iprMesial: number; // IPR (mm)
+  iprDistal: number; // IPR (mm)
 }
 
-export const parseMovementExcel = (
+export type ParsedMovementMap = Map<number, Record<string, ToothMoveData>>;
+
+// ==========================================
+// 2. HELPER FUNCTIONS
+// ==========================================
+
+/**
+ * Làm sạch chuỗi số có đơn vị. VD: "0.38 deg" -> 0.38
+ */
+function cleanValue(val: any): number {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  // Giữ lại số, dấu chấm, dấu trừ. Loại bỏ chữ cái và khoảng trắng.
+  const str = String(val)
+    .replace(/[^\d.-]/g, '')
+    .trim();
+  const num = parseFloat(str);
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Chuẩn hóa tên cột để dễ map. VD: "Left/ Right" -> "leftright"
+ */
+function normalizeHeader(header: string): string {
+  return String(header)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Map dữ liệu từ row (object key-value) sang ToothMoveData
+ */
+function mapRowToData(rowData: any): ToothMoveData {
+  return {
+    rotation: cleanValue(rowData['rotation'] || rowData['rot']),
+    angulation: cleanValue(rowData['angulation'] || rowData['ang']),
+    inclination: cleanValue(
+      rowData['inclination'] || rowData['torque'] || rowData['tor'],
+    ),
+    translationX: cleanValue(
+      rowData['translationx'] || rowData['transx'] || rowData['leftright'],
+    ),
+    translationY: cleanValue(
+      rowData['translationy'] ||
+        rowData['transy'] ||
+        rowData['forwardbackward'],
+    ),
+    translationZ: cleanValue(
+      rowData['extrusion'] ||
+        rowData['translationz'] ||
+        rowData['extrusionintrusion'],
+    ),
+    iprMesial: cleanValue(rowData['iprmesial']),
+    iprDistal: cleanValue(rowData['iprdistal']),
+  };
+}
+
+// ==========================================
+// 3. PARSING STRATEGIES
+// ==========================================
+
+/**
+ * STRATEGY 1: Parse CSV/Excel phẳng (Flat Format)
+ */
+function parseFlatFormat(jsonData: any[]): ParsedMovementMap {
+  const stepsMap: ParsedMovementMap = new Map();
+
+  jsonData.forEach((row) => {
+    const cleanRow: any = {};
+    Object.keys(row).forEach((k) => {
+      cleanRow[normalizeHeader(k)] = row[k];
+    });
+
+    const step = parseInt(cleanRow['step'] || cleanRow['stage']);
+    const tooth = String(
+      cleanRow['tooth'] || cleanRow['toothid'] || cleanRow['toothnumber'],
+    );
+
+    if (isNaN(step) || !tooth || tooth === 'undefined') return;
+
+    if (!stepsMap.has(step)) stepsMap.set(step, {});
+    const stepData = stepsMap.get(step)!;
+
+    stepData[tooth] = mapRowToData(cleanRow);
+  });
+
+  return stepsMap;
+}
+
+/**
+ * STRATEGY 2: Parse Excel Report (Nhiều bảng con trong 1 sheet)
+ */
+function parseExcelReportFormat(sheet: XLSX.WorkSheet): ParsedMovementMap {
+  const stepsMap: ParsedMovementMap = new Map();
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+
+  let currentStep = 0;
+  let headers: string[] = [];
+  let isReadingTable = false;
+
+  const stepHeaderRegex = /(?:subsetup|stage|step)\s*(\d+)/i;
+
+  for (const row of rows) {
+    const firstCell = row[0] ? String(row[0]).trim() : '';
+
+    // Tìm header Step (vd: "FINAL Subsetup1")
+    const stepMatch = firstCell.match(stepHeaderRegex);
+    if (stepMatch) {
+      currentStep = parseInt(stepMatch[1], 10);
+      isReadingTable = false;
+      continue;
+    }
+
+    // Tìm header cột (vd: "Tooth number")
+    if (row.some((cell) => String(cell).toLowerCase().includes('tooth'))) {
+      headers = row.map((cell) => normalizeHeader(String(cell)));
+      isReadingTable = true;
+      if (!stepsMap.has(currentStep)) stepsMap.set(currentStep, {});
+      continue;
+    }
+
+    // Đọc data
+    if (isReadingTable && currentStep > 0) {
+      const toothNum = parseInt(firstCell);
+      if (isNaN(toothNum)) continue;
+
+      const toothStr = String(toothNum);
+      const rowData: any = {};
+      row.forEach((cell, index) => {
+        if (headers[index]) rowData[headers[index]] = cell;
+      });
+
+      const stepData = stepsMap.get(currentStep)!;
+      stepData[toothStr] = mapRowToData(rowData);
+    }
+  }
+  return stepsMap;
+}
+
+/**
+ * STRATEGY 3: Parse HTML Report (Sử dụng Cheerio)
+ */
+function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
+  const $ = cheerio.load(htmlContent);
+  const stepsMap: ParsedMovementMap = new Map();
+
+  // Tìm tất cả các bảng OrthoAutoTable
+  $('table.OrthoAutoTable').each((tableIndex, tableElement) => {
+    // Logic: Giả định bảng xuất hiện tuần tự là Step 1, Step 2...
+    let stepIndex = tableIndex + 1;
+
+    // Cố gắng tìm text Step trong caption hoặc div cha nếu có
+    const captionText =
+      $(tableElement).find('caption').text() ||
+      $(tableElement).prev().text() ||
+      $(tableElement).parent().prev().text();
+
+    const stepMatch = captionText.match(/(?:subsetup|stage|step)\s*(\d+)/i);
+    if (stepMatch) {
+      stepIndex = parseInt(stepMatch[1], 10);
+    }
+
+    if (!stepsMap.has(stepIndex)) stepsMap.set(stepIndex, {});
+    const stepData = stepsMap.get(stepIndex)!;
+
+    // Parse Headers
+    const headers: string[] = [];
+    $(tableElement)
+      .find('tbody tr')
+      .eq(0)
+      .find('td')
+      .each((_, cell) => {
+        headers.push(normalizeHeader($(cell).text()));
+      });
+
+    // Parse Data Rows
+    $(tableElement)
+      .find('tbody tr')
+      .slice(1)
+      .each((_, row) => {
+        const cells = $(row).find('td');
+        const rowData: any = {};
+
+        cells.each((cellIndex, cell) => {
+          const header = headers[cellIndex];
+          if (header) {
+            rowData[header] = $(cell).text();
+          }
+        });
+
+        const toothVal = cleanValue(rowData['toothnumber'] || rowData['tooth']);
+        if (!toothVal) return;
+
+        const tooth = String(toothVal);
+        stepData[tooth] = mapRowToData(rowData);
+      });
+  });
+
+  return stepsMap;
+}
+
+// ==========================================
+// 4. MAIN EXPORT
+// ==========================================
+
+export const parseMovementData = (
   buffer: Buffer,
-): Map<number, Record<string, ToothMoveData>> => {
+  filename: string = 'unknown',
+): ParsedMovementMap => {
   try {
     if (!buffer || buffer.length === 0) {
       throw new Error('File content is empty');
     }
 
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const contentStr = buffer.toString('utf-8').trim();
 
-    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-      throw new Error('No sheets found in file');
+    // 1. Detect HTML
+    if (
+      contentStr.startsWith('<') &&
+      (contentStr.includes('<html') || contentStr.includes('<!DOCTYPE'))
+    ) {
+      return parseHtmlFormat(contentStr);
     }
 
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
-
-    const stepsMap = new Map<number, Record<string, ToothMoveData>>();
-
-    jsonData.forEach((row) => {
-      const cleanRow: any = {};
-      Object.keys(row).forEach((k) => {
-        cleanRow[k.toLowerCase().trim().replace(/_/g, '')] = row[k];
-      });
-
-      const step = parseInt(cleanRow['step'] || cleanRow['stage']);
-      const tooth = String(cleanRow['tooth'] || cleanRow['toothid']);
-
-      if (isNaN(step) || !tooth || tooth === 'undefined') return;
-
-      if (!stepsMap.has(step)) {
-        stepsMap.set(step, {});
-      }
-
-      const stepData = stepsMap.get(step)!;
-
-      stepData[tooth] = {
-        extrusion: parseFloat(cleanRow['extrusion'] || 0),
-        translationX: parseFloat(
-          cleanRow['translationx'] || cleanRow['transx'] || 0,
-        ),
-        translationY: parseFloat(
-          cleanRow['translationy'] || cleanRow['transy'] || 0,
-        ),
-        rotation: parseFloat(cleanRow['rotation'] || cleanRow['rot'] || 0),
-        angulation: parseFloat(cleanRow['angulation'] || cleanRow['ang'] || 0),
-        torque: parseFloat(cleanRow['torque'] || cleanRow['tor'] || 0),
-      };
-    });
-
-    return stepsMap;
-  } catch (error: any) {
-    throw new BadRequestException('Invalid Excel/CSV format: ' + error.message);
-  }
-};
-
-```
-
-## File: src/modules/dental/application/utils/movement.parser.ts.bak
-```
-import * as XLSX from 'xlsx';
-import { BadRequestException } from '@nestjs/common';
-
-// Cấu trúc JSON lưu vào DB
-export interface ToothMoveData {
-  extrusion: number;
-  translationX: number;
-  translationY: number;
-  rotation: number;
-  angulation: number;
-  torque: number;
-}
-
-export const parseMovementExcel = (buffer: Buffer): Map<number, Record<string, ToothMoveData>> => {
-  try {
+    // 2. Detect Excel / CSV
     const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-    // Chuyển sang JSON: [[Step, Tooth, Ext...], [1, 11, 0.1...]]
-    const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
+    // Check Flat vs Report format
+    // FIX: Removed 'limit: 1' as it is not a valid option in Sheet2JSONOpts
+    const firstRow: any[] = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      range: 0,
+    })[0] as any[];
+    const isFlat =
+      firstRow &&
+      firstRow.some((cell) => normalizeHeader(String(cell)) === 'step');
 
-    // Map: StepIndex -> { ToothID: Data }
-    const stepsMap = new Map<number, Record<string, ToothMoveData>>();
-
-    jsonData.forEach((row) => {
-        // Chuẩn hóa key (viết thường, bỏ khoảng trắng) để dễ map
-        const cleanRow: any = {};
-        Object.keys(row).forEach(k => {
-            cleanRow[k.toLowerCase().trim().replace(/_/g, '')] = row[k];
-        });
-
-        // Lấy Step và Tooth (bắt buộc)
-        const step = parseInt(cleanRow['step'] || cleanRow['stage']);
-        const tooth = String(cleanRow['tooth'] || cleanRow['toothid']);
-
-        if (isNaN(step) || !tooth) return;
-
-        if (!stepsMap.has(step)) {
-            stepsMap.set(step, {});
-        }
-
-        const stepData = stepsMap.get(step)!;
-
-        // Lưu dữ liệu vào object
-        stepData[tooth] = {
-            extrusion: parseFloat(cleanRow['extrusion'] || 0),
-            translationX: parseFloat(cleanRow['translationx'] || cleanRow['transx'] || 0),
-            translationY: parseFloat(cleanRow['translationy'] || cleanRow['transy'] || 0),
-            rotation: parseFloat(cleanRow['rotation'] || cleanRow['rot'] || 0),
-            angulation: parseFloat(cleanRow['angulation'] || cleanRow['ang'] || 0),
-            torque: parseFloat(cleanRow['torque'] || cleanRow['tor'] || 0),
-        };
-    });
-
-    return stepsMap;
+    if (isFlat) {
+      const jsonData = XLSX.utils.sheet_to_json(sheet);
+      return parseFlatFormat(jsonData);
+    } else {
+      return parseExcelReportFormat(sheet);
+    }
   } catch (error: any) {
-    throw new BadRequestException('Invalid Excel file format. ' + error.message);
+    throw new BadRequestException(
+      'Failed to parse movement data: ' + error.message,
+    );
   }
 };
 
@@ -3988,22 +4008,10 @@ import {
   ApiBearerAuth,
   ApiQuery,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
-import * as fs from 'fs-extra';
 import { DentalService } from '../../application/services/dental.service';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { UploadCaseDto } from '../dtos/upload-case.dto';
 import { Public } from '@modules/auth/infrastructure/decorators/public.decorator';
-
-const uploadDir = 'uploads/temp';
-try {
-  fs.ensureDirSync(uploadDir);
-} catch (e) {}
-
-const storage = diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
 
 @ApiTags('Dental 3D')
 @ApiBearerAuth()
@@ -4015,7 +4023,8 @@ export class DentalController {
   @Post('upload')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: UploadCaseDto })
-  @UseInterceptors(FileInterceptor('file', { storage }))
+  // ✅ Không cần truyền options { storage } nữa, MulterModule sẽ tự xử lý
+  @UseInterceptors(FileInterceptor('file'))
   async uploadZip(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadCaseDto,
@@ -4023,7 +4032,6 @@ export class DentalController {
     return this.dentalService.processZipUpload(file, dto);
   }
 
-  // ✅ NEW: API Upload Excel Data
   @Post('upload-movement')
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -4035,12 +4043,13 @@ export class DentalController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file', { storage }))
+  // ✅ Config tập trung tại Module giúp Controller sạch sẽ
+  @UseInterceptors(FileInterceptor('file'))
   async uploadMovement(
     @UploadedFile() file: Express.Multer.File,
     @Body('caseId') caseId: string,
   ) {
-    return this.dentalService.processMovementExcel(file, caseId);
+    return this.dentalService.processMovementData(file, caseId);
   }
 
   @Public()
@@ -4078,12 +4087,8 @@ export class DentalController {
 ```
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import { execFile } from 'child_process';
-import * as util from 'util';
+import { spawn } from 'child_process';
 import * as crypto from 'crypto';
-import { pipeline } from 'stream/promises';
-
-const execFilePromise = util.promisify(execFile);
 
 // ==========================================
 // 1. CONSTANTS & CONFIG
@@ -4091,7 +4096,6 @@ const execFilePromise = util.promisify(execFile);
 const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
-const MAX_SEARCH_DEPTH = 10;
 
 // ==========================================
 // 2. CUSTOM EXCEPTIONS
@@ -4108,32 +4112,23 @@ export class WorkerBaseError extends Error {
     }
   }
 }
-
 export class FileSystemError extends WorkerBaseError {}
 export class ConversionProcessError extends WorkerBaseError {}
 export class EncryptionError extends WorkerBaseError {}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-
-  if (typeof error === 'object' && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      // ignore
-    }
-  }
   return String(error as any);
 }
 
 // ==========================================
-// 3. INTERFACES
+// 3. INTERFACES (Imported or Re-defined)
 // ==========================================
-export interface ConversionConfig {
-  ratio: number;
-  threshold: number;
-  timeout: number;
+// Lưu ý: Trong Worker thread độc lập, tốt nhất là define lại interface hoặc import từ file shared không phụ thuộc NestJS
+export interface ConversionBinaries {
+  obj2gltf: string;
+  gltfPipeline: string;
+  gltfTransform: string;
 }
 
 export interface ConversionTask {
@@ -4141,7 +4136,13 @@ export interface ConversionTask {
   outputDir: string;
   baseName: string;
   encryptionKey: string;
-  config: ConversionConfig;
+  config: {
+    ratio: number;
+    threshold: number;
+    timeout: number;
+  };
+  // ✅ Nhận binaries từ Main Thread
+  binaries: ConversionBinaries;
 }
 
 export interface WorkerResult {
@@ -4149,100 +4150,76 @@ export interface WorkerResult {
   path: string;
 }
 
-interface Binaries {
-  obj2gltf: string;
-  gltfTransform: string;
-  gltfPipeline: string;
-}
-
 // ==========================================
 // 4. HELPER FUNCTIONS
 // ==========================================
 
-function findProjectRoot(startDir: string): string {
-  let currentDir = path.resolve(startDir);
-  for (let i = 0; i < MAX_SEARCH_DEPTH; i++) {
-    if (fs.existsSync(path.join(currentDir, 'package.json'))) {
-      return currentDir;
-    }
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) break;
-    currentDir = parentDir;
-  }
-  return startDir;
-}
-
-function resolveBinaries(): Binaries {
-  const projectRoot = findProjectRoot(process.cwd());
-  const binPath = path.resolve(projectRoot, 'node_modules', '.bin');
-  const isWin = process.platform === 'win32';
-
-  const getBinPath = (cmd: string) =>
-    path.join(binPath, isWin ? `${cmd}.cmd` : cmd);
-
-  const bins = {
-    obj2gltf: getBinPath('obj2gltf'),
-    gltfTransform: getBinPath('gltf-transform'),
-    gltfPipeline: getBinPath('gltf-pipeline'),
-  };
-
-  if (!fs.existsSync(bins.obj2gltf))
-    throw new FileSystemError(`Binary not found: ${bins.obj2gltf}`);
-
-  return bins;
-}
-
 async function runCommand(
-  bin: string,
+  scriptPath: string,
   args: string[],
   timeout: number,
 ): Promise<void> {
-  try {
-    await execFilePromise(bin, args, { timeout });
-  } catch (error: unknown) {
-    const cmdName = path.basename(bin);
-    throw new ConversionProcessError(
-      `Command '${cmdName}' failed: ${getErrorMessage(error)}`,
-      error,
-    );
+  // ✅ Validate script existence before running
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Binary not found at path: ${scriptPath}`);
   }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
+      stdio: 'inherit',
+      timeout,
+      env: process.env,
+    });
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new ConversionProcessError(
+            `Command ${path.basename(scriptPath)} failed with code ${code}`,
+          ),
+        );
+    });
+    child.on('error', (err) =>
+      reject(new ConversionProcessError(err.message, err)),
+    );
+  });
 }
 
-async function encryptFileStream(
+async function encryptFileBuffer(
   inputPath: string,
   outputPath: string,
   keyHex: string,
 ): Promise<void> {
   try {
+    const stats = await fs.stat(inputPath);
+    if (stats.size === 0) {
+      throw new Error(
+        `Input file for encryption is empty (0 bytes): ${inputPath}`,
+      );
+    }
+    console.log(
+      `🔒 Encrypting file: ${path.basename(inputPath)} (${stats.size} bytes)`,
+    );
+
+    const fileData = await fs.readFile(inputPath);
     const key = Buffer.from(keyHex);
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv, {
       authTagLength: AUTH_TAG_LENGTH,
     });
 
-    const readStream = fs.createReadStream(inputPath);
-    const writeStream = fs.createWriteStream(outputPath);
-
-    // FIX: Arrow function để khớp type
-    if (!writeStream.write(iv)) {
-      await new Promise<void>((resolve) =>
-        writeStream.once('drain', () => resolve()),
-      );
-    }
-
-    await pipeline(readStream, cipher, writeStream, { end: false });
-
+    const encryptedContent = Buffer.concat([
+      cipher.update(fileData),
+      cipher.final(),
+    ]);
     const authTag = cipher.getAuthTag();
+    const finalBuffer = Buffer.concat([iv, encryptedContent, authTag]);
 
-    await new Promise<void>((resolve, reject) => {
-      writeStream.write(authTag, (err) => {
-        if (err) return reject(err);
-        writeStream.end(() => resolve());
-      });
-    });
+    await fs.writeFile(outputPath, finalBuffer);
+    console.log(`✅ Encrypted success: ${path.basename(outputPath)}`);
   } catch (error: unknown) {
     throw new EncryptionError(
-      `Encryption failed for ${inputPath}: ${getErrorMessage(error)}`,
+      `Encryption failed: ${getErrorMessage(error)}`,
       error,
     );
   }
@@ -4253,7 +4230,8 @@ async function encryptFileStream(
 // ==========================================
 
 async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
-  const { objFilePath, outputDir, baseName, encryptionKey, config } = task;
+  const { objFilePath, outputDir, baseName, encryptionKey, config, binaries } =
+    task;
   const tempDir = path.dirname(objFilePath);
 
   const paths = {
@@ -4266,20 +4244,20 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
   const tempFiles = [paths.initialGlb, paths.simplifiedGlb, paths.optimizedGlb];
 
   try {
-    if (!fs.existsSync(objFilePath)) {
-      throw new FileSystemError(`Input file not found: ${objFilePath}`);
-    }
+    console.log(`\n🚀 START WORKER: ${baseName}`);
+    if (!fs.existsSync(objFilePath))
+      throw new FileSystemError(`Input file missing: ${objFilePath}`);
 
-    const bins = resolveBinaries();
-
+    // Step 1: OBJ -> GLB
     await runCommand(
-      bins.obj2gltf,
+      binaries.obj2gltf,
       ['-i', objFilePath, '-o', paths.initialGlb, '--binary'],
       config.timeout,
     );
 
+    // Step 2: Simplify
     await runCommand(
-      bins.gltfTransform,
+      binaries.gltfTransform,
       [
         'simplify',
         paths.initialGlb,
@@ -4292,20 +4270,29 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
       config.timeout,
     );
 
+    // Step 3: Optimize
     await runCommand(
-      bins.gltfPipeline,
+      binaries.gltfPipeline,
       [
         '-i',
         paths.simplifiedGlb,
         '-o',
         paths.optimizedGlb,
-        '--draco.compressionLevel=10',
+        '--draco.compressionLevel=7',
       ],
       config.timeout,
     );
 
+    // Step 4: Encrypt
     await fs.ensureDir(outputDir);
-    await encryptFileStream(
+
+    if (!fs.existsSync(paths.optimizedGlb)) {
+      throw new Error(
+        `Optimization step succeeded but file not found: ${paths.optimizedGlb}`,
+      );
+    }
+
+    await encryptFileBuffer(
       paths.optimizedGlb,
       paths.finalEncrypted,
       encryptionKey,
@@ -4313,18 +4300,11 @@ async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
 
     return { success: true, path: paths.finalEncrypted };
   } catch (error: unknown) {
-    if (error instanceof WorkerBaseError) {
-      throw error;
-    }
-    throw new Error(`Unexpected Worker Error: ${getErrorMessage(error)}`);
+    console.error(`❌ WORKER FAILED [${baseName}]:`, getErrorMessage(error));
+    throw error;
   } finally {
-    await Promise.all(
-      tempFiles.map((f) =>
-        fs.remove(f).catch(() => {
-          /* ignore */
-        }),
-      ),
-    );
+    // Cleanup temp files
+    await Promise.all(tempFiles.map((f) => fs.remove(f).catch(() => {})));
   }
 }
 
@@ -4409,78 +4389,106 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
 const AdmZip = require('adm-zip');
 import { IDentalStorage } from '../../domain/ports/dental-storage.port';
 
 @Injectable()
 export class FileSystemDentalStorage implements IDentalStorage {
-  private readonly uploadDir: string;
-  private readonly outputDir: string;
+  private readonly _uploadDir: string;
+  private readonly _outputDir: string;
 
   constructor(private readonly config: ConfigService) {
     const rawUploadDir = this.config.get('dental.uploadDir');
     const rawOutputDir = this.config.get('dental.outputDir');
-    if (!rawUploadDir || !rawOutputDir)
-      throw new Error('Dental Config Missing');
 
-    this.uploadDir = path.resolve(rawUploadDir);
-    this.outputDir = path.resolve(rawOutputDir);
+    if (!rawUploadDir || !rawOutputDir) {
+      throw new Error('Dental Config Missing (uploadDir or outputDir)');
+    }
+
+    this._uploadDir = path.resolve(rawUploadDir);
+    this._outputDir = path.resolve(rawOutputDir);
   }
 
+  // --- Getters ---
+  get uploadDir(): string {
+    return this._uploadDir;
+  }
+
+  get outputDir(): string {
+    return this._outputDir;
+  }
+
+  // --- Path Utils ---
+  joinPath(...segments: string[]): string {
+    return path.join(...segments);
+  }
+
+  resolvePath(...segments: string[]): string {
+    return path.resolve(...segments);
+  }
+
+  getBasename(p: string, ext?: string): string {
+    return path.basename(p, ext);
+  }
+
+  getDirname(p: string): string {
+    return path.dirname(p);
+  }
+
+  getRelativePath(from: string, to: string): string {
+    const rel = path.relative(from, to);
+    // Chuẩn hóa path separator thành '/' để dùng cho URL
+    return rel.split(path.sep).join('/');
+  }
+
+  // --- File Ops ---
   ensureDirectories(): void {
-    fs.ensureDirSync(this.uploadDir);
-    fs.ensureDirSync(this.outputDir);
+    fs.ensureDirSync(this._uploadDir);
+    fs.ensureDirSync(this._outputDir);
   }
 
-  getUploadDir(): string {
-    return this.uploadDir;
-  }
-  getOutputDir(): string {
-    return this.outputDir;
+  async readFile(filePath: string): Promise<Buffer> {
+    return fs.readFile(filePath);
   }
 
-  async saveTempFile(file: Express.Multer.File): Promise<string> {
-    // Multer đã lưu file rồi, hàm này chỉ để confirm hoặc move nếu cần
-    return file.path;
+  async exists(filePath: string): Promise<boolean> {
+    return fs.pathExists(filePath);
+  }
+
+  async remove(filePath: string): Promise<void> {
+    // fs-extra remove handles both file and dir, and doesn't throw if missing
+    await fs.remove(filePath).catch(() => {});
   }
 
   async extractZip(zipPath: string, extractPath: string): Promise<void> {
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(extractPath, true);
-  }
-
-  async removeFile(path: string): Promise<void> {
-    await fs.remove(path).catch(() => {});
-  }
-
-  async removeDirectory(path: string): Promise<void> {
-    await fs.remove(path).catch(() => {});
-  }
-
-  async findObjFilesRecursively(dir: string): Promise<string[]> {
-    return this.findFiles(dir, '.obj');
-  }
-
-  async findEncFilesRecursively(dir: string): Promise<string[]> {
-    return this.findFiles(dir, '.enc');
-  }
-
-  private async findFiles(dir: string, ext: string): Promise<string[]> {
-    let results: string[] = [];
-    try {
-      const list = await fs.readdir(dir);
-      for (const file of list) {
-        const fullPath = path.resolve(dir, file);
-        const stat = await fs.stat(fullPath);
-        if (stat && stat.isDirectory()) {
-          results = results.concat(await this.findFiles(fullPath, ext));
-        } else if (file.toLowerCase().endsWith(ext)) {
-          results.push(fullPath);
-        }
+    // AdmZip is sync mostly, wrapped in Promise for interface consistency
+    return new Promise((resolve, reject) => {
+      try {
+        const zip = new AdmZip(zipPath);
+        zip.extractAllTo(extractPath, true);
+        resolve();
+      } catch (e) {
+        reject(e);
       }
-    } catch (e) {
-      /* ignore */
+    });
+  }
+
+  async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
+    let results: string[] = [];
+    if (!(await fs.pathExists(dir))) return results;
+
+    const list = await fs.readdir(dir);
+    for (const file of list) {
+      const fullPath = path.resolve(dir, file);
+      const stat = await fs.stat(fullPath);
+      if (stat.isDirectory()) {
+        results = results.concat(
+          await this.findFilesRecursively(fullPath, ext),
+        );
+      } else if (file.toLowerCase().endsWith(ext.toLowerCase())) {
+        results.push(fullPath);
+      }
     }
     return results;
   }
@@ -4517,11 +4525,18 @@ import { eq, desc, and, asc } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import {
   IOrthoRepository,
-  CreateCaseParams,
   OrthoCase,
   FullCaseInput,
   CaseDetailsDTO,
+  ClinicInput,
+  DentistInput,
+  PatientInput,
+  CreateCaseInput,
 } from '../../domain/repositories/ortho.repository';
+import {
+  CaseHistoryDTO,
+  TeethMovementRecord,
+} from '../../domain/types/dental.types';
 import {
   patients,
   cases,
@@ -4536,8 +4551,13 @@ export class DrizzleOrthoRepository
   extends DrizzleBaseRepository
   implements IOrthoRepository
 {
+  // ==========================================
+  // 1. LEGACY MONOLITHIC METHOD
+  // (Giữ lại để tương thích ngược, nhưng nên hạn chế dùng)
+  // ==========================================
   async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
     const runInTx = async (dbTx: any) => {
+      // 1. Handle Clinic
       const clinicCode = data.clinicName
         .toUpperCase()
         .replace(/\s+/g, '_')
@@ -4549,6 +4569,7 @@ export class DrizzleOrthoRepository
         .from(clinics)
         .where(eq(clinics.clinicCode, clinicCode))
         .limit(1);
+
       if (existingClinic.length > 0) {
         clinicId = existingClinic[0].id;
       } else {
@@ -4562,6 +4583,7 @@ export class DrizzleOrthoRepository
         clinicId = newClinic.id;
       }
 
+      // 2. Handle Dentist
       let dentistId: number | null = null;
       if (data.doctorName) {
         const existingDentist = await dbTx
@@ -4574,6 +4596,7 @@ export class DrizzleOrthoRepository
             ),
           )
           .limit(1);
+
         if (existingDentist.length > 0) {
           dentistId = existingDentist[0].id;
         } else {
@@ -4588,12 +4611,14 @@ export class DrizzleOrthoRepository
         }
       }
 
+      // 3. Handle Patient
       let patientId: number;
       const existingPatient = await dbTx
         .select()
         .from(patients)
         .where(eq(patients.patientCode, data.patientCode))
         .limit(1);
+
       if (existingPatient.length > 0) {
         patientId = existingPatient[0].id;
       } else {
@@ -4610,6 +4635,7 @@ export class DrizzleOrthoRepository
         patientId = newPatient.id;
       }
 
+      // 4. Create Case
       const [newCase] = await dbTx
         .insert(cases)
         .values({
@@ -4629,87 +4655,145 @@ export class DrizzleOrthoRepository
     return this.db.transaction(runInTx);
   }
 
-  // ✅ NEW: Hàm Update Movement Data
-  async updateStepMovementData(
-    caseId: string,
-    stepIndex: number,
-    teethData: any,
-    tx?: Transaction,
-  ): Promise<void> {
-    const db = this.getDb(tx);
-    const cId = Number(caseId);
+  // ==========================================
+  // 2. GRANULAR WRITE METHODS (Atomic Operations)
+  // ==========================================
 
-    // Kiểm tra xem step đã tồn tại chưa
-    const existingStep = await db
-      .select()
-      .from(treatmentSteps)
-      .where(
-        and(
-          eq(treatmentSteps.caseId, cId),
-          eq(treatmentSteps.stepIndex, stepIndex),
-        ),
-      )
+  async createClinic(
+    data: ClinicInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(clinics)
+      .values({
+        name: data.name,
+        clinicCode: data.code,
+      })
+      .returning({ id: clinics.id });
+    return res;
+  }
+
+  async createDentist(
+    data: DentistInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(dentists)
+      .values({
+        fullName: data.fullName,
+        clinicId: data.clinicId,
+      })
+      .returning({ id: dentists.id });
+    return res;
+  }
+
+  async createPatient(
+    data: PatientInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(patients)
+      .values({
+        fullName: data.fullName,
+        patientCode: data.patientCode,
+        clinicId: data.clinicId,
+        gender: data.gender,
+        birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
+      })
+      .returning({ id: patients.id });
+    return res;
+  }
+
+  async createCase(
+    data: CreateCaseInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(cases)
+      .values({
+        patientId: data.patientId,
+        dentistId: data.dentistId ?? null,
+        productType: data.productType as any, // Enum handling
+        status: 'PROCESSING',
+        notes: data.notes,
+        startedAt: new Date(),
+      })
+      .returning({ id: cases.id });
+    return res;
+  }
+
+  // ==========================================
+  // 3. READ / QUERY METHODS (Type Safe)
+  // ==========================================
+
+  async findClinicByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({ id: clinics.id })
+      .from(clinics)
+      .where(eq(clinics.clinicCode, code))
+      .limit(1);
+    return result[0] || null;
+  }
+
+  async findDentist(
+    name: string,
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({ id: dentists.id })
+      .from(dentists)
+      .where(and(eq(dentists.fullName, name), eq(dentists.clinicId, clinicId)))
+      .limit(1);
+    return result[0] || null;
+  }
+
+  async findPatientByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({ id: patients.id })
+      .from(patients)
+      .where(eq(patients.patientCode, code))
+      .limit(1);
+    return result[0] || null;
+  }
+
+  async findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null> {
+    const db = this.getDb(tx);
+    // 1. Check if code is numeric Case ID
+    if (!isNaN(Number(code))) {
+      const caseById = await db.query.cases.findFirst({
+        where: eq(cases.id, Number(code)),
+        columns: { id: true },
+      });
+      if (caseById) return String(caseById.id);
+    }
+
+    // 2. Check if code is Patient Code
+    const result = await db
+      .select({ caseId: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(eq(patients.patientCode, code))
+      .orderBy(desc(cases.createdAt))
       .limit(1);
 
-    if (existingStep.length > 0) {
-      // Update
-      await db
-        .update(treatmentSteps)
-        .set({ teethData: teethData })
-        .where(eq(treatmentSteps.id, existingStep[0].id));
-    } else {
-      // Insert mới (nếu chưa có model nhưng có data trước)
-      await db.insert(treatmentSteps).values({
-        caseId: cId,
-        stepIndex: stepIndex,
-        teethData: teethData,
-      });
-    }
-  }
-
-  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
-    const db = this.getDb(tx);
-    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
-  }
-
-  async getCaseDetails(
-    identifier: string,
-    isCaseId: boolean,
-    tx?: Transaction,
-  ): Promise<CaseDetailsDTO | null> {
-    const db = this.getDb(tx);
-    let selection = {
-      patientName: patients.fullName,
-      patientCode: patients.patientCode,
-      caseId: cases.id,
-      doctorName: dentists.fullName,
-      clinicName: clinics.name,
-      createdAt: cases.createdAt,
-    };
-
-    let query;
-    if (isCaseId) {
-      query = db
-        .select(selection)
-        .from(cases)
-        .innerJoin(patients, eq(cases.patientId, patients.id))
-        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
-        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-        .where(eq(cases.id, Number(identifier)))
-        .limit(1);
-    } else {
-      query = db
-        .select(selection)
-        .from(cases)
-        .innerJoin(patients, eq(cases.patientId, patients.id))
-        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
-        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-        .where(eq(patients.patientCode, identifier))
-        .orderBy(desc(cases.createdAt))
-        .limit(1);
-    }
-    const result = await query;
-    return result[0] || null;
+    return result.length > 0 ? String(result[0].caseId) : null;
   }
 
   async checkCaseBelongsToPatient(
@@ -4733,35 +4817,13 @@ export class DrizzleOrthoRepository
     return result.length > 0;
   }
 
-  async findLatestCaseIdByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<string | null> {
-    const db = this.getDb(tx);
-    if (!isNaN(Number(code))) {
-      const caseById = await db.query.cases.findFirst({
-        where: eq(cases.id, Number(code)),
-      });
-      if (caseById) return String(caseById.id);
-    }
-    const result = await db
-      .select({ caseId: cases.id })
-      .from(cases)
-      .innerJoin(patients, eq(cases.patientId, patients.id))
-      .where(eq(patients.patientCode, code))
-      .orderBy(desc(cases.createdAt))
-      .limit(1);
-
-    if (result.length > 0) return String(result[0].caseId);
-    return null;
-  }
-
+  // ✅ OPTIMIZED: Return specific DTO instead of any[]
   async findCasesByPatientCode(
     patientCode: string,
     tx?: Transaction,
-  ): Promise<any[]> {
+  ): Promise<CaseHistoryDTO[]> {
     const db = this.getDb(tx);
-    return await db
+    const rows = await db
       .select({
         caseId: cases.id,
         status: cases.status,
@@ -4775,11 +4837,119 @@ export class DrizzleOrthoRepository
       .leftJoin(dentists, eq(cases.dentistId, dentists.id))
       .where(eq(patients.patientCode, patientCode))
       .orderBy(desc(cases.createdAt));
+
+    return rows.map((row) => ({
+      caseId: row.caseId,
+      status: row.status,
+      createdAt: row.createdAt,
+      notes: row.notes,
+      productType: row.productType,
+      doctorName: row.doctorName,
+    }));
+  }
+
+  async getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null> {
+    const db = this.getDb(tx);
+    const selection = {
+      patientName: patients.fullName,
+      patientCode: patients.patientCode,
+      caseId: cases.id,
+      doctorName: dentists.fullName,
+      clinicName: clinics.name,
+      createdAt: cases.createdAt,
+    };
+
+    let queryBuilder;
+
+    if (isCaseId) {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(cases.id, Number(identifier)))
+        .limit(1);
+    } else {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(patients.patientCode, identifier))
+        .orderBy(desc(cases.createdAt))
+        .limit(1);
+    }
+
+    const result = await queryBuilder;
+    return result[0] ? (result[0] as unknown as CaseDetailsDTO) : null;
+  }
+
+  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> {
+    const db = this.getDb(tx);
+    const result = await db.select().from(cases).where(eq(cases.id, id));
+    if (!result[0]) return null;
+
+    return {
+      id: result[0].id,
+      patientId: result[0].patientId,
+      status: result[0].status,
+      orderId: result[0].orderId,
+      createdAt: result[0].createdAt,
+    };
+  }
+
+  // ==========================================
+  // 4. MOVEMENT DATA & STEPS
+  // ==========================================
+
+  // ✅ OPTIMIZED: Strict type for teethData
+  async updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: TeethMovementRecord,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    const cId = Number(caseId);
+
+    const existingStep = await db
+      .select({ id: treatmentSteps.id })
+      .from(treatmentSteps)
+      .where(
+        and(
+          eq(treatmentSteps.caseId, cId),
+          eq(treatmentSteps.stepIndex, stepIndex),
+        ),
+      )
+      .limit(1);
+
+    if (existingStep.length > 0) {
+      await db
+        .update(treatmentSteps)
+        .set({ teethData: teethData as any }) // Valid cast for JSONB column
+        .where(eq(treatmentSteps.id, existingStep[0].id));
+    } else {
+      await db.insert(treatmentSteps).values({
+        caseId: cId,
+        stepIndex: stepIndex,
+        teethData: teethData as any,
+      });
+    }
+  }
+
+  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
   }
 
   async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
     const db = this.getDb(tx);
-    // ✅ QUAN TRỌNG: Select luôn teethData
     return await db
       .select()
       .from(treatmentSteps)
@@ -4787,27 +4957,14 @@ export class DrizzleOrthoRepository
       .orderBy(asc(treatmentSteps.stepIndex));
   }
 
-  // Legacy
-  async findPatientByCode(code: string, tx?: Transaction): Promise<any | null> {
-    return null;
-  }
-  async createPatient(data: any, tx?: Transaction): Promise<any> {
-    return null;
-  }
-  async createCase(
-    data: CreateCaseParams,
-    tx?: Transaction,
-  ): Promise<OrthoCase> {
-    throw new Error('');
-  }
-  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> {
-    return null;
-  }
+  // Giữ lại empty method để thỏa mãn Interface nếu chưa xóa ở Interface
   async saveSteps(
     caseId: number,
     steps: any[],
     tx?: Transaction,
-  ): Promise<void> {}
+  ): Promise<void> {
+    // Deprecated or Not Implemented
+  }
 }
 
 ```
@@ -4864,9 +5021,110 @@ export class UploadCaseDto {
 
 ```
 
+## File: src/modules/dental/infrastructure/gateways/dental.gateway.ts
+```
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  SubscribeMessage,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Logger } from '@nestjs/common';
+
+@WebSocketGateway({
+  namespace: 'dental',
+  cors: { origin: '*' },
+})
+export class DentalGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer()
+  server: Server;
+
+  private logger = new Logger(DentalGateway.name);
+
+  handleConnection(client: Socket) {
+    this.logger.log(`Client connected: ${client.id}`);
+  }
+
+  handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+  }
+
+  @SubscribeMessage('join_case')
+  handleJoinCase(
+    @MessageBody() data: { caseId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const roomName = `case_${data.caseId}`;
+    client.join(roomName);
+    this.logger.log(`Client ${client.id} joined room: ${roomName}`);
+    return { event: 'joined', data: `Joined case ${data.caseId}` };
+  }
+
+  notifyProgress(caseId: string, data: any) {
+    this.server.to(`case_${caseId}`).emit('conversion_progress', data);
+  }
+
+  notifyComplete(caseId: string, data: any) {
+    this.server.to(`case_${caseId}`).emit('case_ready', data);
+  }
+}
+
+```
+
+## File: src/modules/dental/domain/types/dental.types.ts
+```
+// Định nghĩa cấu trúc dữ liệu di chuyển của 1 răng (giống logic trong parser cũ)
+export interface ToothMoveData {
+  rotation: number;
+  angulation: number;
+  inclination: number;
+  translationX: number;
+  translationY: number;
+  translationZ: number;
+  iprMesial: number;
+  iprDistal: number;
+}
+
+// Map: "11" -> { rotation: ... }, "12" -> { ... }
+export type TeethMovementRecord = Record<string, ToothMoveData>;
+
+// DTO trả về cho API History
+export interface CaseHistoryDTO {
+  caseId: number;
+  status: string | null;
+  createdAt: Date | null;
+  notes: string | null;
+  productType: string;
+  doctorName: string | null;
+}
+
+// Type mở rộng cho Conversion Job trong Service (kèm Metadata để tracking progress)
+import { ConversionJob } from '../ports/dental-worker.port';
+
+export type JawType = 'Maxillary' | 'Mandibular';
+
+export type ConversionTaskWithMeta = ConversionJob & {
+  meta: {
+    index: number;
+    type: JawType;
+  };
+};
+
+```
+
 ## File: src/modules/dental/domain/ports/dental-worker.port.ts
 ```
 export const IDentalWorker = Symbol('IDentalWorker');
+
+export interface ConversionBinaries {
+  obj2gltf: string;
+  gltfPipeline: string;
+  gltfTransform: string;
+}
 
 export interface ConversionJob {
   objFilePath: string;
@@ -4878,6 +5136,8 @@ export interface ConversionJob {
     threshold: number;
     timeout: number;
   };
+  // ✅ NEW: Truyền đường dẫn binaries vào Job
+  binaries: ConversionBinaries;
 }
 
 export interface WorkerResult {
@@ -4895,21 +5155,43 @@ export interface IDentalWorker {
 ```
 export const IDentalStorage = Symbol('IDentalStorage');
 
-export interface DentalFile {
-  path: string;
-  filename: string;
-}
-
 export interface IDentalStorage {
+  // --- Path Management ---
+  get uploadDir(): string;
+  get outputDir(): string;
+
+  /** Nối các đường dẫn (tương tự path.join) */
+  joinPath(...segments: string[]): string;
+
+  /** Giải quyết đường dẫn tuyệt đối (tương tự path.resolve) */
+  resolvePath(...segments: string[]): string;
+
+  /** Lấy tên file từ đường dẫn (tương tự path.basename) */
+  getBasename(p: string, ext?: string): string;
+
+  /** Lấy thư mục cha (tương tự path.dirname) */
+  getDirname(p: string): string;
+
+  /** Lấy đường dẫn tương đối (tương tự path.relative) - Luôn trả về forward slash '/' cho URL */
+  getRelativePath(from: string, to: string): string;
+
+  // --- File Operations ---
   ensureDirectories(): void;
-  saveTempFile(file: Express.Multer.File): Promise<string>;
+
+  /** Đọc file vào Buffer */
+  readFile(path: string): Promise<Buffer>;
+
+  /** Kiểm tra file/folder tồn tại */
+  exists(path: string): Promise<boolean>;
+
+  /** Xóa file hoặc thư mục (recursive) */
+  remove(path: string): Promise<void>;
+
+  /** Giải nén file Zip */
   extractZip(zipPath: string, extractPath: string): Promise<void>;
-  findObjFilesRecursively(dir: string): Promise<string[]>;
-  findEncFilesRecursively(dir: string): Promise<string[]>;
-  removeFile(path: string): Promise<void>;
-  removeDirectory(path: string): Promise<void>;
-  getUploadDir(): string;
-  getOutputDir(): string;
+
+  /** Tìm kiếm file theo đuôi mở rộng (đệ quy) */
+  findFilesRecursively(dir: string, ext: string): Promise<string[]>;
 }
 
 ```
@@ -4917,6 +5199,11 @@ export interface IDentalStorage {
 ## File: src/modules/dental/domain/repositories/ortho.repository.ts
 ```
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { CaseHistoryDTO, TeethMovementRecord } from '../types/dental.types';
+
+// ==========================================
+// 1. DATA TYPES (ENTITIES & DTOs)
+// ==========================================
 
 export interface OrthoCase {
   id: number;
@@ -4925,12 +5212,8 @@ export interface OrthoCase {
   status: string | null;
   createdAt: Date | null;
 }
-export interface CreateCaseParams {
-  patientId: number;
-  dentistId?: number;
-  productType: 'aligner' | 'retainer';
-  scanDate?: Date;
-}
+
+// DTO cho hàm createFullCase cũ (Monolithic)
 export interface FullCaseInput {
   patientName: string;
   patientCode: string;
@@ -4941,6 +5224,8 @@ export interface FullCaseInput {
   productType: 'aligner' | 'retainer';
   notes?: string;
 }
+
+// DTO trả về chi tiết Case cho Frontend
 export interface CaseDetailsDTO {
   patientName: string;
   patientCode: string;
@@ -4950,50 +5235,129 @@ export interface CaseDetailsDTO {
   createdAt: Date;
 }
 
+// ==========================================
+// 2. INPUT TYPES FOR REFACTORING (GRANULAR)
+// ==========================================
+
+export interface ClinicInput {
+  name: string;
+  code: string;
+}
+
+export interface DentistInput {
+  fullName: string;
+  clinicId: number;
+}
+
+export interface PatientInput {
+  fullName: string;
+  patientCode: string;
+  clinicId: number;
+  gender?: any; // Có thể để string hoặc Enum nếu đã import
+  dob?: Date;
+}
+
+export interface CreateCaseInput {
+  patientId: number;
+  dentistId?: number | null;
+  productType: string; // 'aligner' | 'retainer'
+  notes?: string;
+}
+
+// ==========================================
+// 3. REPOSITORY INTERFACE
+// ==========================================
+
 export const IOrthoRepository = Symbol('IOrthoRepository');
 
 export interface IOrthoRepository {
+  /**
+   * @deprecated Logic này nên chuyển lên Service Layer dùng Transaction Manager.
+   * Giữ lại để tương thích ngược nếu cần.
+   */
   createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string>;
+
+  // --- GRANULAR METHODS (Phục vụ Refactor Service) ---
+
+  // Clinic
+  findClinicByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createClinic(data: ClinicInput, tx?: Transaction): Promise<{ id: number }>;
+
+  // Dentist
+  findDentist(
+    name: string,
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createDentist(data: DentistInput, tx?: Transaction): Promise<{ id: number }>;
+
+  // Patient (Thay thế hàm legacy findPatientByCode trả về any)
+  findPatientByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createPatient(data: PatientInput, tx?: Transaction): Promise<{ id: number }>;
+
+  // Case (Thay thế hàm legacy createCase trả về any)
+  createCase(data: CreateCaseInput, tx?: Transaction): Promise<{ id: number }>;
+
+  // --- QUERY / READ METHODS ---
+
   findLatestCaseIdByCode(
     code: string,
     tx?: Transaction,
   ): Promise<string | null>;
+
   checkCaseBelongsToPatient(
     caseId: string,
     patientCode: string,
     tx?: Transaction,
   ): Promise<boolean>;
-  findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<any[]>;
+
+  // ✅ UPDATED: Trả về CaseHistoryDTO[] thay vì any[]
+  findCasesByPatientCode(
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<CaseHistoryDTO[]>;
+
   getCaseDetails(
     identifier: string,
     isCaseId: boolean,
     tx?: Transaction,
   ): Promise<CaseDetailsDTO | null>;
+
   getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
 
-  // ✅ NEW
+  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
+
+  // --- MOVEMENT DATA & STEPS ---
+
+  // ✅ UPDATED: teethData sử dụng Type rõ ràng thay vì any
   updateStepMovementData(
     caseId: string,
     stepIndex: number,
-    teethData: any,
+    teethData: TeethMovementRecord,
     tx?: Transaction,
   ): Promise<void>;
 
-  // Legacy
-  findPatientByCode(code: string, tx?: Transaction): Promise<any | null>;
-  createPatient(data: any, tx?: Transaction): Promise<any>;
-  createCase(data: any, tx?: Transaction): Promise<any>;
-  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
-  saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
   deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
+
+  // Legacy (Optional: có thể xóa nếu không dùng nữa)
+  saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
 }
 
 ```
 
 ## File: src/modules/dental/dental.module.ts
 ```
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { Module, OnModuleInit, Inject } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { MulterModule } from '@nestjs/platform-express'; // ✅ Import MulterModule
+import { diskStorage } from 'multer';
+
 import { DentalController } from './infrastructure/controllers/dental.controller';
 import { DentalService } from './application/services/dental.service';
 import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
@@ -5003,14 +5367,37 @@ import { DrizzleOrthoRepository } from './infrastructure/persistence/drizzle-ort
 import { IDentalStorage } from './domain/ports/dental-storage.port';
 import { IDentalWorker } from './domain/ports/dental-worker.port';
 import { IOrthoRepository } from './domain/repositories/ortho.repository';
+import { DentalGateway } from './infrastructure/gateways/dental.gateway';
 import dentalConfig from '@config/dental.config';
 
 @Module({
-  imports: [ConfigModule.forFeature(dentalConfig)],
+  imports: [
+    ConfigModule.forFeature(dentalConfig),
+    // ✅ Cấu hình Multer Asynchronously (Dynamic Config)
+    MulterModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (config: ConfigService) => ({
+        storage: diskStorage({
+          destination: (req, file, cb) => {
+            // Lấy đường dẫn từ Config (đồng bộ với IDentalStorage)
+            const uploadDir =
+              config.get<string>('dental.uploadDir') || 'uploads/dental/temp';
+            cb(null, uploadDir);
+          },
+          filename: (req, file, cb) => {
+            // Giữ logic đặt tên file có timestamp để tránh trùng
+            cb(null, `${Date.now()}-${file.originalname}`);
+          },
+        }),
+      }),
+      inject: [ConfigService],
+    }),
+  ],
   controllers: [DentalController],
   providers: [
     DentalService,
     PiscinaProvider,
+    DentalGateway,
     {
       provide: IDentalStorage,
       useClass: FileSystemDentalStorage,
@@ -5019,14 +5406,23 @@ import dentalConfig from '@config/dental.config';
       provide: IDentalWorker,
       useClass: PiscinaDentalWorker,
     },
-    // ✅ Đăng ký Repository mới
     {
       provide: IOrthoRepository,
       useClass: DrizzleOrthoRepository,
     },
   ],
 })
-export class DentalModule {}
+export class DentalModule implements OnModuleInit {
+  constructor(
+    @Inject(IDentalStorage) private readonly dentalStorage: IDentalStorage,
+  ) {}
+
+  // ✅ Lifecycle Hook: Chạy 1 lần duy nhất khi Module khởi tạo
+  // Đảm bảo thư mục tồn tại TRƯỚC khi có bất kỳ request nào.
+  onModuleInit() {
+    this.dentalStorage.ensureDirectories();
+  }
+}
 
 ```
 
@@ -5297,54 +5693,6 @@ export class CsvParserAdapter implements IFileParser {
 
 ```
 
-## File: src/core/shared/infrastructure/adapters/in-memory-event-bus.adapter.ts
-```
-import { Injectable, Logger } from '@nestjs/common';
-import { IEventBus } from '../../application/ports/event-bus.port'; // ../../ trỏ về src/core/shared
-import { IDomainEvent } from '../../domain/events/domain-event.interface';
-
-@Injectable()
-export class InMemoryEventBus implements IEventBus {
-  private readonly logger = new Logger(InMemoryEventBus.name);
-  private handlers = new Map<string, Function[]>();
-
-  async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    const eventName = event.eventName;
-    const handlers = this.handlers.get(eventName);
-
-    if (handlers) {
-      this.logger.debug(`Publishing event: ${eventName}`);
-      await Promise.all(handlers.map((handler) => handler(event)));
-    }
-  }
-
-  async publishAll(events: IDomainEvent[]): Promise<void> {
-    await Promise.all(events.map((event) => this.publish(event)));
-  }
-
-  subscribe<T extends IDomainEvent>(
-    eventName: string,
-    handler: (event: T) => Promise<void>,
-  ): void {
-    if (!this.handlers.has(eventName)) {
-      this.handlers.set(eventName, []);
-    }
-    this.handlers.get(eventName)?.push(handler);
-  }
-
-  unsubscribe(eventName: string, handler: Function): void {
-    const handlers = this.handlers.get(eventName);
-    if (handlers) {
-      const index = handlers.indexOf(handler);
-      if (index > -1) {
-        handlers.splice(index, 1);
-      }
-    }
-  }
-}
-
-```
-
 ## File: src/core/shared/infrastructure/persistence/drizzle-base.repository.ts
 ```
 import { Inject, Injectable } from '@nestjs/common';
@@ -5536,32 +5884,49 @@ import { redisStore } from 'cache-manager-redis-yet';
     {
       provide: CACHE_MANAGER,
       useFactory: async (configService: ConfigService) => {
-        const host = configService.get('redis.host');
-        const port = configService.get('redis.port');
+        const host = configService.get<string>('redis.host');
+        const port = configService.get<number>('redis.port');
         const ttl = (configService.get('redis.ttl') || 300) * 1000;
 
-        console.log(`🔌 Connecting to Redis at ${host}:${port}...`);
-
-        // Sử dụng redis-yet (chuẩn mới)
+        // Cấu hình Redis Store
         const store = await redisStore({
-          socket: { host, port },
+          socket: {
+            host,
+            port,
+            // Thử kết nối lại tối đa sau mỗi 3 giây
+            reconnectStrategy: (retries) => Math.min(retries * 50, 3000),
+          },
           ttl,
         });
 
-        console.log('✅ Redis Store Created!');
+        // 👇 TRUY CẬP VÀO CLIENT GỐC ĐỂ LẮNG NGHE SỰ KIỆN 👇
+        const client = (store as any).client;
+        if (client) {
+          // 1. Khi bị lỗi kết nối (để tránh crash app)
+          client.on('error', (err: any) => {
+            console.error(`❌ [Redis] Connection Error: ${err.message}`);
+          });
 
-        // Fix lỗi import cache-manager (CommonJS vs ESM)
+          // 2. Khi đang cố gắng kết nối lại
+          client.on('reconnecting', () => {
+            console.warn('⏳ [Redis] Lost connection! Reconnecting...');
+          });
+
+          // 3. ✅ KHI ĐÃ KẾT NỐI LẠI THÀNH CÔNG VÀ SẴN SÀNG
+          client.on('ready', () => {
+            console.log('🚀 [Redis] Connection ESTABLISHED & READY!');
+          });
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const cm = require('cache-manager');
         const createCache =
           cm.createCache ||
           (cm.default && cm.default.createCache) ||
           cm.caching;
-
         if (!createCache) throw new Error('Cannot find createCache function');
 
         const cache = createCache(store);
-        // Gán ngược store để Adapter check được
         if (!cache.store) cache.store = store;
 
         return cache;
@@ -5981,7 +6346,7 @@ import { registerAs } from '@nestjs/config';
 
 export default registerAs('app', () => ({
   env: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parseInt(process.env.PORT || '8080', 10),
   apiPrefix: 'api',
 }));
 
@@ -6047,6 +6412,18 @@ export default registerAs('eventBus', () => ({
 ## File: src/config/dental.config.ts
 ```
 import { registerAs } from '@nestjs/config';
+import * as path from 'path';
+
+// Helper để resolve đường dẫn an toàn, fallback nếu không tìm thấy
+function safeResolve(packageName: string, subPath: string): string {
+  try {
+    // 1. Ưu tiên tìm trong project hiện tại
+    return require.resolve(`${packageName}/${subPath}`);
+  } catch (e) {
+    // 2. Fallback đơn giản (cho trường hợp Docker global install)
+    return path.resolve('node_modules', packageName, subPath);
+  }
+}
 
 export default registerAs('dental', () => ({
   // Upload & Storage Paths
@@ -6055,7 +6432,7 @@ export default registerAs('dental', () => ({
 
   // Encryption
   encryptionKey:
-    process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE', // 32 chars
+    process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE',
 
   // Conversion Settings
   simplificationRatio: 0.3,
@@ -6065,6 +6442,18 @@ export default registerAs('dental', () => ({
   // Worker Pool
   minThreads: parseInt(process.env.PISCINA_MIN_THREADS || '0', 10),
   maxThreads: parseInt(process.env.PISCINA_MAX_THREADS || '0', 10),
+
+  // ✅ NEW: Định nghĩa đường dẫn Binaries cụ thể (Ưu tiên ENV -> Node Resolve)
+  binaries: {
+    obj2gltf:
+      process.env.BIN_OBJ2GLTF || safeResolve('obj2gltf', 'bin/obj2gltf.js'),
+    gltfPipeline:
+      process.env.BIN_GLTF_PIPELINE ||
+      safeResolve('gltf-pipeline', 'bin/gltf-pipeline.js'),
+    gltfTransform:
+      process.env.BIN_GLTF_TRANSFORM ||
+      safeResolve('@gltf-transform/cli', 'bin/cli.js'),
+  },
 }));
 
 ```
