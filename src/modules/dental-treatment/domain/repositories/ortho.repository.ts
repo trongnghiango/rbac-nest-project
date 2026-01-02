@@ -13,19 +13,8 @@ export interface OrthoCase {
   createdAt: Date | null;
 }
 
-// DTO cho hàm createFullCase cũ (Monolithic)
-export interface FullCaseInput {
-  patientName: string;
-  patientCode: string;
-  gender?: 'Male' | 'Female' | 'Other';
-  dob?: Date;
-  clinicName: string;
-  doctorName?: string;
-  productType: 'aligner' | 'retainer';
-  notes?: string;
-}
+// ❌ Đã xóa interface FullCaseInput (Không còn dùng)
 
-// DTO trả về chi tiết Case cho Frontend
 export interface CaseDetailsDTO {
   patientName: string;
   patientCode: string;
@@ -36,26 +25,8 @@ export interface CaseDetailsDTO {
 }
 
 // ==========================================
-// 2. INPUT TYPES FOR REFACTORING (GRANULAR)
+// 2. INPUT TYPES (Granular)
 // ==========================================
-
-export interface ClinicInput {
-  name: string;
-  code: string;
-}
-
-export interface DentistInput {
-  fullName: string;
-  clinicId: number;
-}
-
-export interface PatientInput {
-  fullName: string;
-  patientCode: string;
-  clinicId: number;
-  gender?: any; // Có thể để string hoặc Enum nếu đã import
-  dob?: Date;
-}
 
 export interface CreateCaseInput {
   patientId: number;
@@ -71,19 +42,12 @@ export interface CreateCaseInput {
 export const IOrthoRepository = Symbol('IOrthoRepository');
 
 export interface IOrthoRepository {
-  /**
-   * @deprecated Logic này nên chuyển lên Service Layer dùng Transaction Manager.
-   * Giữ lại để tương thích ngược nếu cần.
-   */
-  createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string>;
+  // ❌ Đã xóa createFullCase (Deprecated)
 
-  // --- GRANULAR METHODS (Phục vụ Refactor Service) ---
-
-  // Case (Thay thế hàm legacy createCase trả về any)
+  // --- GRANULAR METHODS ---
   createCase(data: CreateCaseInput, tx?: Transaction): Promise<{ id: number }>;
 
   // --- QUERY / READ METHODS ---
-
   findLatestCaseIdByCode(
     code: string,
     tx?: Transaction,
@@ -95,7 +59,6 @@ export interface IOrthoRepository {
     tx?: Transaction,
   ): Promise<boolean>;
 
-  // ✅ UPDATED: Trả về CaseHistoryDTO[] thay vì any[]
   findCasesByPatientCode(
     patientCode: string,
     tx?: Transaction,
@@ -112,8 +75,6 @@ export interface IOrthoRepository {
   findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
 
   // --- MOVEMENT DATA & STEPS ---
-
-  // ✅ UPDATED: teethData sử dụng Type rõ ràng thay vì any
   updateStepMovementData(
     caseId: string,
     stepIndex: number,
@@ -123,6 +84,5 @@ export interface IOrthoRepository {
 
   deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
 
-  // Legacy (Optional: có thể xóa nếu không dùng nữa)
   saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
 }

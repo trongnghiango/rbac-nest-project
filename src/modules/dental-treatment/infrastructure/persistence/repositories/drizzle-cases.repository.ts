@@ -4,24 +4,22 @@ import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/d
 import {
   IOrthoRepository,
   OrthoCase,
-  FullCaseInput,
   CaseDetailsDTO,
-  ClinicInput,
-  DentistInput,
-  PatientInput,
   CreateCaseInput,
-} from '../../domain/repositories/ortho.repository';
+} from '../../../domain/repositories/ortho.repository';
 import {
   CaseHistoryDTO,
   TeethMovementRecord,
-} from '../../domain/types/dental.types';
+} from '../../../domain/types/dental.types';
+
 import {
   patients,
   cases,
   treatmentSteps,
   clinics,
   dentists,
-} from '@database/schema/ortho.schema';
+} from '@database/schema';
+
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
@@ -33,157 +31,10 @@ export class DrizzleOrthoRepository
   // 1. LEGACY MONOLITHIC METHOD
   // (Giữ lại để tương thích ngược, nhưng nên hạn chế dùng)
   // ==========================================
-  async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
-    const runInTx = async (dbTx: any) => {
-      // 1. Handle Clinic
-      const clinicCode = data.clinicName
-        .toUpperCase()
-        .replace(/\s+/g, '_')
-        .substring(0, 10);
-
-      let clinicId: number;
-      const existingClinic = await dbTx
-        .select()
-        .from(clinics)
-        .where(eq(clinics.clinicCode, clinicCode))
-        .limit(1);
-
-      if (existingClinic.length > 0) {
-        clinicId = existingClinic[0].id;
-      } else {
-        const [newClinic] = await dbTx
-          .insert(clinics)
-          .values({
-            name: data.clinicName,
-            clinicCode: clinicCode,
-          })
-          .returning();
-        clinicId = newClinic.id;
-      }
-
-      // 2. Handle Dentist
-      let dentistId: number | null = null;
-      if (data.doctorName) {
-        const existingDentist = await dbTx
-          .select()
-          .from(dentists)
-          .where(
-            and(
-              eq(dentists.fullName, data.doctorName),
-              eq(dentists.clinicId, clinicId),
-            ),
-          )
-          .limit(1);
-
-        if (existingDentist.length > 0) {
-          dentistId = existingDentist[0].id;
-        } else {
-          const [newDentist] = await dbTx
-            .insert(dentists)
-            .values({
-              fullName: data.doctorName,
-              clinicId: clinicId,
-            })
-            .returning();
-          dentistId = newDentist.id;
-        }
-      }
-
-      // 3. Handle Patient
-      let patientId: number;
-      const existingPatient = await dbTx
-        .select()
-        .from(patients)
-        .where(eq(patients.patientCode, data.patientCode))
-        .limit(1);
-
-      if (existingPatient.length > 0) {
-        patientId = existingPatient[0].id;
-      } else {
-        const [newPatient] = await dbTx
-          .insert(patients)
-          .values({
-            fullName: data.patientName,
-            patientCode: data.patientCode,
-            clinicId: clinicId,
-            gender: data.gender,
-            birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
-          })
-          .returning();
-        patientId = newPatient.id;
-      }
-
-      // 4. Create Case
-      const [newCase] = await dbTx
-        .insert(cases)
-        .values({
-          patientId: patientId,
-          dentistId: dentistId,
-          productType: data.productType,
-          status: 'PROCESSING',
-          notes: data.notes,
-          startedAt: new Date(),
-        })
-        .returning();
-
-      return String(newCase.id);
-    };
-
-    if (tx) return runInTx(tx);
-    return this.db.transaction(runInTx);
-  }
 
   // ==========================================
   // 2. GRANULAR WRITE METHODS (Atomic Operations)
   // ==========================================
-
-  async createClinic(
-    data: ClinicInput,
-    tx?: Transaction,
-  ): Promise<{ id: number }> {
-    const db = this.getDb(tx);
-    const [res] = await db
-      .insert(clinics)
-      .values({
-        name: data.name,
-        clinicCode: data.code,
-      })
-      .returning({ id: clinics.id });
-    return res;
-  }
-
-  async createDentist(
-    data: DentistInput,
-    tx?: Transaction,
-  ): Promise<{ id: number }> {
-    const db = this.getDb(tx);
-    const [res] = await db
-      .insert(dentists)
-      .values({
-        fullName: data.fullName,
-        clinicId: data.clinicId,
-      })
-      .returning({ id: dentists.id });
-    return res;
-  }
-
-  async createPatient(
-    data: PatientInput,
-    tx?: Transaction,
-  ): Promise<{ id: number }> {
-    const db = this.getDb(tx);
-    const [res] = await db
-      .insert(patients)
-      .values({
-        fullName: data.fullName,
-        patientCode: data.patientCode,
-        clinicId: data.clinicId,
-        gender: data.gender,
-        birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
-      })
-      .returning({ id: patients.id });
-    return res;
-  }
 
   async createCase(
     data: CreateCaseInput,
@@ -207,46 +58,6 @@ export class DrizzleOrthoRepository
   // ==========================================
   // 3. READ / QUERY METHODS (Type Safe)
   // ==========================================
-
-  async findClinicByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null> {
-    const db = this.getDb(tx);
-    const result = await db
-      .select({ id: clinics.id })
-      .from(clinics)
-      .where(eq(clinics.clinicCode, code))
-      .limit(1);
-    return result[0] || null;
-  }
-
-  async findDentist(
-    name: string,
-    clinicId: number,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null> {
-    const db = this.getDb(tx);
-    const result = await db
-      .select({ id: dentists.id })
-      .from(dentists)
-      .where(and(eq(dentists.fullName, name), eq(dentists.clinicId, clinicId)))
-      .limit(1);
-    return result[0] || null;
-  }
-
-  async findPatientByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null> {
-    const db = this.getDb(tx);
-    const result = await db
-      .select({ id: patients.id })
-      .from(patients)
-      .where(eq(patients.patientCode, code))
-      .limit(1);
-    return result[0] || null;
-  }
 
   async findLatestCaseIdByCode(
     code: string,
@@ -435,7 +246,7 @@ export class DrizzleOrthoRepository
       .orderBy(asc(treatmentSteps.stepIndex));
   }
 
-  // Giữ lại empty method để thỏa mãn Interface nếu chưa xóa ở Interface
+  // 👇 ĐÃ SỬA LỖI Ở ĐÂY: Thêm 'async saveSteps('
   async saveSteps(
     caseId: number,
     steps: any[],

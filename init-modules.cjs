@@ -1,79 +1,90 @@
 const fs = require('fs');
 const path = require('path');
 
-// 1. Cấu hình danh sách Modules cần tạo
-const modules = [
-  'organization',      // Quản lý Clinic, Chi nhánh
-  'patient',           // Quản lý Bệnh nhân
-  'medical-staff',     // Quản lý Bác sĩ, Nhân viên
-  'dental-treatment',  // Quản lý Ca điều trị, 3D (Module Dental cũ)
-];
+// =============================================================================
+// CẤU HÌNH: NGUỒN (OLD MODULE) -> ĐÍCH (NEW MODULE)
+// =============================================================================
 
-// 2. Cấu trúc thư mục chuẩn DDD (Level 2 - Standard)
-const folderStructure = [
-  'domain/entities',
-  'domain/repositories', // Interfaces (Ports)
-  'domain/services',     // Domain Logic
-  'application/use-cases',
-  'application/dtos',
-  'infrastructure/controllers',
-  'infrastructure/persistence/repositories', // Implementation (Adapters)
-  'infrastructure/persistence/mappers',
-  'infrastructure/persistence/schema',       // Database Schema tách nhỏ
-];
-
-const rootDir = path.join(__dirname, 'src', 'modules');
-
-// Helper: Hàm tạo viết hoa chữ cái đầu (organization -> Organization)
-const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-// Helper: Hàm chuyển kebab-case sang PascalCase (dental-treatment -> DentalTreatment)
-const toPascalCase = (str) => {
-  return str.split('-').map(capitalize).join('');
-};
-
-console.log(`🚀 Bắt đầu khởi tạo cấu trúc module tại: ${rootDir}\n`);
-
-if (!fs.existsSync(rootDir)) {
-  fs.mkdirSync(rootDir, { recursive: true });
-}
-
-modules.forEach((moduleName) => {
-  const modulePath = path.join(rootDir, moduleName);
-  const pascalName = toPascalCase(moduleName);
-
-  console.log(`📦 Đang tạo module: [${moduleName}]...`);
-
-  // 1. Tạo các thư mục con
-  folderStructure.forEach((subFolder) => {
-    const fullPath = path.join(modulePath, subFolder);
-    if (!fs.existsSync(fullPath)) {
-      fs.mkdirSync(fullPath, { recursive: true });
-      // Tạo file .gitkeep để git track được thư mục rỗng
-      fs.writeFileSync(path.join(fullPath, '.gitkeep'), '');
-    }
-  });
-
-  // 2. Tạo file Module chính (VD: organization.module.ts)
-  const moduleFilePath = path.join(modulePath, `${moduleName}.module.ts`);
-  if (!fs.existsSync(moduleFilePath)) {
-    const moduleContent = `import { Module } from '@nestjs/common';
-
-@Module({
-  imports: [],
-  controllers: [],
-  providers: [],
-  exports: [],
-})
-export class ${pascalName}Module {}
-`;
-    fs.writeFileSync(moduleFilePath, moduleContent);
-    console.log(`   + Đã tạo file: ${moduleName}.module.ts`);
-  } else {
-    console.log(`   ! File module đã tồn tại, bỏ qua.`);
+const copyMap = [
+  // 1. Interface Repository
+  {
+    src: 'src/modules/dental/domain/repositories/ortho.repository.ts',
+    dest: 'src/modules/dental-treatment/domain/repositories/ortho.repository.ts'
+  },
+  // 2. Ports
+  {
+    src: 'src/modules/dental/domain/ports/dental-storage.port.ts',
+    dest: 'src/modules/dental-treatment/domain/ports/dental-storage.port.ts'
+  },
+  {
+    src: 'src/modules/dental/domain/ports/dental-worker.port.ts',
+    dest: 'src/modules/dental-treatment/domain/ports/dental-worker.port.ts'
+  },
+  // 3. Types
+  {
+    src: 'src/modules/dental/domain/types/dental.types.ts',
+    dest: 'src/modules/dental-treatment/domain/types/dental.types.ts'
+  },
+  // 4. DTOs (Chuyển từ infra cũ sang application mới cho chuẩn DDD)
+  {
+    src: 'src/modules/dental/infrastructure/dtos/upload-case.dto.ts',
+    dest: 'src/modules/dental-treatment/application/dtos/upload-case.dto.ts' // Lưu ý folder đích
+  },
+  // 5. Workers & Provider
+  {
+    src: 'src/modules/dental/infrastructure/workers/piscina.provider.ts',
+    dest: 'src/modules/dental-treatment/infrastructure/workers/piscina.provider.ts'
+  },
+  {
+    src: 'src/modules/dental/infrastructure/workers/conversion.worker.ts', // Copy luôn worker file
+    dest: 'src/modules/dental-treatment/infrastructure/workers/conversion.worker.ts'
+  },
+  // 6. Gateways
+  {
+    src: 'src/modules/dental/infrastructure/gateways/dental.gateway.ts',
+    dest: 'src/modules/dental-treatment/infrastructure/gateways/dental.gateway.ts'
+  },
+  // 7. Utils (Parser) - Cần thiết cho worker/service
+  {
+    src: 'src/modules/dental/application/utils/movement.parser.ts',
+    dest: 'src/modules/dental-treatment/application/utils/movement.parser.ts'
+  },
+  // 8. Adapters (Impl) - Cần để chạy Module
+  {
+    src: 'src/modules/dental/infrastructure/adapters/fs-dental-storage.adapter.ts',
+    dest: 'src/modules/dental-treatment/infrastructure/adapters/fs-dental-storage.adapter.ts'
+  },
+  {
+    src: 'src/modules/dental/infrastructure/adapters/piscina-worker.adapter.ts',
+    dest: 'src/modules/dental-treatment/infrastructure/adapters/piscina-worker.adapter.ts'
+  },
+  // 9. Repository Implementation (Class DrizzleOrthoRepository)
+  {
+    src: 'src/modules/dental/infrastructure/persistence/drizzle-ortho.repository.ts',
+    dest: 'src/modules/dental-treatment/infrastructure/persistence/repositories/drizzle-cases.repository.ts' // Đổi tên cho hợp
   }
+];
 
-  console.log(`✅ Hoàn tất module [${moduleName}]\n`);
+// =============================================================================
+// MAIN LOGIC
+// =============================================================================
+
+console.log('🚀 Đang di chuyển các file phụ trợ sang [dental-treatment]...\n');
+
+copyMap.forEach(item => {
+  const srcPath = path.join(__dirname, item.src);
+  const destPath = path.join(__dirname, item.dest);
+
+  if (fs.existsSync(srcPath)) {
+    // Tạo thư mục đích nếu chưa có
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+    // Copy file
+    fs.copyFileSync(srcPath, destPath);
+    console.log(`✅ Copied: ${path.basename(item.src)}`);
+  } else {
+    console.warn(`⚠️  Source missing: ${item.src}`);
+  }
 });
 
-console.log('🎉 KHỞI TẠO THÀNH CÔNG! Sẵn sàng để refactor.');
+console.log('\n🎉 DONE! Các file đã được copy sang module mới.');

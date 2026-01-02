@@ -3388,40 +3388,41 @@ export class NotificationModule {}
 
 ```
 
-## File: src/modules/dental/application/services/dental.service.ts
+## File: src/modules/dental/application/services/dental.service.ts.deleted_bak
 ```
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Piscina from 'piscina';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  ILogger,
-  LOGGER_TOKEN,
-} from '@core/shared/application/ports/logger.port';
-import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
-import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import { ITransactionManager, Transaction } from '@core/shared/application/ports/transaction-manager.port';
 import { UploadCaseDto } from '../../infrastructure/dtos/upload-case.dto';
-import { parseMovementData } from '../utils/movement.parser';
-import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
-import {
-  ITransactionManager,
-  Transaction,
-} from '@core/shared/application/ports/transaction-manager.port';
-import { IDentalStorage } from '../../domain/ports/dental-storage.port';
-import { ConversionBinaries } from '../../domain/ports/dental-worker.port';
+
+// 👇👇👇 QUAN TRỌNG: TẤT CẢ PHẢI IMPORT TỪ [DENTAL-TREATMENT] 👇👇👇
+
+// 1. Interfaces & Ports
+import { IOrthoRepository } from '../../../dental-treatment/domain/repositories/ortho.repository';
+import { IDentalStorage } from '../../../dental-treatment/domain/ports/dental-storage.port';
+import { ConversionBinaries } from '../../../dental-treatment/domain/ports/dental-worker.port';
+
+// 2. Types & Utils
 import {
   TeethMovementRecord,
   ConversionTaskWithMeta,
   JawType,
   CaseHistoryDTO,
-} from '../../domain/types/dental.types';
+  ModelStep
+} from '../../../dental-treatment/domain/types/dental.types';
+import { parseMovementData } from '../../../dental-treatment/application/utils/movement.parser';
 
-export interface ModelStep {
-  index: number;
-  maxillary: string | null;
-  mandibular: string | null;
-  teethData?: TeethMovementRecord; // ✅ Update type safety here
-}
+// 3. Infrastructure & Gateways
+import { PISCINA_POOL } from '../../../dental-treatment/infrastructure/workers/piscina.provider';
+import { DentalGateway } from '../../../dental-treatment/infrastructure/gateways/dental.gateway';
+
+// 👇👇👇 CÁC MODULE VỆ TINH (MỚI) 👇👇👇
+import { IClinicRepository } from '@modules/organization/domain/repositories/clinic.repository';
+import { IPatientRepository } from '@modules/patient/domain/repositories/patient.repository';
+import { IDentistRepository } from '@modules/medical-staff/domain/repositories/dentist.repository';
 
 @Injectable()
 export class DentalService {
@@ -3431,25 +3432,32 @@ export class DentalService {
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     @Inject(PISCINA_POOL) private readonly pool: Piscina,
     @Inject(IOrthoRepository) private readonly orthoRepo: IOrthoRepository,
-    @Inject(ITransactionManager)
-    private readonly txManager: ITransactionManager,
+    @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
     @Inject(IDentalStorage) private readonly storage: IDentalStorage,
+
+    // Inject các Repo vệ tinh
+    @Inject(IClinicRepository) private readonly clinicRepo: IClinicRepository,
+    @Inject(IPatientRepository) private readonly patientRepo: IPatientRepository,
+    @Inject(IDentistRepository) private readonly dentistRepo: IDentistRepository,
+
     private readonly config: ConfigService,
     private readonly dentalGateway: DentalGateway,
   ) {
-    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
-      /\/$/,
-      '',
-    );
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(/\/$/, '');
     this.storage.ensureDirectories();
   }
 
+  /**
+   * @deprecated Logic này đã được chuyển sang UploadCaseUseCase.
+   * Giữ lại để tương thích ngược cho đến khi Controller chuyển hẳn sang UseCase.
+   */
   async processZipUpload(file: Express.Multer.File, dto: UploadCaseDto) {
     if (!file) throw new BadRequestException('No file uploaded');
 
     const isOverwrite = String(dto.overwrite) === 'true';
     let caseId: string | null = null;
 
+    // 1. Xử lý Overwrite
     if (isOverwrite) {
       caseId = await this.orthoRepo.findLatestCaseIdByCode(dto.patientCode);
       if (caseId) {
@@ -3460,69 +3468,73 @@ export class DentalService {
       }
     }
 
+    // 2. Transaction tạo dữ liệu (Dùng các Repo Mới)
     if (!caseId) {
-      caseId = await this.txManager.runInTransaction(
-        async (tx: Transaction) => {
-          const clinicCode = dto.clinicName
-            .toUpperCase()
-            .replace(/\s+/g, '_')
-            .substring(0, 10);
-          let clinic = await this.orthoRepo.findClinicByCode(clinicCode, tx);
-          if (!clinic) {
-            clinic = await this.orthoRepo.createClinic(
-              { name: dto.clinicName, code: clinicCode },
-              tx,
-            );
-          }
+      caseId = await this.txManager.runInTransaction(async (tx: Transaction) => {
+        // A. Organization (Clinic)
+        const clinicCode = dto.clinicName
+          .toUpperCase()
+          .replace(/\s+/g, '_')
+          .substring(0, 10);
 
-          let dentistId: number | undefined;
-          if (dto.doctorName) {
-            let dentist = await this.orthoRepo.findDentist(
-              dto.doctorName,
-              clinic.id,
-              tx,
-            );
-            if (!dentist) {
-              dentist = await this.orthoRepo.createDentist(
-                { fullName: dto.doctorName, clinicId: clinic.id },
-                tx,
-              );
-            }
-            dentistId = dentist.id;
-          }
-
-          let patient = await this.orthoRepo.findPatientByCode(
-            dto.patientCode,
+        let clinic = await this.clinicRepo.findClinicByCode(clinicCode, tx);
+        if (!clinic) {
+          clinic = await this.clinicRepo.createClinic(
+            { name: dto.clinicName, clinicCode: clinicCode },
             tx,
           );
-          if (!patient) {
-            const dobDate = dto.dob ? new Date(dto.dob) : undefined;
-            patient = await this.orthoRepo.createPatient(
-              {
-                fullName: dto.patientName,
-                patientCode: dto.patientCode,
-                clinicId: clinic.id,
-                gender: dto.gender,
-                dob: dobDate,
-              },
+        }
+
+        // B. Medical Staff (Dentist)
+        let dentistId: number | undefined;
+        if (dto.doctorName) {
+          let dentist = await this.dentistRepo.findDentist(
+            dto.doctorName,
+            clinic.id,
+            tx,
+          );
+          if (!dentist) {
+            dentist = await this.dentistRepo.createDentist(
+              { fullName: dto.doctorName, clinicId: clinic.id },
               tx,
             );
           }
+          dentistId = dentist.id;
+        }
 
-          const newCase = await this.orthoRepo.createCase(
+        // C. Patient
+        let patient = await this.patientRepo.findPatientByCode(dto.patientCode, tx);
+        if (!patient) {
+          // Convert Date object sang string YYYY-MM-DD cho DTO mới
+          const dobString = dto.dob ? new Date(dto.dob).toISOString().split('T')[0] : undefined;
+
+          patient = await this.patientRepo.createPatient(
             {
-              patientId: patient.id,
-              dentistId: dentistId ?? null,
-              productType: dto.productType,
-              notes: dto.notes,
+              fullName: dto.patientName,
+              patientCode: dto.patientCode,
+              clinicId: clinic.id,
+              gender: dto.gender,
+              birthDate: dobString,
             },
             tx,
           );
-          return String(newCase.id);
-        },
-      );
+        }
+
+        // D. Case (Vẫn dùng Repo cũ vì Case thuộc DentalTreatment)
+        const newCase = await this.orthoRepo.createCase(
+          {
+            patientId: patient.id,
+            dentistId: dentistId ?? null,
+            productType: dto.productType,
+            notes: dto.notes,
+          },
+          tx,
+        );
+        return String(newCase.id);
+      });
     }
 
+    // 3. Xử lý File Zip
     const extractPath = this.storage.joinPath(
       this.storage.uploadDir,
       `extract_${uuidv4()}`,
@@ -3534,24 +3546,19 @@ export class DentalService {
       throw new BadRequestException('Invalid Zip File: ' + e.message);
     }
 
-    const objFiles = await this.storage.findFilesRecursively(
-      extractPath,
-      '.obj',
-    );
+    const objFiles = await this.storage.findFilesRecursively(extractPath, '.obj');
 
-    // ✅ REFACTOR: Strict type for binaries config
+    // 4. Chuẩn bị Config cho Worker
     const binariesConfig: ConversionBinaries = {
       obj2gltf: this.config.get<string>('dental.binaries.obj2gltf')!,
       gltfPipeline: this.config.get<string>('dental.binaries.gltfPipeline')!,
       gltfTransform: this.config.get<string>('dental.binaries.gltfTransform')!,
     };
 
-    // ✅ REFACTOR: Using defined Type instead of any[]
+    // 5. Tạo Task Conversion
     const tasks: ConversionTaskWithMeta[] = objFiles.map((objPath) => {
       const baseName = this.storage.getBasename(objPath, '.obj');
-      const parentDir = this.storage.getBasename(
-        this.storage.getDirname(objPath),
-      );
+      const parentDir = this.storage.getBasename(this.storage.getDirname(objPath));
 
       const type: JawType = baseName.toLowerCase().includes('mandibular')
         ? 'Mandibular'
@@ -3564,7 +3571,6 @@ export class DentalService {
       if (folderMatch) index = parseInt(folderMatch[1], 10);
       else if (fileMatch) index = parseInt(fileMatch[1], 10);
 
-      // Create Job with strictly typed Metadata
       const job: ConversionTaskWithMeta = {
         objFilePath: objPath,
         outputDir: this.storage.joinPath(this.storage.outputDir, caseId!, type),
@@ -3577,9 +3583,9 @@ export class DentalService {
       return job;
     });
 
-    this.logger.info(
-      `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
-    );
+    this.logger.info(`Queueing ${tasks.length} conversion tasks for Case ${caseId}`);
+
+    // 6. Chạy Worker (Fire & Forget)
     this.runBackgroundConversion(tasks, caseId!, extractPath, file.path);
 
     return {
@@ -3592,7 +3598,7 @@ export class DentalService {
   }
 
   private async runBackgroundConversion(
-    tasks: ConversionTaskWithMeta[], // ✅ REFACTOR: Strict Type
+    tasks: ConversionTaskWithMeta[],
     caseId: string,
     extractPath: string,
     zipFilePath: string,
@@ -3633,19 +3639,20 @@ export class DentalService {
     await this.storage.remove(zipFilePath);
   }
 
+  // ==========================================
+  // LOGIC MOVEMENT & QUERY (Giữ nguyên)
+  // ==========================================
+
   async processMovementData(file: Express.Multer.File, caseId: string) {
     const fileBuffer = await this.storage.readFile(file.path);
-
-    // ✅ REFACTOR: parseMovementData now returns Map<number, TeethMovementRecord>
     const stepsDataMap = parseMovementData(fileBuffer, file.originalname);
 
     let count = 0;
     for (const [stepIndex, teethData] of stepsDataMap.entries()) {
-      // ✅ REFACTOR: Calls repo with strictly typed record
       await this.orthoRepo.updateStepMovementData(
         caseId,
         stepIndex,
-        teethData, // This is now TeethMovementRecord, not any
+        teethData,
       );
       count++;
     }
@@ -3659,8 +3666,7 @@ export class DentalService {
   }
 
   async listModels(clientId: string, caseId?: string): Promise<ModelStep[]> {
-    const id =
-      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    const id = caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
     if (!id) return [];
 
     const clientDir = this.storage.joinPath(this.storage.outputDir, id);
@@ -3669,8 +3675,6 @@ export class DentalService {
       ? await this.storage.findFilesRecursively(clientDir, '.enc')
       : [];
 
-    // Note: getStepsByCaseId still returns generic object,
-    // ideally repo should return TreatmentStep Entity
     const dbSteps = await this.orthoRepo.getStepsByCaseId(Number(id));
     const stepsMap = new Map<number, ModelStep>();
 
@@ -3679,7 +3683,7 @@ export class DentalService {
         index: s.stepIndex,
         maxillary: null,
         mandibular: null,
-        teethData: s.teethData as TeethMovementRecord, // Type assertion if needed
+        teethData: s.teethData as TeethMovementRecord,
       });
     });
 
@@ -3702,17 +3706,14 @@ export class DentalService {
   }
 
   async getCaseDetails(clientId: string, caseId?: string) {
-    const id =
-      caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
+    const id = caseId || (await this.orthoRepo.findLatestCaseIdByCode(clientId));
     return id ? this.orthoRepo.getCaseDetails(id, true) : null;
   }
 
-  // ✅ REFACTOR: Explicit return type
   async getHistory(patientCode: string): Promise<CaseHistoryDTO[]> {
     return this.orthoRepo.findCasesByPatientCode(patientCode);
   }
 }
-
 ```
 
 ## File: src/modules/dental/application/utils/movement.parser.ts
@@ -4007,32 +4008,57 @@ import {
   ApiBody,
   ApiBearerAuth,
   ApiQuery,
+  ApiOperation,
 } from '@nestjs/swagger';
-import { DentalService } from '../../application/services/dental.service';
+
+// Guards
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
-import { UploadCaseDto } from '../dtos/upload-case.dto';
 import { Public } from '@modules/auth/infrastructure/decorators/public.decorator';
+
+// DTOs
+import { UploadCaseDto } from '../dtos/upload-case.dto';
+
+// Use Cases (Write Side)
+import { UploadCaseUseCase } from '@modules/dental-treatment/application/use-cases/upload-case.use-case';
+
+// Queries (Read Side)
+import { GetCaseModelsQuery } from '@modules/dental-treatment/application/queries/get-case-models.query';
+import { GetCaseDetailsQuery } from '@modules/dental-treatment/application/queries/get-case-details.query';
+import { GetPatientHistoryQuery } from '@modules/dental-treatment/application/queries/get-patient-history.query';
 
 @ApiTags('Dental 3D')
 @ApiBearerAuth()
 @Controller('dental')
 @UseGuards(JwtAuthGuard)
 export class DentalController {
-  constructor(private readonly dentalService: DentalService) {}
+  constructor(
+    // Write Side
+    private readonly uploadUseCase: UploadCaseUseCase,
+
+    // Read Side (CQRS)
+    private readonly modelsQuery: GetCaseModelsQuery,
+    private readonly detailsQuery: GetCaseDetailsQuery,
+    private readonly historyQuery: GetPatientHistoryQuery,
+  ) {}
+
+  // =========================================================================
+  // WRITE OPERATIONS
+  // =========================================================================
 
   @Post('upload')
+  @ApiOperation({ summary: 'Upload Zip file containing 3D models' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: UploadCaseDto })
-  // ✅ Không cần truyền options { storage } nữa, MulterModule sẽ tự xử lý
   @UseInterceptors(FileInterceptor('file'))
   async uploadZip(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadCaseDto,
   ) {
-    return this.dentalService.processZipUpload(file, dto);
+    return this.uploadUseCase.execute(file, dto);
   }
 
   @Post('upload-movement')
+  @ApiOperation({ summary: 'Upload movement data (Excel/HTML)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -4043,41 +4069,52 @@ export class DentalController {
       },
     },
   })
-  // ✅ Config tập trung tại Module giúp Controller sạch sẽ
   @UseInterceptors(FileInterceptor('file'))
   async uploadMovement(
     @UploadedFile() file: Express.Multer.File,
     @Body('caseId') caseId: string,
   ) {
-    return this.dentalService.processMovementData(file, caseId);
+    // TODO: Refactor this to UpdateMovementUseCase later
+    // Currently disabled or move logic to UseCase
+    return {
+      message:
+        'This feature is being refactored to CQRS. Please contact admin.',
+    };
   }
+
+  // =========================================================================
+  // READ OPERATIONS
+  // =========================================================================
 
   @Public()
   @Get('models')
+  @ApiOperation({ summary: 'Get processed 3D models for a case' })
   @ApiQuery({ name: 'clientId', description: 'Patient Code' })
   @ApiQuery({ name: 'caseId', required: false })
   async listModels(
     @Query('clientId') clientId: string,
     @Query('caseId') caseId?: string,
   ) {
-    return this.dentalService.listModels(clientId, caseId);
+    return this.modelsQuery.execute(clientId, caseId);
   }
 
   @Public()
   @Get('case-details')
+  @ApiOperation({ summary: 'Get detailed info of a case' })
   @ApiQuery({ name: 'clientId', description: 'Patient Code' })
   @ApiQuery({ name: 'caseId', required: false })
   async getCaseDetails(
     @Query('clientId') clientId: string,
     @Query('caseId') caseId?: string,
   ) {
-    return this.dentalService.getCaseDetails(clientId, caseId);
+    return this.detailsQuery.execute(clientId, caseId);
   }
 
   @Get('history')
+  @ApiOperation({ summary: 'Get treatment history of a patient' })
   @ApiQuery({ name: 'clientId', description: 'Patient Code' })
   async getHistory(@Query('clientId') clientId: string) {
-    return this.dentalService.getHistory(clientId);
+    return this.historyQuery.execute(clientId);
   }
 }
 
@@ -4537,13 +4574,372 @@ import {
   CaseHistoryDTO,
   TeethMovementRecord,
 } from '../../domain/types/dental.types';
+
 import {
   patients,
   cases,
   treatmentSteps,
   clinics,
   dentists,
-} from '@database/schema/ortho.schema';
+} from '@database/schema';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleOrthoRepository
+  extends DrizzleBaseRepository
+  implements IOrthoRepository
+{
+  // ==========================================
+  // 1. LEGACY MONOLITHIC METHOD
+  // (Giữ lại để tương thích ngược, nhưng nên hạn chế dùng)
+  // ==========================================
+  async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
+    const runInTx = async (dbTx: any) => {
+      // 1. Handle Clinic
+      const clinicCode = data.clinicName
+        .toUpperCase()
+        .replace(/\s+/g, '_')
+        .substring(0, 10);
+
+      let clinicId: number;
+      const existingClinic = await dbTx
+        .select()
+        .from(clinics)
+        .where(eq(clinics.clinicCode, clinicCode))
+        .limit(1);
+
+      if (existingClinic.length > 0) {
+        clinicId = existingClinic[0].id;
+      } else {
+        const [newClinic] = await dbTx
+          .insert(clinics)
+          .values({
+            name: data.clinicName,
+            clinicCode: clinicCode,
+          })
+          .returning();
+        clinicId = newClinic.id;
+      }
+
+      // 2. Handle Dentist
+      let dentistId: number | null = null;
+      if (data.doctorName) {
+        const existingDentist = await dbTx
+          .select()
+          .from(dentists)
+          .where(
+            and(
+              eq(dentists.fullName, data.doctorName),
+              eq(dentists.clinicId, clinicId),
+            ),
+          )
+          .limit(1);
+
+        if (existingDentist.length > 0) {
+          dentistId = existingDentist[0].id;
+        } else {
+          const [newDentist] = await dbTx
+            .insert(dentists)
+            .values({
+              fullName: data.doctorName,
+              clinicId: clinicId,
+            })
+            .returning();
+          dentistId = newDentist.id;
+        }
+      }
+
+      // 3. Handle Patient
+      let patientId: number;
+      const existingPatient = await dbTx
+        .select()
+        .from(patients)
+        .where(eq(patients.patientCode, data.patientCode))
+        .limit(1);
+
+      if (existingPatient.length > 0) {
+        patientId = existingPatient[0].id;
+      } else {
+        const [newPatient] = await dbTx
+          .insert(patients)
+          .values({
+            fullName: data.patientName,
+            patientCode: data.patientCode,
+            clinicId: clinicId,
+            gender: data.gender,
+            birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
+          })
+          .returning();
+        patientId = newPatient.id;
+      }
+
+      // 4. Create Case
+      const [newCase] = await dbTx
+        .insert(cases)
+        .values({
+          patientId: patientId,
+          dentistId: dentistId,
+          productType: data.productType,
+          status: 'PROCESSING',
+          notes: data.notes,
+          startedAt: new Date(),
+        })
+        .returning();
+
+      return String(newCase.id);
+    };
+
+    if (tx) return runInTx(tx);
+    return this.db.transaction(runInTx);
+  }
+
+  // ==========================================
+  // 2. GRANULAR WRITE METHODS (Atomic Operations)
+  // ==========================================
+
+  async createCase(
+    data: CreateCaseInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(cases)
+      .values({
+        patientId: data.patientId,
+        dentistId: data.dentistId ?? null,
+        productType: data.productType as any, // Enum handling
+        status: 'PROCESSING',
+        notes: data.notes,
+        startedAt: new Date(),
+      })
+      .returning({ id: cases.id });
+    return res;
+  }
+
+  // ==========================================
+  // 3. READ / QUERY METHODS (Type Safe)
+  // ==========================================
+
+  async findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null> {
+    const db = this.getDb(tx);
+    // 1. Check if code is numeric Case ID
+    if (!isNaN(Number(code))) {
+      const caseById = await db.query.cases.findFirst({
+        where: eq(cases.id, Number(code)),
+        columns: { id: true },
+      });
+      if (caseById) return String(caseById.id);
+    }
+
+    // 2. Check if code is Patient Code
+    const result = await db
+      .select({ caseId: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(eq(patients.patientCode, code))
+      .orderBy(desc(cases.createdAt))
+      .limit(1);
+
+    return result.length > 0 ? String(result[0].caseId) : null;
+  }
+
+  async checkCaseBelongsToPatient(
+    caseId: string,
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<boolean> {
+    const db = this.getDb(tx);
+    if (isNaN(Number(caseId))) return false;
+    const result = await db
+      .select({ id: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(
+        and(
+          eq(cases.id, Number(caseId)),
+          eq(patients.patientCode, patientCode),
+        ),
+      )
+      .limit(1);
+    return result.length > 0;
+  }
+
+  // ✅ OPTIMIZED: Return specific DTO instead of any[]
+  async findCasesByPatientCode(
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<CaseHistoryDTO[]> {
+    const db = this.getDb(tx);
+    const rows = await db
+      .select({
+        caseId: cases.id,
+        status: cases.status,
+        createdAt: cases.createdAt,
+        notes: cases.notes,
+        productType: cases.productType,
+        doctorName: dentists.fullName,
+      })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+      .where(eq(patients.patientCode, patientCode))
+      .orderBy(desc(cases.createdAt));
+
+    return rows.map((row) => ({
+      caseId: row.caseId,
+      status: row.status,
+      createdAt: row.createdAt,
+      notes: row.notes,
+      productType: row.productType,
+      doctorName: row.doctorName,
+    }));
+  }
+
+  async getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null> {
+    const db = this.getDb(tx);
+    const selection = {
+      patientName: patients.fullName,
+      patientCode: patients.patientCode,
+      caseId: cases.id,
+      doctorName: dentists.fullName,
+      clinicName: clinics.name,
+      createdAt: cases.createdAt,
+    };
+
+    let queryBuilder;
+
+    if (isCaseId) {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(cases.id, Number(identifier)))
+        .limit(1);
+    } else {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(patients.patientCode, identifier))
+        .orderBy(desc(cases.createdAt))
+        .limit(1);
+    }
+
+    const result = await queryBuilder;
+    return result[0] ? (result[0] as unknown as CaseDetailsDTO) : null;
+  }
+
+  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> {
+    const db = this.getDb(tx);
+    const result = await db.select().from(cases).where(eq(cases.id, id));
+    if (!result[0]) return null;
+
+    return {
+      id: result[0].id,
+      patientId: result[0].patientId,
+      status: result[0].status,
+      orderId: result[0].orderId,
+      createdAt: result[0].createdAt,
+    };
+  }
+
+  // ==========================================
+  // 4. MOVEMENT DATA & STEPS
+  // ==========================================
+
+  // ✅ OPTIMIZED: Strict type for teethData
+  async updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: TeethMovementRecord,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    const cId = Number(caseId);
+
+    const existingStep = await db
+      .select({ id: treatmentSteps.id })
+      .from(treatmentSteps)
+      .where(
+        and(
+          eq(treatmentSteps.caseId, cId),
+          eq(treatmentSteps.stepIndex, stepIndex),
+        ),
+      )
+      .limit(1);
+
+    if (existingStep.length > 0) {
+      await db
+        .update(treatmentSteps)
+        .set({ teethData: teethData as any }) // Valid cast for JSONB column
+        .where(eq(treatmentSteps.id, existingStep[0].id));
+    } else {
+      await db.insert(treatmentSteps).values({
+        caseId: cId,
+        stepIndex: stepIndex,
+        teethData: teethData as any,
+      });
+    }
+  }
+
+  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
+  }
+
+  async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
+    const db = this.getDb(tx);
+    return await db
+      .select()
+      .from(treatmentSteps)
+      .where(eq(treatmentSteps.caseId, caseId))
+      .orderBy(asc(treatmentSteps.stepIndex));
+  }
+
+  // Giữ lại empty method để thỏa mãn Interface nếu chưa xóa ở Interface
+  async saveSteps(
+    caseId: number,
+    steps: any[],
+    tx?: Transaction,
+  ): Promise<void> {
+    // Deprecated or Not Implemented
+  }
+}
+
+```
+
+## File: src/modules/dental/infrastructure/persistence/drizzle-ortho.repository.ts.bak
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc, and, asc } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import {
+  IOrthoRepository,
+  OrthoCase,
+  FullCaseInput,
+  CaseDetailsDTO,
+  ClinicInput,
+  DentistInput,
+  PatientInput,
+  CreateCaseInput,
+} from '../../domain/repositories/ortho.repository';
+import {
+  CaseHistoryDTO,
+  TeethMovementRecord,
+} from '../../domain/types/dental.types';
+
+import { patients, cases, treatmentSteps, clinics, dentists } from '@database/schema';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
@@ -5279,28 +5675,6 @@ export interface IOrthoRepository {
 
   // --- GRANULAR METHODS (Phục vụ Refactor Service) ---
 
-  // Clinic
-  findClinicByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null>;
-  createClinic(data: ClinicInput, tx?: Transaction): Promise<{ id: number }>;
-
-  // Dentist
-  findDentist(
-    name: string,
-    clinicId: number,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null>;
-  createDentist(data: DentistInput, tx?: Transaction): Promise<{ id: number }>;
-
-  // Patient (Thay thế hàm legacy findPatientByCode trả về any)
-  findPatientByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<{ id: number } | null>;
-  createPatient(data: PatientInput, tx?: Transaction): Promise<{ id: number }>;
-
   // Case (Thay thế hàm legacy createCase trả về any)
   createCase(data: CreateCaseInput, tx?: Transaction): Promise<{ id: number }>;
 
@@ -5355,37 +5729,55 @@ export interface IOrthoRepository {
 ```
 import { Module, OnModuleInit, Inject } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { MulterModule } from '@nestjs/platform-express'; // ✅ Import MulterModule
+import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 
 import { DentalController } from './infrastructure/controllers/dental.controller';
-import { DentalService } from './application/services/dental.service';
-import { PiscinaProvider } from './infrastructure/workers/piscina.provider';
-import { FileSystemDentalStorage } from './infrastructure/adapters/fs-dental-storage.adapter';
-import { PiscinaDentalWorker } from './infrastructure/adapters/piscina-worker.adapter';
-import { DrizzleOrthoRepository } from './infrastructure/persistence/drizzle-ortho.repository';
-import { IDentalStorage } from './domain/ports/dental-storage.port';
-import { IDentalWorker } from './domain/ports/dental-worker.port';
-import { IOrthoRepository } from './domain/repositories/ortho.repository';
-import { DentalGateway } from './infrastructure/gateways/dental.gateway';
+
+// --- IMPORT TỪ CÁC MODULE MỚI ---
+import { OrganizationModule } from '../organization/organization.module';
+import { PatientModule } from '../patient/patient.module';
+import { MedicalStaffModule } from '../medical-staff/medical-staff.module';
+
+// --- IMPORT USE CASE ---
+import { UploadCaseUseCase } from '../dental-treatment/application/use-cases/upload-case.use-case';
+
+// --- IMPORT INTERFACES (PORTS) TỪ MODULE DENTAL-TREATMENT ---
+import { IOrthoRepository } from '../dental-treatment/domain/repositories/ortho.repository';
+import { IDentalStorage } from '../dental-treatment/domain/ports/dental-storage.port';
+import { IDentalWorker } from '../dental-treatment/domain/ports/dental-worker.port';
+
+// --- IMPORT IMPLEMENTATIONS (ADAPTERS) TỪ MODULE DENTAL-TREATMENT ---
+// Lưu ý: Tên class trong file repositories mới có thể vẫn là DrizzleOrthoRepository (do copy sang)
+import { DrizzleOrthoRepository } from '../dental-treatment/infrastructure/persistence/repositories/drizzle-cases.repository';
+import { FileSystemDentalStorage } from '../dental-treatment/infrastructure/adapters/fs-dental-storage.adapter';
+import { PiscinaDentalWorker } from '../dental-treatment/infrastructure/adapters/piscina-worker.adapter';
+import { PiscinaProvider } from '../dental-treatment/infrastructure/workers/piscina.provider';
+import { DentalGateway } from '../dental-treatment/infrastructure/gateways/dental.gateway';
+
 import dentalConfig from '@config/dental.config';
+import { GetCaseModelsQuery } from '@modules/dental-treatment/application/queries/get-case-models.query';
+import { GetPatientHistoryQuery } from '@modules/dental-treatment/application/queries/get-patient-history.query';
+import { GetCaseDetailsQuery } from '@modules/dental-treatment/application/queries/get-case-details.query';
 
 @Module({
   imports: [
     ConfigModule.forFeature(dentalConfig),
-    // ✅ Cấu hình Multer Asynchronously (Dynamic Config)
+    // Import các module vệ tinh
+    OrganizationModule,
+    PatientModule,
+    MedicalStaffModule,
+
     MulterModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (config: ConfigService) => ({
         storage: diskStorage({
           destination: (req, file, cb) => {
-            // Lấy đường dẫn từ Config (đồng bộ với IDentalStorage)
             const uploadDir =
               config.get<string>('dental.uploadDir') || 'uploads/dental/temp';
             cb(null, uploadDir);
           },
           filename: (req, file, cb) => {
-            // Giữ logic đặt tên file có timestamp để tránh trùng
             cb(null, `${Date.now()}-${file.originalname}`);
           },
         }),
@@ -5395,34 +5787,3185 @@ import dentalConfig from '@config/dental.config';
   ],
   controllers: [DentalController],
   providers: [
-    DentalService,
-    PiscinaProvider,
+    // 1. Use Case & Services
+    UploadCaseUseCase,
+
+    GetPatientHistoryQuery,
+    GetCaseDetailsQuery,
+    GetCaseModelsQuery,
+    // 2. Hạ tầng (Infrastructure Providers)
     DentalGateway,
+    PiscinaProvider,
+
+    // 3. BINDING PORTS -> ADAPTERS (Đây là phần bạn bị thiếu)
+    {
+      provide: IOrthoRepository, // Khi ai đó xin IOrthoRepository
+      useClass: DrizzleOrthoRepository, // Thì đưa cho họ class này (lấy từ dental-treatment)
+    },
     {
       provide: IDentalStorage,
-      useClass: FileSystemDentalStorage,
+      useClass: FileSystemDentalStorage, // Lấy từ dental-treatment
     },
     {
       provide: IDentalWorker,
-      useClass: PiscinaDentalWorker,
-    },
-    {
-      provide: IOrthoRepository,
-      useClass: DrizzleOrthoRepository,
+      useClass: PiscinaDentalWorker, // Lấy từ dental-treatment
     },
   ],
+  exports: [UploadCaseUseCase],
 })
 export class DentalModule implements OnModuleInit {
   constructor(
     @Inject(IDentalStorage) private readonly dentalStorage: IDentalStorage,
   ) {}
 
-  // ✅ Lifecycle Hook: Chạy 1 lần duy nhất khi Module khởi tạo
-  // Đảm bảo thư mục tồn tại TRƯỚC khi có bất kỳ request nào.
   onModuleInit() {
     this.dentalStorage.ensureDirectories();
   }
 }
+
+```
+
+## File: src/modules/organization/domain/entities/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/domain/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/domain/repositories/clinic.repository.ts
+```
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import {
+  CreateClinicDto,
+  UpdateClinicDto,
+} from '../../application/dtos/clinic.dto';
+
+export const IClinicRepository = Symbol('IClinicRepository');
+
+export interface IClinicRepository {
+  // Logic cũ (Upload Flow)
+  findClinicByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createClinic(
+    data: CreateClinicDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }>;
+
+  // Logic mới (CRUD Management)
+  findAll(): Promise<any[]>;
+  findById(id: number): Promise<any | null>;
+  update(id: number, data: UpdateClinicDto, tx?: Transaction): Promise<void>;
+}
+
+```
+
+## File: src/modules/organization/domain/services/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/domain/services/clinic.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IClinicRepository } from '../repositories/clinic.repository';
+import { CreateClinicDto } from '../../application/dtos/clinic.dto';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class ClinicService {
+  constructor(
+    @Inject(IClinicRepository) private readonly repo: IClinicRepository,
+  ) {}
+
+  /**
+   * Tìm Clinic theo code, nếu chưa có thì tạo mới.
+   * Logic chuẩn hóa mã code được thực hiện ở đây.
+   */
+  async ensureClinicExists(
+    name: string,
+    rawCode?: string,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    // Business Rule: Auto-generate code if missing
+    const code =
+      rawCode || name.toUpperCase().replace(/\s+/g, '_').substring(0, 10);
+
+    const existing = await this.repo.findClinicByCode(code, tx);
+    if (existing) {
+      return existing;
+    }
+
+    const newClinic: CreateClinicDto = {
+      name,
+      clinicCode: code,
+    };
+
+    return this.repo.createClinic(newClinic, tx);
+  }
+}
+
+```
+
+## File: src/modules/organization/application/use-cases/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/application/dtos/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/application/dtos/clinic.dto.ts
+```
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsPhoneNumber,
+  IsNumber,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+
+export class CreateClinicDto {
+  @ApiProperty({ example: 'Smile Dental', description: 'Tên phòng khám' })
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @ApiProperty({
+    example: 'SMILE_HCM_01',
+    description: 'Mã định danh (Unique)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  clinicCode: string;
+
+  @ApiPropertyOptional({ example: '123 Nguyen Hue, Q1, HCM' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ example: '+84901234567' })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+}
+
+export class UpdateClinicDto extends PartialType(CreateClinicDto) {}
+
+```
+
+## File: src/modules/organization/infrastructure/controllers/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/infrastructure/controllers/clinic.controller.ts
+```
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Put,
+  UseGuards,
+  Inject,
+} from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { IClinicRepository } from '../../domain/repositories/clinic.repository';
+import {
+  CreateClinicDto,
+  UpdateClinicDto,
+} from '../../application/dtos/clinic.dto';
+
+@ApiTags('Organization - Clinics')
+@ApiBearerAuth()
+@Controller('clinics')
+@UseGuards(JwtAuthGuard)
+export class ClinicController {
+  constructor(
+    @Inject(IClinicRepository) private readonly repo: IClinicRepository,
+  ) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Create new clinic' })
+  async create(@Body() dto: CreateClinicDto) {
+    return this.repo.createClinic(dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List all clinics' })
+  async findAll() {
+    return this.repo.findAll();
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get clinic details' })
+  async findOne(@Param('id') id: number) {
+    return this.repo.findById(id);
+  }
+
+  @Put(':id')
+  @ApiOperation({ summary: 'Update clinic info' })
+  async update(@Param('id') id: number, @Body() dto: UpdateClinicDto) {
+    await this.repo.update(id, dto);
+    return { success: true, message: 'Updated successfully' };
+  }
+}
+
+```
+
+## File: src/modules/organization/infrastructure/persistence/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/infrastructure/persistence/repositories/drizzle-clinic.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { clinics } from '@database/schema';
+
+import { IClinicRepository } from '../../../domain/repositories/clinic.repository';
+import {
+  CreateClinicDto,
+  UpdateClinicDto,
+} from '../../../application/dtos/clinic.dto';
+
+@Injectable()
+export class DrizzleClinicRepository
+  extends DrizzleBaseRepository
+  implements IClinicRepository
+{
+  async findClinicByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const res = await db
+      .select({ id: clinics.id })
+      .from(clinics)
+      .where(eq(clinics.clinicCode, code))
+      .limit(1);
+    return res[0] || null;
+  }
+
+  async createClinic(
+    data: CreateClinicDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(clinics)
+      .values({
+        name: data.name,
+        clinicCode: data.clinicCode,
+        address: data.address,
+        phoneNumber: data.phoneNumber,
+      })
+      .returning({ id: clinics.id });
+    return res;
+  }
+
+  // --- CRUD ---
+
+  async findAll(): Promise<any[]> {
+    return this.db.select().from(clinics).orderBy(desc(clinics.createdAt));
+  }
+
+  async findById(id: number): Promise<any | null> {
+    const res = await this.db.select().from(clinics).where(eq(clinics.id, id));
+    return res[0] || null;
+  }
+
+  async update(
+    id: number,
+    data: UpdateClinicDto,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    await db
+      .update(clinics)
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
+      .where(eq(clinics.id, id));
+  }
+}
+
+```
+
+## File: src/modules/organization/infrastructure/persistence/mappers/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/infrastructure/persistence/schema/.gitkeep
+```
+
+```
+
+## File: src/modules/organization/infrastructure/persistence/schema/clinics.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  date,
+  boolean,
+  index,
+  pgEnum,
+  numeric,
+  bigint,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+// FIX: Import cross-modules (Sử dụng Alias @database/schema để tránh đường dẫn relative dài dòng)
+// Bạn cần đảm bảo trong tsconfig.json đã cấu hình paths: { "@database/*": ["src/database/*"] }
+import { users } from '@database/schema/users.schema';
+import * as schema from '@database/schema';
+import { patients, dentists } from '@database/schema'; // Fallback cho các bảng khác
+
+export const clinics = pgTable('clinics', {
+  id: serial('id').primaryKey(),
+  // Dùng bigint vì users.id thường là bigserial
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+  name: text('name').notNull(),
+  clinicCode: text('clinic_code').notNull().unique(), // VD: NK1
+  address: text('address'),
+  phoneNumber: text('phone_number'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const clinicsRelations = relations(clinics, ({ one, many }) => ({
+  manager: one(users, { fields: [clinics.userId], references: [users.id] }),
+  dentists: many(dentists),
+  patients: many(patients),
+}));
+
+```
+
+## File: src/modules/organization/organization.module.ts
+```
+import { Module } from '@nestjs/common';
+import { IClinicRepository } from '@modules/organization/domain/repositories/clinic.repository';
+import { DrizzleClinicRepository } from '@modules/organization/infrastructure/persistence/repositories/drizzle-clinic.repository';
+import { ClinicService } from '@modules/organization/domain/services/clinic.service';
+import { ClinicController } from '@modules/organization/infrastructure/controllers/clinic.controller';
+
+@Module({
+  imports: [],
+  controllers: [ClinicController],
+  providers: [
+    { provide: IClinicRepository, useClass: DrizzleClinicRepository },
+    ClinicService,
+  ],
+  // 👇 QUAN TRỌNG: Phải export thì module khác mới dùng được
+  exports: [IClinicRepository, ClinicService],
+})
+export class OrganizationModule {}
+
+```
+
+## File: src/modules/patient/domain/entities/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/domain/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/domain/repositories/patient.repository.ts
+```
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import {
+  CreatePatientDto,
+  UpdatePatientDto,
+} from '../../application/dtos/patient.dto';
+
+export const IPatientRepository = Symbol('IPatientRepository');
+
+export interface IPatientRepository {
+  // Logic cũ
+  findPatientByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createPatient(
+    data: CreatePatientDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }>;
+
+  // Logic mới
+  findAll(clinicId?: number): Promise<any[]>;
+  findById(id: number): Promise<any | null>;
+  update(id: number, data: UpdatePatientDto, tx?: Transaction): Promise<void>;
+}
+
+```
+
+## File: src/modules/patient/domain/services/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/domain/services/patient.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IPatientRepository } from '../repositories/patient.repository';
+import { CreatePatientDto, Gender } from '../../application/dtos/patient.dto';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class PatientService {
+  constructor(
+    @Inject(IPatientRepository) private readonly repo: IPatientRepository,
+  ) {}
+
+  async ensurePatientExists(
+    data: {
+      code: string;
+      name: string;
+      gender?: any;
+      dob?: string; // Format YYYY-MM-DD
+    },
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const existing = await this.repo.findPatientByCode(data.code, tx);
+    if (existing) {
+      // Có thể thêm logic validate xem patient này có thuộc clinicId kia không
+      return existing;
+    }
+
+    // Map dữ liệu sang DTO chuẩn
+    const newPatient: CreatePatientDto = {
+      fullName: data.name,
+      patientCode: data.code,
+      clinicId: clinicId,
+      gender: data.gender as Gender, // Cần đảm bảo input khớp Enum hoặc validate thêm
+      birthDate: data.dob,
+    };
+
+    return this.repo.createPatient(newPatient, tx);
+  }
+}
+
+```
+
+## File: src/modules/patient/application/use-cases/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/application/dtos/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/application/dtos/patient.dto.ts
+```
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEnum,
+  IsDateString,
+  IsNumber,
+  IsEmail,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+
+export enum Gender {
+  Male = 'Male',
+  Female = 'Female',
+  Other = 'Other',
+}
+
+export class CreatePatientDto {
+  @ApiProperty({ example: 'Nguyen Van A' })
+  @IsString()
+  @IsNotEmpty()
+  fullName: string;
+
+  @ApiProperty({
+    example: 'PAT-2024-001',
+    description: 'Mã bệnh nhân (Unique theo Clinic)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  patientCode: string;
+
+  @ApiProperty({ example: 1, description: 'ID phòng khám' })
+  @IsNumber()
+  @IsNotEmpty()
+  clinicId: number;
+
+  @ApiPropertyOptional({ enum: Gender, example: Gender.Male })
+  @IsOptional()
+  @IsEnum(Gender)
+  gender?: Gender;
+
+  @ApiPropertyOptional({
+    example: '1990-01-01',
+    description: 'ISO 8601 Date String',
+  })
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  address?: string;
+}
+
+export class UpdatePatientDto extends PartialType(CreatePatientDto) {}
+
+```
+
+## File: src/modules/patient/infrastructure/controllers/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/infrastructure/controllers/patient.controller.ts
+```
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Put,
+  Query,
+  UseGuards,
+  Inject,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+} from '@nestjs/swagger';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { IPatientRepository } from '../../domain/repositories/patient.repository';
+import {
+  CreatePatientDto,
+  UpdatePatientDto,
+} from '../../application/dtos/patient.dto';
+
+@ApiTags('Patient - Management')
+@ApiBearerAuth()
+@Controller('patients')
+@UseGuards(JwtAuthGuard)
+export class PatientController {
+  constructor(
+    @Inject(IPatientRepository) private readonly repo: IPatientRepository,
+  ) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Create new patient' })
+  async create(@Body() dto: CreatePatientDto) {
+    return this.repo.createPatient(dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List patients (optional filter by clinic)' })
+  @ApiQuery({ name: 'clinicId', required: false })
+  async findAll(@Query('clinicId') clinicId?: number) {
+    return this.repo.findAll(clinicId ? Number(clinicId) : undefined);
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: number) {
+    return this.repo.findById(id);
+  }
+
+  @Put(':id')
+  async update(@Param('id') id: number, @Body() dto: UpdatePatientDto) {
+    await this.repo.update(id, dto);
+    return { success: true };
+  }
+}
+
+```
+
+## File: src/modules/patient/infrastructure/persistence/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/infrastructure/persistence/repositories/drizzle-patient.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { patients } from '@database/schema';
+
+import { IPatientRepository } from '../../../domain/repositories/patient.repository';
+import {
+  CreatePatientDto,
+  UpdatePatientDto,
+} from '../../../application/dtos/patient.dto';
+
+@Injectable()
+export class DrizzlePatientRepository
+  extends DrizzleBaseRepository
+  implements IPatientRepository
+{
+  async findPatientByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const res = await db
+      .select({ id: patients.id })
+      .from(patients)
+      .where(eq(patients.patientCode, code))
+      .limit(1);
+    return res[0] || null;
+  }
+
+  async createPatient(
+    data: CreatePatientDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(patients)
+      .values({
+        fullName: data.fullName,
+        patientCode: data.patientCode,
+        clinicId: data.clinicId,
+        gender: data.gender,
+        birthDate: data.birthDate,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+        address: data.address,
+      })
+      .returning({ id: patients.id });
+    return res;
+  }
+
+  // --- CRUD ---
+
+  async findAll(clinicId?: number): Promise<any[]> {
+    const query = this.db.select().from(patients);
+    if (clinicId) {
+      query.where(eq(patients.clinicId, clinicId));
+    }
+    return query.orderBy(desc(patients.createdAt));
+  }
+
+  async findById(id: number): Promise<any | null> {
+    const res = await this.db
+      .select()
+      .from(patients)
+      .where(eq(patients.id, id));
+    return res[0] || null;
+  }
+
+  async update(
+    id: number,
+    data: UpdatePatientDto,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    await db
+      .update(patients)
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
+      .where(eq(patients.id, id));
+  }
+}
+
+```
+
+## File: src/modules/patient/infrastructure/persistence/mappers/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/infrastructure/persistence/schema/.gitkeep
+```
+
+```
+
+## File: src/modules/patient/infrastructure/persistence/schema/patients.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  date,
+  boolean,
+  index,
+  pgEnum,
+  numeric,
+  bigint,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+// FIX: Import cross-modules (Sử dụng Alias @database/schema để tránh đường dẫn relative dài dòng)
+// Bạn cần đảm bảo trong tsconfig.json đã cấu hình paths: { "@database/*": ["src/database/*"] }
+import { users } from '@database/schema/users.schema';
+import * as schema from '@database/schema';
+import { cases, clinics } from '@database/schema'; // Fallback cho các bảng khác
+
+export const genderEnum = pgEnum('gender', ['Male', 'Female', 'Other']);
+
+export const patients = pgTable('patients', {
+  id: serial('id').primaryKey(),
+  clinicId: integer('clinic_id').references(() => clinics.id),
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+
+  patientCode: text('patient_code').notNull().unique(), // VD: #NK121789
+  fullName: text('full_name').notNull(),
+  email: text('email'),
+  phoneNumber: text('phone_number'),
+  address: text('address'),
+  birthDate: date('date_of_birth'),
+  gender: genderEnum('gender'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const patientsRelations = relations(patients, ({ one, many }) => ({
+  clinic: one(clinics, {
+    fields: [patients.clinicId],
+    references: [clinics.id],
+  }),
+  user: one(users, { fields: [patients.userId], references: [users.id] }),
+  cases: many(cases),
+}));
+
+```
+
+## File: src/modules/patient/patient.module.ts
+```
+import { Module } from '@nestjs/common';
+import { IClinicRepository } from '@modules/organization/domain/repositories/clinic.repository';
+import { DrizzlePatientRepository } from '@modules/patient/infrastructure/persistence/repositories/drizzle-patient.repository';
+import { IPatientRepository } from '@modules/patient/domain/repositories/patient.repository';
+import { PatientService } from '@modules/patient/domain/services/patient.service';
+import { PatientController } from '@modules/patient/infrastructure/controllers/patient.controller';
+
+@Module({
+  imports: [],
+  controllers: [PatientController],
+  providers: [
+    // 👇 BẠN ĐANG THIẾU CỤC NÀY (Hoặc chưa define đúng):
+    {
+      provide: IPatientRepository, // Token (Symbol)
+      useClass: DrizzlePatientRepository, // Class thực thi
+    },
+    PatientService,
+  ],
+  // 👇 Chỉ khi có ở trên 'providers' thì mới được phép nằm ở 'exports'
+  exports: [IPatientRepository, PatientService],
+})
+export class PatientModule {}
+
+```
+
+## File: src/modules/medical-staff/domain/entities/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/domain/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/domain/repositories/dentist.repository.ts
+```
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import {
+  CreateDentistDto,
+  UpdateDentistDto,
+} from '../../application/dtos/dentist.dto';
+
+export const IDentistRepository = Symbol('IDentistRepository');
+
+export interface IDentistRepository {
+  // Logic cũ
+  findDentist(
+    name: string,
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null>;
+  createDentist(
+    data: CreateDentistDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }>;
+
+  // Logic mới
+  findAll(clinicId?: number): Promise<any[]>;
+  findById(id: number): Promise<any | null>;
+  update(id: number, data: UpdateDentistDto, tx?: Transaction): Promise<void>;
+}
+
+```
+
+## File: src/modules/medical-staff/domain/services/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/domain/services/dentist.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IDentistRepository } from '../repositories/dentist.repository';
+import { CreateDentistDto } from '../../application/dtos/dentist.dto';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DentistService {
+  constructor(
+    @Inject(IDentistRepository) private readonly repo: IDentistRepository,
+  ) {}
+
+  async ensureDentistExists(
+    fullName: string,
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const existing = await this.repo.findDentist(fullName, clinicId, tx);
+    if (existing) {
+      return existing;
+    }
+
+    const newDentist: CreateDentistDto = {
+      fullName,
+      clinicId,
+    };
+
+    return this.repo.createDentist(newDentist, tx);
+  }
+}
+
+```
+
+## File: src/modules/medical-staff/application/use-cases/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/application/dtos/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/application/dtos/dentist.dto.ts
+```
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEmail,
+  IsNumber,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+
+export class CreateDentistDto {
+  @ApiProperty({ example: 'Dr. Strange', description: 'Họ tên bác sĩ' })
+  @IsString()
+  @IsNotEmpty()
+  fullName: string;
+
+  @ApiProperty({ example: 1, description: 'ID phòng khám trực thuộc' })
+  @IsNumber()
+  @IsNotEmpty()
+  clinicId: number;
+
+  @ApiPropertyOptional({ example: '0909123456' })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({ example: 'doctor@example.com' })
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @ApiPropertyOptional({
+    example: 1001,
+    description: 'Liên kết với User System ID (nếu có)',
+  })
+  @IsOptional()
+  @IsNumber()
+  userId?: number;
+}
+
+export class UpdateDentistDto extends PartialType(CreateDentistDto) {}
+
+```
+
+## File: src/modules/medical-staff/infrastructure/controllers/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/infrastructure/controllers/dentist.controller.ts
+```
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Put,
+  Query,
+  UseGuards,
+  Inject,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+} from '@nestjs/swagger';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { IDentistRepository } from '../../domain/repositories/dentist.repository';
+import {
+  CreateDentistDto,
+  UpdateDentistDto,
+} from '../../application/dtos/dentist.dto';
+
+@ApiTags('Medical Staff - Dentists')
+@ApiBearerAuth()
+@Controller('dentists')
+@UseGuards(JwtAuthGuard)
+export class DentistController {
+  constructor(
+    @Inject(IDentistRepository) private readonly repo: IDentistRepository,
+  ) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Add new dentist' })
+  async create(@Body() dto: CreateDentistDto) {
+    return this.repo.createDentist(dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List dentists (optional filter by clinic)' })
+  @ApiQuery({ name: 'clinicId', required: false })
+  async findAll(@Query('clinicId') clinicId?: number) {
+    return this.repo.findAll(clinicId ? Number(clinicId) : undefined);
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: number) {
+    return this.repo.findById(id);
+  }
+
+  @Put(':id')
+  async update(@Param('id') id: number, @Body() dto: UpdateDentistDto) {
+    await this.repo.update(id, dto);
+    return { success: true };
+  }
+}
+
+```
+
+## File: src/modules/medical-staff/infrastructure/persistence/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/infrastructure/persistence/repositories/drizzle-dentist.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc, and } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { dentists, clinics } from '@database/schema';
+
+import { IDentistRepository } from '../../../domain/repositories/dentist.repository';
+import {
+  CreateDentistDto,
+  UpdateDentistDto,
+} from '../../../application/dtos/dentist.dto';
+
+@Injectable()
+export class DrizzleDentistRepository
+  extends DrizzleBaseRepository
+  implements IDentistRepository
+{
+  async findDentist(
+    name: string,
+    clinicId: number,
+    tx?: Transaction,
+  ): Promise<{ id: number } | null> {
+    const db = this.getDb(tx);
+    const res = await db
+      .select({ id: dentists.id })
+      .from(dentists)
+      .where(and(eq(dentists.fullName, name), eq(dentists.clinicId, clinicId)))
+      .limit(1);
+    return res[0] || null;
+  }
+
+  async createDentist(
+    data: CreateDentistDto,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(dentists)
+      .values({
+        fullName: data.fullName,
+        clinicId: data.clinicId,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+        userId: data.userId,
+      })
+      .returning({ id: dentists.id });
+    return res;
+  }
+
+  // --- CRUD ---
+
+  async findAll(clinicId?: number): Promise<any[]> {
+    const query = this.db.select().from(dentists);
+    if (clinicId) {
+      query.where(eq(dentists.clinicId, clinicId));
+    }
+    return query.orderBy(desc(dentists.createdAt));
+  }
+
+  async findById(id: number): Promise<any | null> {
+    const res = await this.db
+      .select()
+      .from(dentists)
+      .where(eq(dentists.id, id));
+    return res[0] || null;
+  }
+
+  async update(
+    id: number,
+    data: UpdateDentistDto,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    await db.update(dentists).set(data).where(eq(dentists.id, id));
+  }
+}
+
+```
+
+## File: src/modules/medical-staff/infrastructure/persistence/mappers/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/infrastructure/persistence/schema/.gitkeep
+```
+
+```
+
+## File: src/modules/medical-staff/infrastructure/persistence/schema/dentists.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  date,
+  boolean,
+  index,
+  pgEnum,
+  numeric,
+  bigint,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+// FIX: Import cross-modules (Sử dụng Alias @database/schema để tránh đường dẫn relative dài dòng)
+// Bạn cần đảm bảo trong tsconfig.json đã cấu hình paths: { "@database/*": ["src/database/*"] }
+import { users } from '@database/schema/users.schema';
+import * as schema from '@database/schema';
+import { cases, clinics } from '@database/schema'; // Fallback cho các bảng khác
+
+export const dentists = pgTable('dentists', {
+  id: serial('id').primaryKey(),
+  userId: bigint('user_id', { mode: 'number' }).references(() => users.id),
+  clinicId: integer('clinic_id').references(() => schema.clinics.id),
+  fullName: text('full_name').notNull(),
+  phoneNumber: text('phone_number'),
+  email: text('email'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const dentistsRelations = relations(dentists, ({ one, many }) => ({
+  user: one(users, { fields: [dentists.userId], references: [users.id] }),
+  clinic: one(clinics, {
+    fields: [dentists.clinicId],
+    references: [clinics.id],
+  }),
+  cases: many(cases),
+}));
+
+```
+
+## File: src/modules/medical-staff/medical-staff.module.ts
+```
+import { Module } from '@nestjs/common';
+import { IDentistRepository } from '@modules/medical-staff/domain/repositories/dentist.repository';
+import { DrizzleDentistRepository } from '@modules/medical-staff/infrastructure/persistence/repositories/drizzle-dentist.repository';
+import { DentistService } from '@modules/medical-staff/domain/services/dentist.service';
+import { DentistController } from '@modules/medical-staff/infrastructure/controllers/dentist.controller';
+
+@Module({
+  imports: [],
+  controllers: [DentistController],
+  providers: [
+    { provide: IDentistRepository, useClass: DrizzleDentistRepository },
+    DentistService,
+  ],
+  // 👇 QUAN TRỌNG: Phải export thì module khác mới dùng được
+  exports: [IDentistRepository, DentistService],
+})
+export class MedicalStaffModule {}
+
+```
+
+## File: src/modules/dental-treatment/domain/entities/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/domain/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/domain/repositories/ortho.repository.ts
+```
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { CaseHistoryDTO, TeethMovementRecord } from '../types/dental.types';
+
+// ==========================================
+// 1. DATA TYPES (ENTITIES & DTOs)
+// ==========================================
+
+export interface OrthoCase {
+  id: number;
+  orderId?: string | null;
+  patientId: number;
+  status: string | null;
+  createdAt: Date | null;
+}
+
+// DTO cho hàm createFullCase cũ (Monolithic)
+export interface FullCaseInput {
+  patientName: string;
+  patientCode: string;
+  gender?: 'Male' | 'Female' | 'Other';
+  dob?: Date;
+  clinicName: string;
+  doctorName?: string;
+  productType: 'aligner' | 'retainer';
+  notes?: string;
+}
+
+// DTO trả về chi tiết Case cho Frontend
+export interface CaseDetailsDTO {
+  patientName: string;
+  patientCode: string;
+  caseId: number;
+  doctorName?: string;
+  clinicName?: string;
+  createdAt: Date;
+}
+
+// ==========================================
+// 2. INPUT TYPES FOR REFACTORING (GRANULAR)
+// ==========================================
+
+export interface ClinicInput {
+  name: string;
+  code: string;
+}
+
+export interface DentistInput {
+  fullName: string;
+  clinicId: number;
+}
+
+export interface PatientInput {
+  fullName: string;
+  patientCode: string;
+  clinicId: number;
+  gender?: any; // Có thể để string hoặc Enum nếu đã import
+  dob?: Date;
+}
+
+export interface CreateCaseInput {
+  patientId: number;
+  dentistId?: number | null;
+  productType: string; // 'aligner' | 'retainer'
+  notes?: string;
+}
+
+// ==========================================
+// 3. REPOSITORY INTERFACE
+// ==========================================
+
+export const IOrthoRepository = Symbol('IOrthoRepository');
+
+export interface IOrthoRepository {
+  /**
+   * @deprecated Logic này nên chuyển lên Service Layer dùng Transaction Manager.
+   * Giữ lại để tương thích ngược nếu cần.
+   */
+  createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string>;
+
+  // --- GRANULAR METHODS (Phục vụ Refactor Service) ---
+
+  // Case (Thay thế hàm legacy createCase trả về any)
+  createCase(data: CreateCaseInput, tx?: Transaction): Promise<{ id: number }>;
+
+  // --- QUERY / READ METHODS ---
+
+  findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null>;
+
+  checkCaseBelongsToPatient(
+    caseId: string,
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<boolean>;
+
+  // ✅ UPDATED: Trả về CaseHistoryDTO[] thay vì any[]
+  findCasesByPatientCode(
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<CaseHistoryDTO[]>;
+
+  getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null>;
+
+  getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
+
+  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
+
+  // --- MOVEMENT DATA & STEPS ---
+
+  // ✅ UPDATED: teethData sử dụng Type rõ ràng thay vì any
+  updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: TeethMovementRecord,
+    tx?: Transaction,
+  ): Promise<void>;
+
+  deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
+
+  // Legacy (Optional: có thể xóa nếu không dùng nữa)
+  saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+}
+
+```
+
+## File: src/modules/dental-treatment/domain/services/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/domain/ports/dental-storage.port.ts
+```
+export const IDentalStorage = Symbol('IDentalStorage');
+
+export interface IDentalStorage {
+  // --- Path Management ---
+  get uploadDir(): string;
+  get outputDir(): string;
+
+  /** Nối các đường dẫn (tương tự path.join) */
+  joinPath(...segments: string[]): string;
+
+  /** Giải quyết đường dẫn tuyệt đối (tương tự path.resolve) */
+  resolvePath(...segments: string[]): string;
+
+  /** Lấy tên file từ đường dẫn (tương tự path.basename) */
+  getBasename(p: string, ext?: string): string;
+
+  /** Lấy thư mục cha (tương tự path.dirname) */
+  getDirname(p: string): string;
+
+  /** Lấy đường dẫn tương đối (tương tự path.relative) - Luôn trả về forward slash '/' cho URL */
+  getRelativePath(from: string, to: string): string;
+
+  // --- File Operations ---
+  ensureDirectories(): void;
+
+  /** Đọc file vào Buffer */
+  readFile(path: string): Promise<Buffer>;
+
+  /** Kiểm tra file/folder tồn tại */
+  exists(path: string): Promise<boolean>;
+
+  /** Xóa file hoặc thư mục (recursive) */
+  remove(path: string): Promise<void>;
+
+  /** Giải nén file Zip */
+  extractZip(zipPath: string, extractPath: string): Promise<void>;
+
+  /** Tìm kiếm file theo đuôi mở rộng (đệ quy) */
+  findFilesRecursively(dir: string, ext: string): Promise<string[]>;
+}
+
+```
+
+## File: src/modules/dental-treatment/domain/ports/dental-worker.port.ts
+```
+export const IDentalWorker = Symbol('IDentalWorker');
+
+export interface ConversionBinaries {
+  obj2gltf: string;
+  gltfPipeline: string;
+  gltfTransform: string;
+}
+
+export interface ConversionJob {
+  objFilePath: string;
+  outputDir: string;
+  baseName: string;
+  encryptionKey: string;
+  config: {
+    ratio: number;
+    threshold: number;
+    timeout: number;
+  };
+  // ✅ NEW: Truyền đường dẫn binaries vào Job
+  binaries: ConversionBinaries;
+}
+
+export interface WorkerResult {
+  success: boolean;
+  path: string;
+}
+
+export interface IDentalWorker {
+  runTask(task: ConversionJob): Promise<WorkerResult>;
+}
+
+```
+
+## File: src/modules/dental-treatment/domain/types/dental.types.ts
+```
+// Định nghĩa cấu trúc dữ liệu di chuyển của 1 răng (giống logic trong parser cũ)
+export interface ToothMoveData {
+  rotation: number;
+  angulation: number;
+  inclination: number;
+  translationX: number;
+  translationY: number;
+  translationZ: number;
+  iprMesial: number;
+  iprDistal: number;
+}
+
+// Map: "11" -> { rotation: ... }, "12" -> { ... }
+export type TeethMovementRecord = Record<string, ToothMoveData>;
+
+// DTO trả về cho API History
+export interface CaseHistoryDTO {
+  caseId: number;
+  status: string | null;
+  createdAt: Date | null;
+  notes: string | null;
+  productType: string;
+  doctorName: string | null;
+}
+
+// Type mở rộng cho Conversion Job trong Service (kèm Metadata để tracking progress)
+import { ConversionJob } from '../ports/dental-worker.port';
+
+export type JawType = 'Maxillary' | 'Mandibular';
+
+export type ConversionTaskWithMeta = ConversionJob & {
+  meta: {
+    index: number;
+    type: JawType;
+  };
+};
+
+export interface ModelStep {
+  index: number;
+  maxillary: string | null;
+  mandibular: string | null;
+  teethData?: TeethMovementRecord;
+}
+
+```
+
+## File: src/modules/dental-treatment/application/use-cases/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/application/use-cases/upload-case.use-case.ts
+```
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { v4 as uuidv4 } from 'uuid';
+import Piscina from 'piscina';
+
+// Core Ports
+import {
+  ITransactionManager,
+  Transaction,
+} from '@core/shared/application/ports/transaction-manager.port';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+
+// Repositories & Ports (Local Module)
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository'; // Interface cũ chứa Case logic
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+import {
+  ConversionTaskWithMeta,
+  JawType,
+} from '../../domain/types/dental.types';
+import { UploadCaseDto } from '../dtos/upload-case.dto';
+
+// Services from Other Modules (Inject trực tiếp Service Class)
+import { ClinicService } from '@modules/organization/domain/services/clinic.service';
+import { PatientService } from '@modules/patient/domain/services/patient.service';
+import { DentistService } from '@modules/medical-staff/domain/services/dentist.service';
+
+// Infra Workers
+import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
+import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
+
+@Injectable()
+export class UploadCaseUseCase {
+  private readonly appUrl: string;
+
+  constructor(
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(ITransactionManager)
+    private readonly txManager: ITransactionManager,
+
+    // Repositories Local
+    @Inject(IOrthoRepository) private readonly caseRepo: IOrthoRepository,
+    @Inject(IDentalStorage) private readonly storage: IDentalStorage,
+
+    // External Domain Services
+    private readonly clinicService: ClinicService,
+    private readonly patientService: PatientService,
+    private readonly dentistService: DentistService,
+
+    // Workers & Helpers
+    @Inject(PISCINA_POOL) private readonly pool: Piscina,
+    private readonly config: ConfigService,
+    private readonly dentalGateway: DentalGateway,
+  ) {
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
+      /\/$/,
+      '',
+    );
+  }
+
+  async execute(file: Express.Multer.File, dto: UploadCaseDto) {
+    if (!file) throw new BadRequestException('No file uploaded');
+
+    const isOverwrite = String(dto.overwrite) === 'true';
+    let caseId: string | null = null;
+
+    // 1. Handle Overwrite Logic
+    if (isOverwrite) {
+      caseId = await this.caseRepo.findLatestCaseIdByCode(dto.patientCode);
+      if (caseId) {
+        this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
+        const caseDir = this.storage.joinPath(this.storage.outputDir, caseId);
+        await this.storage.remove(caseDir);
+        await this.caseRepo.deleteStepsByCaseId(Number(caseId));
+      }
+    }
+
+    // 2. Main Transaction: Create/Get Entities
+    if (!caseId) {
+      caseId = await this.txManager.runInTransaction(
+        async (tx: Transaction) => {
+          // A. Organization
+          const clinic = await this.clinicService.ensureClinicExists(
+            dto.clinicName,
+            undefined,
+            tx,
+          );
+
+          // B. Medical Staff
+          let dentistId: number | undefined;
+          if (dto.doctorName) {
+            const dentist = await this.dentistService.ensureDentistExists(
+              dto.doctorName,
+              clinic.id,
+              tx,
+            );
+            dentistId = dentist.id;
+          }
+
+          // C. Patient
+          const dobString = dto.dob
+            ? new Date(dto.dob).toISOString().split('T')[0]
+            : undefined;
+          const patient = await this.patientService.ensurePatientExists(
+            {
+              code: dto.patientCode,
+              name: dto.patientName,
+              gender: dto.gender,
+              dob: dobString,
+            },
+            clinic.id,
+            tx,
+          );
+
+          // D. Create Case (Local Module Logic)
+          const newCase = await this.caseRepo.createCase(
+            {
+              patientId: patient.id,
+              dentistId: dentistId ?? null,
+              productType: dto.productType,
+              notes: dto.notes,
+            },
+            tx,
+          );
+          return String(newCase.id);
+        },
+      );
+    }
+
+    // 3. File Processing (Zip Extraction & Queueing)
+    const extractPath = this.storage.joinPath(
+      this.storage.uploadDir,
+      `extract_${uuidv4()}`,
+    );
+
+    try {
+      await this.storage.extractZip(file.path, extractPath);
+    } catch (e: any) {
+      throw new BadRequestException('Invalid Zip File: ' + e.message);
+    }
+
+    const objFiles = await this.storage.findFilesRecursively(
+      extractPath,
+      '.obj',
+    );
+
+    // Prepare Tasks
+    const binariesConfig = {
+      obj2gltf: this.config.get<string>('dental.binaries.obj2gltf')!,
+      gltfPipeline: this.config.get<string>('dental.binaries.gltfPipeline')!,
+      gltfTransform: this.config.get<string>('dental.binaries.gltfTransform')!,
+    };
+
+    const tasks: ConversionTaskWithMeta[] = objFiles.map((objPath) => {
+      const baseName = this.storage.getBasename(objPath, '.obj');
+      const parentDir = this.storage.getBasename(
+        this.storage.getDirname(objPath),
+      );
+
+      const type: JawType = baseName.toLowerCase().includes('mandibular')
+        ? 'Mandibular'
+        : 'Maxillary';
+
+      let index = 0;
+      const folderMatch = parentDir.match(/(\d+)/);
+      const fileMatch = baseName.match(/(\d+)/);
+      if (folderMatch) index = parseInt(folderMatch[1], 10);
+      else if (fileMatch) index = parseInt(fileMatch[1], 10);
+
+      return {
+        objFilePath: objPath,
+        outputDir: this.storage.joinPath(this.storage.outputDir, caseId!, type),
+        baseName: `${type}_${index.toString().padStart(3, '0')}`,
+        encryptionKey: this.config.get<string>('dental.encryptionKey')!,
+        config: { ratio: 0.3, threshold: 0.0005, timeout: 300000 },
+        binaries: binariesConfig,
+        meta: { index, type },
+      };
+    });
+
+    this.logger.info(
+      `Queueing ${tasks.length} conversion tasks for Case ${caseId}`,
+    );
+
+    // Fire and Forget (Background Process)
+    this.runBackgroundConversion(tasks, caseId!, extractPath, file.path);
+
+    return {
+      success: true,
+      message: 'Processing started',
+      caseId,
+      stepCount: tasks.length / 2,
+      status: 'PROCESSING',
+    };
+  }
+
+  // Private Helper cho Worker Logic
+  private async runBackgroundConversion(
+    tasks: ConversionTaskWithMeta[],
+    caseId: string,
+    extractPath: string,
+    zipFilePath: string,
+  ) {
+    let completed = 0;
+    const total = tasks.length;
+
+    const promises = tasks.map(async (task) => {
+      try {
+        const result = await this.pool.run(task);
+        completed++;
+        const filename = this.storage.getBasename(result.path);
+
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'progress',
+          file: task.baseName,
+          percent: Math.round((completed / total) * 100),
+          url: `${this.appUrl}/models/${caseId}/${task.meta.type}/${filename}`,
+          type: task.meta.type,
+          index: task.meta.index,
+        });
+      } catch (error: any) {
+        this.logger.error(`Error converting ${task.baseName}`, error);
+        this.dentalGateway.notifyProgress(caseId, {
+          status: 'error',
+          file: task.baseName,
+          error: error.message,
+        });
+      }
+    });
+
+    await Promise.allSettled(promises);
+    this.dentalGateway.notifyComplete(caseId, { status: 'completed' });
+    this.logger.info(`Case ${caseId} processing completed.`);
+
+    // Cleanup
+    await this.storage.remove(extractPath);
+    await this.storage.remove(zipFilePath);
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/application/dtos/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/application/dtos/create-case.dto.ts
+```
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsEnum,
+  IsNumber,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export enum ProductType {
+  Aligner = 'aligner',
+  Retainer = 'retainer',
+}
+
+export class CreateCaseDto {
+  @ApiProperty({ example: 1, description: 'ID Bệnh nhân' })
+  @IsNumber()
+  @IsNotEmpty()
+  patientId: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'ID Bác sĩ phụ trách' })
+  @IsOptional()
+  @IsNumber()
+  dentistId?: number;
+
+  @ApiProperty({ enum: ProductType, example: ProductType.Aligner })
+  @IsEnum(ProductType)
+  @IsNotEmpty()
+  productType: ProductType;
+
+  @ApiPropertyOptional({ example: 'Ghi chú lâm sàng...' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiPropertyOptional({
+    example: 'ORD-12345',
+    description: 'Mã đơn hàng nội bộ',
+  })
+  @IsOptional()
+  @IsString()
+  orderId?: string;
+}
+
+```
+
+## File: src/modules/dental-treatment/application/dtos/upload-case.dto.ts
+```
+import { IsString, IsOptional, IsNotEmpty, IsEnum } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export enum Gender {
+  Male = 'Male',
+  Female = 'Female',
+  Other = 'Other',
+}
+export enum ProductType {
+  Aligner = 'aligner',
+  Retainer = 'retainer',
+}
+
+export class UploadCaseDto {
+  @ApiProperty({ example: 'Nguyen Van A' })
+  @IsString()
+  @IsNotEmpty()
+  patientName: string;
+  @ApiProperty({ example: 'PAT-12345' })
+  @IsString()
+  @IsNotEmpty()
+  patientCode: string;
+  @ApiProperty({ example: 'Smile Dental' })
+  @IsString()
+  @IsNotEmpty()
+  clinicName: string;
+  @ApiPropertyOptional({ example: 'Dr. Strange' })
+  @IsOptional()
+  @IsString()
+  doctorName?: string;
+  @ApiPropertyOptional({ enum: Gender, example: Gender.Male })
+  @IsOptional()
+  gender?: any;
+  @ApiPropertyOptional({ example: '1990-01-01' }) @IsOptional() dob?: string;
+  @ApiPropertyOptional({ enum: ProductType, example: ProductType.Aligner })
+  @IsOptional()
+  productType?: any;
+  @ApiPropertyOptional({ example: 'Ghi chú ca lâm sàng' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+  @ApiPropertyOptional({ example: 'false', description: 'Ghi đè case cũ?' })
+  @IsOptional()
+  @IsString()
+  overwrite?: string;
+  @ApiProperty({ type: 'string', format: 'binary' }) file: any;
+}
+
+```
+
+## File: src/modules/dental-treatment/application/utils/movement.parser.ts
+```
+import * as XLSX from 'xlsx';
+import * as cheerio from 'cheerio';
+import { BadRequestException } from '@nestjs/common';
+
+// ==========================================
+// 1. DATA STRUCTURES
+// ==========================================
+export interface ToothMoveData {
+  rotation: number; // Rotation (deg)
+  angulation: number; // Angulation / Tip (deg)
+  inclination: number; // Inclination / Torque (deg)
+  translationX: number; // Left/ Right (mm)
+  translationY: number; // Forward/ Backward (mm)
+  translationZ: number; // Extrusion/ Intrusion (mm)
+  iprMesial: number; // IPR (mm)
+  iprDistal: number; // IPR (mm)
+}
+
+export type ParsedMovementMap = Map<number, Record<string, ToothMoveData>>;
+
+// ==========================================
+// 2. HELPER FUNCTIONS
+// ==========================================
+
+/**
+ * Làm sạch chuỗi số có đơn vị. VD: "0.38 deg" -> 0.38
+ */
+function cleanValue(val: any): number {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  // Giữ lại số, dấu chấm, dấu trừ. Loại bỏ chữ cái và khoảng trắng.
+  const str = String(val)
+    .replace(/[^\d.-]/g, '')
+    .trim();
+  const num = parseFloat(str);
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Chuẩn hóa tên cột để dễ map. VD: "Left/ Right" -> "leftright"
+ */
+function normalizeHeader(header: string): string {
+  return String(header)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Map dữ liệu từ row (object key-value) sang ToothMoveData
+ */
+function mapRowToData(rowData: any): ToothMoveData {
+  return {
+    rotation: cleanValue(rowData['rotation'] || rowData['rot']),
+    angulation: cleanValue(rowData['angulation'] || rowData['ang']),
+    inclination: cleanValue(
+      rowData['inclination'] || rowData['torque'] || rowData['tor'],
+    ),
+    translationX: cleanValue(
+      rowData['translationx'] || rowData['transx'] || rowData['leftright'],
+    ),
+    translationY: cleanValue(
+      rowData['translationy'] ||
+        rowData['transy'] ||
+        rowData['forwardbackward'],
+    ),
+    translationZ: cleanValue(
+      rowData['extrusion'] ||
+        rowData['translationz'] ||
+        rowData['extrusionintrusion'],
+    ),
+    iprMesial: cleanValue(rowData['iprmesial']),
+    iprDistal: cleanValue(rowData['iprdistal']),
+  };
+}
+
+// ==========================================
+// 3. PARSING STRATEGIES
+// ==========================================
+
+/**
+ * STRATEGY 1: Parse CSV/Excel phẳng (Flat Format)
+ */
+function parseFlatFormat(jsonData: any[]): ParsedMovementMap {
+  const stepsMap: ParsedMovementMap = new Map();
+
+  jsonData.forEach((row) => {
+    const cleanRow: any = {};
+    Object.keys(row).forEach((k) => {
+      cleanRow[normalizeHeader(k)] = row[k];
+    });
+
+    const step = parseInt(cleanRow['step'] || cleanRow['stage']);
+    const tooth = String(
+      cleanRow['tooth'] || cleanRow['toothid'] || cleanRow['toothnumber'],
+    );
+
+    if (isNaN(step) || !tooth || tooth === 'undefined') return;
+
+    if (!stepsMap.has(step)) stepsMap.set(step, {});
+    const stepData = stepsMap.get(step)!;
+
+    stepData[tooth] = mapRowToData(cleanRow);
+  });
+
+  return stepsMap;
+}
+
+/**
+ * STRATEGY 2: Parse Excel Report (Nhiều bảng con trong 1 sheet)
+ */
+function parseExcelReportFormat(sheet: XLSX.WorkSheet): ParsedMovementMap {
+  const stepsMap: ParsedMovementMap = new Map();
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+
+  let currentStep = 0;
+  let headers: string[] = [];
+  let isReadingTable = false;
+
+  const stepHeaderRegex = /(?:subsetup|stage|step)\s*(\d+)/i;
+
+  for (const row of rows) {
+    const firstCell = row[0] ? String(row[0]).trim() : '';
+
+    // Tìm header Step (vd: "FINAL Subsetup1")
+    const stepMatch = firstCell.match(stepHeaderRegex);
+    if (stepMatch) {
+      currentStep = parseInt(stepMatch[1], 10);
+      isReadingTable = false;
+      continue;
+    }
+
+    // Tìm header cột (vd: "Tooth number")
+    if (row.some((cell) => String(cell).toLowerCase().includes('tooth'))) {
+      headers = row.map((cell) => normalizeHeader(String(cell)));
+      isReadingTable = true;
+      if (!stepsMap.has(currentStep)) stepsMap.set(currentStep, {});
+      continue;
+    }
+
+    // Đọc data
+    if (isReadingTable && currentStep > 0) {
+      const toothNum = parseInt(firstCell);
+      if (isNaN(toothNum)) continue;
+
+      const toothStr = String(toothNum);
+      const rowData: any = {};
+      row.forEach((cell, index) => {
+        if (headers[index]) rowData[headers[index]] = cell;
+      });
+
+      const stepData = stepsMap.get(currentStep)!;
+      stepData[toothStr] = mapRowToData(rowData);
+    }
+  }
+  return stepsMap;
+}
+
+/**
+ * STRATEGY 3: Parse HTML Report (Sử dụng Cheerio)
+ */
+function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
+  const $ = cheerio.load(htmlContent);
+  const stepsMap: ParsedMovementMap = new Map();
+
+  // Tìm tất cả các bảng OrthoAutoTable
+  $('table.OrthoAutoTable').each((tableIndex, tableElement) => {
+    // Logic: Giả định bảng xuất hiện tuần tự là Step 1, Step 2...
+    let stepIndex = tableIndex + 1;
+
+    // Cố gắng tìm text Step trong caption hoặc div cha nếu có
+    const captionText =
+      $(tableElement).find('caption').text() ||
+      $(tableElement).prev().text() ||
+      $(tableElement).parent().prev().text();
+
+    const stepMatch = captionText.match(/(?:subsetup|stage|step)\s*(\d+)/i);
+    if (stepMatch) {
+      stepIndex = parseInt(stepMatch[1], 10);
+    }
+
+    if (!stepsMap.has(stepIndex)) stepsMap.set(stepIndex, {});
+    const stepData = stepsMap.get(stepIndex)!;
+
+    // Parse Headers
+    const headers: string[] = [];
+    $(tableElement)
+      .find('tbody tr')
+      .eq(0)
+      .find('td')
+      .each((_, cell) => {
+        headers.push(normalizeHeader($(cell).text()));
+      });
+
+    // Parse Data Rows
+    $(tableElement)
+      .find('tbody tr')
+      .slice(1)
+      .each((_, row) => {
+        const cells = $(row).find('td');
+        const rowData: any = {};
+
+        cells.each((cellIndex, cell) => {
+          const header = headers[cellIndex];
+          if (header) {
+            rowData[header] = $(cell).text();
+          }
+        });
+
+        const toothVal = cleanValue(rowData['toothnumber'] || rowData['tooth']);
+        if (!toothVal) return;
+
+        const tooth = String(toothVal);
+        stepData[tooth] = mapRowToData(rowData);
+      });
+  });
+
+  return stepsMap;
+}
+
+// ==========================================
+// 4. MAIN EXPORT
+// ==========================================
+
+export const parseMovementData = (
+  buffer: Buffer,
+  filename: string = 'unknown',
+): ParsedMovementMap => {
+  try {
+    if (!buffer || buffer.length === 0) {
+      throw new Error('File content is empty');
+    }
+
+    const contentStr = buffer.toString('utf-8').trim();
+
+    // 1. Detect HTML
+    if (
+      contentStr.startsWith('<') &&
+      (contentStr.includes('<html') || contentStr.includes('<!DOCTYPE'))
+    ) {
+      return parseHtmlFormat(contentStr);
+    }
+
+    // 2. Detect Excel / CSV
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    // Check Flat vs Report format
+    // FIX: Removed 'limit: 1' as it is not a valid option in Sheet2JSONOpts
+    const firstRow: any[] = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      range: 0,
+    })[0] as any[];
+    const isFlat =
+      firstRow &&
+      firstRow.some((cell) => normalizeHeader(String(cell)) === 'step');
+
+    if (isFlat) {
+      const jsonData = XLSX.utils.sheet_to_json(sheet);
+      return parseFlatFormat(jsonData);
+    } else {
+      return parseExcelReportFormat(sheet);
+    }
+  } catch (error: any) {
+    throw new BadRequestException(
+      'Failed to parse movement data: ' + error.message,
+    );
+  }
+};
+
+```
+
+## File: src/modules/dental-treatment/application/queries/get-patient-history.query.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { CaseHistoryDTO } from '../../domain/types/dental.types';
+
+@Injectable()
+export class GetPatientHistoryQuery {
+  constructor(
+    @Inject(IOrthoRepository) private readonly repo: IOrthoRepository,
+  ) {}
+
+  async execute(patientCode: string): Promise<CaseHistoryDTO[]> {
+    return this.repo.findCasesByPatientCode(patientCode);
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/application/queries/get-case-details.query.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { CaseDetailsDTO } from '../../domain/repositories/ortho.repository'; // Import DTO từ Repo hoặc Types tùy definition
+
+@Injectable()
+export class GetCaseDetailsQuery {
+  constructor(
+    @Inject(IOrthoRepository) private readonly repo: IOrthoRepository,
+  ) {}
+
+  async execute(
+    clientId: string,
+    caseId?: string,
+  ): Promise<CaseDetailsDTO | null> {
+    const id = caseId || (await this.repo.findLatestCaseIdByCode(clientId));
+    return id ? this.repo.getCaseDetails(id, true) : null;
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/application/queries/get-case-models.query.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+import {
+  ModelStep,
+  TeethMovementRecord,
+} from '../../domain/types/dental.types';
+
+@Injectable()
+export class GetCaseModelsQuery {
+  private readonly appUrl: string;
+
+  constructor(
+    @Inject(IOrthoRepository) private readonly repo: IOrthoRepository,
+    @Inject(IDentalStorage) private readonly storage: IDentalStorage,
+    private readonly config: ConfigService,
+  ) {
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
+      /\/$/,
+      '',
+    );
+  }
+
+  async execute(clientId: string, caseId?: string): Promise<ModelStep[]> {
+    // 1. Resolve Case ID
+    const id = caseId || (await this.repo.findLatestCaseIdByCode(clientId));
+    if (!id) return [];
+
+    // 2. Scan Files from Storage
+    const clientDir = this.storage.joinPath(this.storage.outputDir, id);
+    const exists = await this.storage.exists(clientDir);
+    const allEncFiles = exists
+      ? await this.storage.findFilesRecursively(clientDir, '.enc')
+      : [];
+
+    // 3. Get Steps Logic from DB
+    const dbSteps = await this.repo.getStepsByCaseId(Number(id));
+    const stepsMap = new Map<number, ModelStep>();
+
+    // 4. Map DB Data
+    dbSteps.forEach((s) => {
+      stepsMap.set(s.stepIndex, {
+        index: s.stepIndex,
+        maxillary: null,
+        mandibular: null,
+        teethData: s.teethData as TeethMovementRecord,
+      });
+    });
+
+    // 5. Map File System Data
+    allEncFiles.forEach((fp) => {
+      const filename = this.storage.getBasename(fp).toLowerCase();
+      const matches = filename.match(/(\d+)/g);
+      const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
+      const relPath = this.storage.getRelativePath(this.storage.outputDir, fp);
+      const url = `${this.appUrl}/models/${relPath}`;
+
+      if (!stepsMap.has(index)) {
+        stepsMap.set(index, { index, maxillary: null, mandibular: null });
+      }
+      const entry = stepsMap.get(index)!;
+      if (filename.includes('maxillary')) entry.maxillary = url;
+      else if (filename.includes('mandibular')) entry.mandibular = url;
+    });
+
+    return Array.from(stepsMap.values()).sort((a, b) => a.index - b.index);
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/controllers/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/persistence/repositories/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/persistence/repositories/drizzle-cases.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, desc, and, asc } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import {
+  IOrthoRepository,
+  OrthoCase,
+  FullCaseInput,
+  CaseDetailsDTO,
+  ClinicInput,
+  DentistInput,
+  PatientInput,
+  CreateCaseInput,
+} from '../../../domain/repositories/ortho.repository';
+import {
+  CaseHistoryDTO,
+  TeethMovementRecord,
+} from '../../../domain/types/dental.types';
+
+import {
+  patients,
+  cases,
+  treatmentSteps,
+  clinics,
+  dentists,
+} from '@database/schema';
+
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleOrthoRepository
+  extends DrizzleBaseRepository
+  implements IOrthoRepository
+{
+  // ==========================================
+  // 1. LEGACY MONOLITHIC METHOD
+  // (Giữ lại để tương thích ngược, nhưng nên hạn chế dùng)
+  // ==========================================
+  async createFullCase(data: FullCaseInput, tx?: Transaction): Promise<string> {
+    const runInTx = async (dbTx: any) => {
+      // 1. Handle Clinic
+      const clinicCode = data.clinicName
+        .toUpperCase()
+        .replace(/\s+/g, '_')
+        .substring(0, 10);
+
+      let clinicId: number;
+      const existingClinic = await dbTx
+        .select()
+        .from(clinics)
+        .where(eq(clinics.clinicCode, clinicCode))
+        .limit(1);
+
+      if (existingClinic.length > 0) {
+        clinicId = existingClinic[0].id;
+      } else {
+        const [newClinic] = await dbTx
+          .insert(clinics)
+          .values({
+            name: data.clinicName,
+            clinicCode: clinicCode,
+          })
+          .returning();
+        clinicId = newClinic.id;
+      }
+
+      // 2. Handle Dentist
+      let dentistId: number | null = null;
+      if (data.doctorName) {
+        const existingDentist = await dbTx
+          .select()
+          .from(dentists)
+          .where(
+            and(
+              eq(dentists.fullName, data.doctorName),
+              eq(dentists.clinicId, clinicId),
+            ),
+          )
+          .limit(1);
+
+        if (existingDentist.length > 0) {
+          dentistId = existingDentist[0].id;
+        } else {
+          const [newDentist] = await dbTx
+            .insert(dentists)
+            .values({
+              fullName: data.doctorName,
+              clinicId: clinicId,
+            })
+            .returning();
+          dentistId = newDentist.id;
+        }
+      }
+
+      // 3. Handle Patient
+      let patientId: number;
+      const existingPatient = await dbTx
+        .select()
+        .from(patients)
+        .where(eq(patients.patientCode, data.patientCode))
+        .limit(1);
+
+      if (existingPatient.length > 0) {
+        patientId = existingPatient[0].id;
+      } else {
+        const [newPatient] = await dbTx
+          .insert(patients)
+          .values({
+            fullName: data.patientName,
+            patientCode: data.patientCode,
+            clinicId: clinicId,
+            gender: data.gender,
+            birthDate: data.dob ? data.dob.toISOString().split('T')[0] : null,
+          })
+          .returning();
+        patientId = newPatient.id;
+      }
+
+      // 4. Create Case
+      const [newCase] = await dbTx
+        .insert(cases)
+        .values({
+          patientId: patientId,
+          dentistId: dentistId,
+          productType: data.productType,
+          status: 'PROCESSING',
+          notes: data.notes,
+          startedAt: new Date(),
+        })
+        .returning();
+
+      return String(newCase.id);
+    };
+
+    if (tx) return runInTx(tx);
+    return this.db.transaction(runInTx);
+  }
+
+  // ==========================================
+  // 2. GRANULAR WRITE METHODS (Atomic Operations)
+  // ==========================================
+
+  async createCase(
+    data: CreateCaseInput,
+    tx?: Transaction,
+  ): Promise<{ id: number }> {
+    const db = this.getDb(tx);
+    const [res] = await db
+      .insert(cases)
+      .values({
+        patientId: data.patientId,
+        dentistId: data.dentistId ?? null,
+        productType: data.productType as any, // Enum handling
+        status: 'PROCESSING',
+        notes: data.notes,
+        startedAt: new Date(),
+      })
+      .returning({ id: cases.id });
+    return res;
+  }
+
+  // ==========================================
+  // 3. READ / QUERY METHODS (Type Safe)
+  // ==========================================
+
+  async findLatestCaseIdByCode(
+    code: string,
+    tx?: Transaction,
+  ): Promise<string | null> {
+    const db = this.getDb(tx);
+    // 1. Check if code is numeric Case ID
+    if (!isNaN(Number(code))) {
+      const caseById = await db.query.cases.findFirst({
+        where: eq(cases.id, Number(code)),
+        columns: { id: true },
+      });
+      if (caseById) return String(caseById.id);
+    }
+
+    // 2. Check if code is Patient Code
+    const result = await db
+      .select({ caseId: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(eq(patients.patientCode, code))
+      .orderBy(desc(cases.createdAt))
+      .limit(1);
+
+    return result.length > 0 ? String(result[0].caseId) : null;
+  }
+
+  async checkCaseBelongsToPatient(
+    caseId: string,
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<boolean> {
+    const db = this.getDb(tx);
+    if (isNaN(Number(caseId))) return false;
+    const result = await db
+      .select({ id: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(
+        and(
+          eq(cases.id, Number(caseId)),
+          eq(patients.patientCode, patientCode),
+        ),
+      )
+      .limit(1);
+    return result.length > 0;
+  }
+
+  // ✅ OPTIMIZED: Return specific DTO instead of any[]
+  async findCasesByPatientCode(
+    patientCode: string,
+    tx?: Transaction,
+  ): Promise<CaseHistoryDTO[]> {
+    const db = this.getDb(tx);
+    const rows = await db
+      .select({
+        caseId: cases.id,
+        status: cases.status,
+        createdAt: cases.createdAt,
+        notes: cases.notes,
+        productType: cases.productType,
+        doctorName: dentists.fullName,
+      })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+      .where(eq(patients.patientCode, patientCode))
+      .orderBy(desc(cases.createdAt));
+
+    return rows.map((row) => ({
+      caseId: row.caseId,
+      status: row.status,
+      createdAt: row.createdAt,
+      notes: row.notes,
+      productType: row.productType,
+      doctorName: row.doctorName,
+    }));
+  }
+
+  async getCaseDetails(
+    identifier: string,
+    isCaseId: boolean,
+    tx?: Transaction,
+  ): Promise<CaseDetailsDTO | null> {
+    const db = this.getDb(tx);
+    const selection = {
+      patientName: patients.fullName,
+      patientCode: patients.patientCode,
+      caseId: cases.id,
+      doctorName: dentists.fullName,
+      clinicName: clinics.name,
+      createdAt: cases.createdAt,
+    };
+
+    let queryBuilder;
+
+    if (isCaseId) {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(cases.id, Number(identifier)))
+        .limit(1);
+    } else {
+      queryBuilder = db
+        .select(selection)
+        .from(cases)
+        .innerJoin(patients, eq(cases.patientId, patients.id))
+        .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+        .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+        .where(eq(patients.patientCode, identifier))
+        .orderBy(desc(cases.createdAt))
+        .limit(1);
+    }
+
+    const result = await queryBuilder;
+    return result[0] ? (result[0] as unknown as CaseDetailsDTO) : null;
+  }
+
+  async findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null> {
+    const db = this.getDb(tx);
+    const result = await db.select().from(cases).where(eq(cases.id, id));
+    if (!result[0]) return null;
+
+    return {
+      id: result[0].id,
+      patientId: result[0].patientId,
+      status: result[0].status,
+      orderId: result[0].orderId,
+      createdAt: result[0].createdAt,
+    };
+  }
+
+  // ==========================================
+  // 4. MOVEMENT DATA & STEPS
+  // ==========================================
+
+  // ✅ OPTIMIZED: Strict type for teethData
+  async updateStepMovementData(
+    caseId: string,
+    stepIndex: number,
+    teethData: TeethMovementRecord,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    const cId = Number(caseId);
+
+    const existingStep = await db
+      .select({ id: treatmentSteps.id })
+      .from(treatmentSteps)
+      .where(
+        and(
+          eq(treatmentSteps.caseId, cId),
+          eq(treatmentSteps.stepIndex, stepIndex),
+        ),
+      )
+      .limit(1);
+
+    if (existingStep.length > 0) {
+      await db
+        .update(treatmentSteps)
+        .set({ teethData: teethData as any }) // Valid cast for JSONB column
+        .where(eq(treatmentSteps.id, existingStep[0].id));
+    } else {
+      await db.insert(treatmentSteps).values({
+        caseId: cId,
+        stepIndex: stepIndex,
+        teethData: teethData as any,
+      });
+    }
+  }
+
+  async deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
+  }
+
+  async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
+    const db = this.getDb(tx);
+    return await db
+      .select()
+      .from(treatmentSteps)
+      .where(eq(treatmentSteps.caseId, caseId))
+      .orderBy(asc(treatmentSteps.stepIndex));
+  }
+
+  // Giữ lại empty method để thỏa mãn Interface nếu chưa xóa ở Interface
+  async saveSteps(
+    caseId: number,
+    steps: any[],
+    tx?: Transaction,
+  ): Promise<void> {
+    // Deprecated or Not Implemented
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/persistence/mappers/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/persistence/schema/.gitkeep
+```
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/persistence/schema/cases.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  jsonb,
+  date,
+  boolean,
+  index,
+  pgEnum,
+  numeric,
+  bigint,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+// FIX: Import cross-modules (Sử dụng Alias @database/schema để tránh đường dẫn relative dài dòng)
+// Bạn cần đảm bảo trong tsconfig.json đã cấu hình paths: { "@database/*": ["src/database/*"] }
+import { users } from '@database/schema/users.schema';
+import * as schema from '@database/schema';
+import { dentists, patients } from '@database/schema'; // Fallback cho các bảng khác
+
+export const productTypeEnum = pgEnum('product_type', ['retainer', 'aligner']);
+
+export const jawTypeEnum = pgEnum('jaw_type', ['Upper', 'Lower']);
+
+export const cases = pgTable('cases', {
+  id: serial('id').primaryKey(),
+  orderId: text('order_id').unique(), // ORD-2510...
+
+  patientId: integer('patient_id')
+    .references(() => schema.patients.id)
+    .notNull(),
+  dentistId: integer('dentist_id').references(() => dentists.id),
+
+  productType: productTypeEnum('product_type').notNull(),
+  status: text('status').default('PLANNING'),
+
+  notes: text('notes'),
+  price: numeric('price', { precision: 12, scale: 2 }),
+
+  scanDate: timestamp('scan_date'),
+  dateDue: timestamp('date_due'),
+  startedAt: timestamp('started_at'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const treatmentSteps = pgTable(
+  'treatment_steps',
+  {
+    id: serial('id').primaryKey(),
+    caseId: integer('case_id')
+      .references(() => cases.id)
+      .notNull(),
+    stepIndex: integer('step_index').notNull(), // 0, 1, 2...
+
+    // JSONB chứa toàn bộ thông số di chuyển (Torque, Angulation...)
+    teethData: jsonb('teeth_data').notNull(),
+
+    hasIpr: boolean('has_ipr').default(false),
+    hasAttachments: boolean('has_attachments').default(false),
+
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    caseStepIdx: index('idx_case_step').on(table.caseId, table.stepIndex),
+  }),
+);
+
+export const casesRelations = relations(cases, ({ one, many }) => ({
+  patient: one(patients, {
+    fields: [cases.patientId],
+    references: [patients.id],
+  }),
+  dentist: one(dentists, {
+    fields: [cases.dentistId],
+    references: [dentists.id],
+  }),
+  steps: many(treatmentSteps),
+}));
+
+export const treatmentStepsRelations = relations(treatmentSteps, ({ one }) => ({
+  case: one(cases, { fields: [treatmentSteps.caseId], references: [cases.id] }),
+}));
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/workers/piscina.provider.ts
+```
+import { Provider, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as path from 'path';
+import * as fs from 'fs';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-assignment
+const Piscina = require('piscina');
+
+export const PISCINA_POOL = 'PISCINA_POOL';
+
+export const PiscinaProvider: Provider = {
+  provide: PISCINA_POOL,
+  useFactory: (config: ConfigService) => {
+    const logger = new Logger('PiscinaProvider');
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    const projectRoot = process.cwd();
+
+    const workerRelativePath =
+      'src/modules/dental-treatment/infrastructure/workers/conversion.worker';
+
+    let workerPath: string;
+
+    if (isProduction) {
+      const prodPath1 = path.join(
+        projectRoot,
+        'dist',
+        workerRelativePath + '.js',
+      );
+      const prodPath2 = path.join(
+        projectRoot,
+        'dist',
+        workerRelativePath.replace('src/', '') + '.js',
+      );
+
+      if (fs.existsSync(prodPath1)) {
+        workerPath = prodPath1;
+      } else if (fs.existsSync(prodPath2)) {
+        workerPath = prodPath2;
+      } else {
+        workerPath = path.join(__dirname, 'conversion.worker.js');
+      }
+    } else {
+      workerPath = path.join(projectRoot, workerRelativePath + '.ts');
+    }
+
+    if (!fs.existsSync(workerPath)) {
+      logger.error(
+        `CRITICAL: Worker file not found at calculated path: ${workerPath}`,
+      );
+      const dirContent = fs.readdirSync(__dirname).join(', ');
+      logger.error(`Dirname content: [${dirContent}]`);
+      throw new Error(`Worker file not found: ${workerPath}`);
+    }
+
+    logger.log(`🏊 Initializing Piscina with worker: ${workerPath}`);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return
+    return new Piscina({
+      filename: workerPath,
+      minThreads: config.get<number>('dental.minThreads') || 0,
+      maxThreads: config.get<number>('dental.maxThreads') || 4,
+      execArgv: workerPath.endsWith('.ts') ? ['-r', 'ts-node/register'] : [],
+    });
+  },
+  inject: [ConfigService],
+};
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/workers/conversion.worker.ts
+```
+import * as path from 'path';
+import * as fs from 'fs-extra';
+import { spawn } from 'child_process';
+import * as crypto from 'crypto';
+
+// ==========================================
+// 1. CONSTANTS & CONFIG
+// ==========================================
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
+
+// ==========================================
+// 2. CUSTOM EXCEPTIONS
+// ==========================================
+export class WorkerBaseError extends Error {
+  constructor(
+    message: string,
+    public readonly originalError?: unknown,
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    if (originalError instanceof Error) {
+      this.stack += `\nCaused by: ${originalError.stack}`;
+    }
+  }
+}
+export class FileSystemError extends WorkerBaseError {}
+export class ConversionProcessError extends WorkerBaseError {}
+export class EncryptionError extends WorkerBaseError {}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error as any);
+}
+
+// ==========================================
+// 3. INTERFACES (Imported or Re-defined)
+// ==========================================
+// Lưu ý: Trong Worker thread độc lập, tốt nhất là define lại interface hoặc import từ file shared không phụ thuộc NestJS
+export interface ConversionBinaries {
+  obj2gltf: string;
+  gltfPipeline: string;
+  gltfTransform: string;
+}
+
+export interface ConversionTask {
+  objFilePath: string;
+  outputDir: string;
+  baseName: string;
+  encryptionKey: string;
+  config: {
+    ratio: number;
+    threshold: number;
+    timeout: number;
+  };
+  // ✅ Nhận binaries từ Main Thread
+  binaries: ConversionBinaries;
+}
+
+export interface WorkerResult {
+  success: boolean;
+  path: string;
+}
+
+// ==========================================
+// 4. HELPER FUNCTIONS
+// ==========================================
+
+async function runCommand(
+  scriptPath: string,
+  args: string[],
+  timeout: number,
+): Promise<void> {
+  // ✅ Validate script existence before running
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Binary not found at path: ${scriptPath}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
+      stdio: 'inherit',
+      timeout,
+      env: process.env,
+    });
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new ConversionProcessError(
+            `Command ${path.basename(scriptPath)} failed with code ${code}`,
+          ),
+        );
+    });
+    child.on('error', (err) =>
+      reject(new ConversionProcessError(err.message, err)),
+    );
+  });
+}
+
+async function encryptFileBuffer(
+  inputPath: string,
+  outputPath: string,
+  keyHex: string,
+): Promise<void> {
+  try {
+    const stats = await fs.stat(inputPath);
+    if (stats.size === 0) {
+      throw new Error(
+        `Input file for encryption is empty (0 bytes): ${inputPath}`,
+      );
+    }
+    console.log(
+      `🔒 Encrypting file: ${path.basename(inputPath)} (${stats.size} bytes)`,
+    );
+
+    const fileData = await fs.readFile(inputPath);
+    const key = Buffer.from(keyHex);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+
+    const encryptedContent = Buffer.concat([
+      cipher.update(fileData),
+      cipher.final(),
+    ]);
+    const authTag = cipher.getAuthTag();
+    const finalBuffer = Buffer.concat([iv, encryptedContent, authTag]);
+
+    await fs.writeFile(outputPath, finalBuffer);
+    console.log(`✅ Encrypted success: ${path.basename(outputPath)}`);
+  } catch (error: unknown) {
+    throw new EncryptionError(
+      `Encryption failed: ${getErrorMessage(error)}`,
+      error,
+    );
+  }
+}
+
+// ==========================================
+// 5. MAIN LOGIC
+// ==========================================
+
+async function convertAndEncrypt(task: ConversionTask): Promise<WorkerResult> {
+  const { objFilePath, outputDir, baseName, encryptionKey, config, binaries } =
+    task;
+  const tempDir = path.dirname(objFilePath);
+
+  const paths = {
+    initialGlb: path.join(tempDir, `${baseName}.initial.glb`),
+    simplifiedGlb: path.join(tempDir, `${baseName}.simplified.glb`),
+    optimizedGlb: path.join(tempDir, `${baseName}.optimized.glb`),
+    finalEncrypted: path.join(outputDir, `${baseName}.optimized.glb.enc`),
+  };
+
+  const tempFiles = [paths.initialGlb, paths.simplifiedGlb, paths.optimizedGlb];
+
+  try {
+    console.log(`\n🚀 START WORKER: ${baseName}`);
+    if (!fs.existsSync(objFilePath))
+      throw new FileSystemError(`Input file missing: ${objFilePath}`);
+
+    // Step 1: OBJ -> GLB
+    await runCommand(
+      binaries.obj2gltf,
+      ['-i', objFilePath, '-o', paths.initialGlb, '--binary'],
+      config.timeout,
+    );
+
+    // Step 2: Simplify
+    await runCommand(
+      binaries.gltfTransform,
+      [
+        'simplify',
+        paths.initialGlb,
+        paths.simplifiedGlb,
+        '--ratio',
+        config.ratio.toString(),
+        '--error',
+        config.threshold.toString(),
+      ],
+      config.timeout,
+    );
+
+    // Step 3: Optimize
+    await runCommand(
+      binaries.gltfPipeline,
+      [
+        '-i',
+        paths.simplifiedGlb,
+        '-o',
+        paths.optimizedGlb,
+        '--draco.compressionLevel=7',
+      ],
+      config.timeout,
+    );
+
+    // Step 4: Encrypt
+    await fs.ensureDir(outputDir);
+
+    if (!fs.existsSync(paths.optimizedGlb)) {
+      throw new Error(
+        `Optimization step succeeded but file not found: ${paths.optimizedGlb}`,
+      );
+    }
+
+    await encryptFileBuffer(
+      paths.optimizedGlb,
+      paths.finalEncrypted,
+      encryptionKey,
+    );
+
+    return { success: true, path: paths.finalEncrypted };
+  } catch (error: unknown) {
+    console.error(`❌ WORKER FAILED [${baseName}]:`, getErrorMessage(error));
+    throw error;
+  } finally {
+    // Cleanup temp files
+    await Promise.all(tempFiles.map((f) => fs.remove(f).catch(() => {})));
+  }
+}
+
+export default convertAndEncrypt;
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/gateways/dental.gateway.ts
+```
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  SubscribeMessage,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Logger } from '@nestjs/common';
+
+@WebSocketGateway({
+  namespace: 'dental',
+  cors: { origin: '*' },
+})
+export class DentalGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer()
+  server: Server;
+
+  private logger = new Logger(DentalGateway.name);
+
+  handleConnection(client: Socket) {
+    this.logger.log(`Client connected: ${client.id}`);
+  }
+
+  handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+  }
+
+  @SubscribeMessage('join_case')
+  handleJoinCase(
+    @MessageBody() data: { caseId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const roomName = `case_${data.caseId}`;
+    client.join(roomName);
+    this.logger.log(`Client ${client.id} joined room: ${roomName}`);
+    return { event: 'joined', data: `Joined case ${data.caseId}` };
+  }
+
+  notifyProgress(caseId: string, data: any) {
+    this.server.to(`case_${caseId}`).emit('conversion_progress', data);
+  }
+
+  notifyComplete(caseId: string, data: any) {
+    this.server.to(`case_${caseId}`).emit('case_ready', data);
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/adapters/fs-dental-storage.adapter.ts
+```
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment,@typescript-eslint/no-require-imports
+const AdmZip = require('adm-zip');
+import { IDentalStorage } from '../../domain/ports/dental-storage.port';
+
+@Injectable()
+export class FileSystemDentalStorage implements IDentalStorage {
+  private readonly _uploadDir: string;
+  private readonly _outputDir: string;
+
+  constructor(private readonly config: ConfigService) {
+    const rawUploadDir = this.config.get('dental.uploadDir');
+    const rawOutputDir = this.config.get('dental.outputDir');
+
+    if (!rawUploadDir || !rawOutputDir) {
+      throw new Error('Dental Config Missing (uploadDir or outputDir)');
+    }
+
+    this._uploadDir = path.resolve(rawUploadDir);
+    this._outputDir = path.resolve(rawOutputDir);
+  }
+
+  // --- Getters ---
+  get uploadDir(): string {
+    return this._uploadDir;
+  }
+
+  get outputDir(): string {
+    return this._outputDir;
+  }
+
+  // --- Path Utils ---
+  joinPath(...segments: string[]): string {
+    return path.join(...segments);
+  }
+
+  resolvePath(...segments: string[]): string {
+    return path.resolve(...segments);
+  }
+
+  getBasename(p: string, ext?: string): string {
+    return path.basename(p, ext);
+  }
+
+  getDirname(p: string): string {
+    return path.dirname(p);
+  }
+
+  getRelativePath(from: string, to: string): string {
+    const rel = path.relative(from, to);
+    // Chuẩn hóa path separator thành '/' để dùng cho URL
+    return rel.split(path.sep).join('/');
+  }
+
+  // --- File Ops ---
+  ensureDirectories(): void {
+    fs.ensureDirSync(this._uploadDir);
+    fs.ensureDirSync(this._outputDir);
+  }
+
+  async readFile(filePath: string): Promise<Buffer> {
+    return fs.readFile(filePath);
+  }
+
+  async exists(filePath: string): Promise<boolean> {
+    return fs.pathExists(filePath);
+  }
+
+  async remove(filePath: string): Promise<void> {
+    // fs-extra remove handles both file and dir, and doesn't throw if missing
+    await fs.remove(filePath).catch(() => {});
+  }
+
+  async extractZip(zipPath: string, extractPath: string): Promise<void> {
+    // AdmZip is sync mostly, wrapped in Promise for interface consistency
+    return new Promise((resolve, reject) => {
+      try {
+        const zip = new AdmZip(zipPath);
+        zip.extractAllTo(extractPath, true);
+        resolve();
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  async findFilesRecursively(dir: string, ext: string): Promise<string[]> {
+    let results: string[] = [];
+    if (!(await fs.pathExists(dir))) return results;
+
+    const list = await fs.readdir(dir);
+    for (const file of list) {
+      const fullPath = path.resolve(dir, file);
+      const stat = await fs.stat(fullPath);
+      if (stat.isDirectory()) {
+        results = results.concat(
+          await this.findFilesRecursively(fullPath, ext),
+        );
+      } else if (file.toLowerCase().endsWith(ext.toLowerCase())) {
+        results.push(fullPath);
+      }
+    }
+    return results;
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/infrastructure/adapters/piscina-worker.adapter.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import Piscina from 'piscina';
+import {
+  IDentalWorker,
+  ConversionJob,
+  WorkerResult,
+} from '../../domain/ports/dental-worker.port';
+import { PISCINA_POOL } from '../workers/piscina.provider';
+
+@Injectable()
+export class PiscinaDentalWorker implements IDentalWorker {
+  constructor(@Inject(PISCINA_POOL) private readonly pool: Piscina) {}
+
+  async runTask(task: ConversionJob): Promise<WorkerResult> {
+    return this.pool.run(task);
+  }
+}
+
+```
+
+## File: src/modules/dental-treatment/dental-treatment.module.ts
+```
+import { Module } from '@nestjs/common';
+
+@Module({
+  imports: [],
+  controllers: [],
+  providers: [],
+  exports: [],
+})
+export class DentalTreatmentModule {}
 
 ```
 
@@ -6464,7 +10007,15 @@ export * from './users.schema';
 export * from './sessions.schema';
 export * from './rbac.schema';
 export * from './notifications.schema';
-export * from './ortho.schema';
+
+// Organization Module
+export * from '../../modules/organization/infrastructure/persistence/schema/clinics.schema';
+// Medical Staff Module
+export * from '../../modules/medical-staff/infrastructure/persistence/schema/dentists.schema';
+// Patient Module
+export * from '../../modules/patient/infrastructure/persistence/schema/patients.schema';
+// Dental Treatment Module
+export * from '../../modules/dental-treatment/infrastructure/persistence/schema/cases.schema';
 
 ```
 
@@ -6664,7 +10215,7 @@ export const notifications = pgTable('notifications', {
 
 ```
 
-## File: src/database/schema/ortho.schema.ts
+## File: src/database/schema/ortho.schema.old.ts
 ```
 import {
   pgTable,
