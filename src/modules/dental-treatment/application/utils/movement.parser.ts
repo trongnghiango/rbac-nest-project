@@ -6,14 +6,14 @@ import { BadRequestException } from '@nestjs/common';
 // 1. DATA STRUCTURES
 // ==========================================
 export interface ToothMoveData {
-  rotation: number; // Rotation (deg)
-  angulation: number; // Angulation / Tip (deg)
-  inclination: number; // Inclination / Torque (deg)
-  translationX: number; // Left/ Right (mm)
-  translationY: number; // Forward/ Backward (mm)
-  translationZ: number; // Extrusion/ Intrusion (mm)
-  iprMesial: number; // IPR (mm)
-  iprDistal: number; // IPR (mm)
+  rotation: number;
+  angulation: number;
+  inclination: number;
+  translationX: number;
+  translationY: number;
+  translationZ: number;
+  iprMesial: number;
+  iprDistal: number;
 }
 
 export type ParsedMovementMap = Map<number, Record<string, ToothMoveData>>;
@@ -60,13 +60,14 @@ function mapRowToData(rowData: any): ToothMoveData {
     ),
     translationY: cleanValue(
       rowData['translationy'] ||
-        rowData['transy'] ||
-        rowData['forwardbackward'],
+      rowData['transy'] ||
+      rowData['forwardbackward'],
     ),
     translationZ: cleanValue(
       rowData['extrusion'] ||
-        rowData['translationz'] ||
-        rowData['extrusionintrusion'],
+      rowData['translationz'] ||
+      rowData['extrusionintrusion'] ||
+      rowData['extrusionintrusioni'] // Fix cho trường hợp gộp text
     ),
     iprMesial: cleanValue(rowData['iprmesial']),
     iprDistal: cleanValue(rowData['iprdistal']),
@@ -81,6 +82,7 @@ function mapRowToData(rowData: any): ToothMoveData {
  * STRATEGY 1: Parse CSV/Excel phẳng (Flat Format)
  */
 function parseFlatFormat(jsonData: any[]): ParsedMovementMap {
+  console.log(`[Parser] Strategy: Flat CSV/Excel. Rows: ${jsonData.length}`);
   const stepsMap: ParsedMovementMap = new Map();
 
   jsonData.forEach((row) => {
@@ -109,6 +111,7 @@ function parseFlatFormat(jsonData: any[]): ParsedMovementMap {
  * STRATEGY 2: Parse Excel Report (Nhiều bảng con trong 1 sheet)
  */
 function parseExcelReportFormat(sheet: XLSX.WorkSheet): ParsedMovementMap {
+  console.log(`[Parser] Strategy: Excel Report`);
   const stepsMap: ParsedMovementMap = new Map();
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
 
@@ -159,24 +162,43 @@ function parseExcelReportFormat(sheet: XLSX.WorkSheet): ParsedMovementMap {
  * STRATEGY 3: Parse HTML Report (Sử dụng Cheerio)
  */
 function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
+  console.log(`[Parser] Strategy: HTML (Cheerio). Content length: ${htmlContent.length}`);
   const $ = cheerio.load(htmlContent);
   const stepsMap: ParsedMovementMap = new Map();
 
+  let tableCount = 0;
+
   // Tìm tất cả các bảng OrthoAutoTable
   $('table.OrthoAutoTable').each((tableIndex, tableElement) => {
+    tableCount++;
     // Logic: Giả định bảng xuất hiện tuần tự là Step 1, Step 2...
-    let stepIndex = tableIndex + 1;
+    let stepIndex = 0;
 
-    // Cố gắng tìm text Step trong caption hoặc div cha nếu có
+    // Tìm caption
     const captionText =
       $(tableElement).find('caption').text() ||
       $(tableElement).prev().text() ||
       $(tableElement).parent().prev().text();
 
+    console.log(`[Parser] Found Table #${tableIndex}. Caption: "${captionText}"`);
+
     const stepMatch = captionText.match(/(?:subsetup|stage|step)\s*(\d+)/i);
     if (stepMatch) {
       stepIndex = parseInt(stepMatch[1], 10);
+    } else {
+      // Fallback nếu không tìm thấy số step trong caption (vd: "FINAL")
+      // Bỏ qua các bảng không phải movement data (vd: Tooth Width Analysis)
+      const headerText = $(tableElement).text().toLowerCase();
+      if(!headerText.includes("rotation") && !headerText.includes("angulation")) {
+        return; // Skip bảng không phải movement
+      }
+      // Nếu là bảng FINAL ở cuối mà không có số -> Gán ID lớn
+      if (captionText.toUpperCase().includes("FINAL")) {
+        stepIndex = 999;
+      }
     }
+
+    if (stepIndex === 0) return; // Skip nếu không xác định được step
 
     if (!stepsMap.has(stepIndex)) stepsMap.set(stepIndex, {});
     const stepData = stepsMap.get(stepIndex)!;
@@ -184,16 +206,16 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
     // Parse Headers
     const headers: string[] = [];
     $(tableElement)
-      .find('tbody tr')
+      .find('tr') // Tìm tất cả row, row đầu tiên thường là header
       .eq(0)
-      .find('td')
+      .find('td, th')
       .each((_, cell) => {
         headers.push(normalizeHeader($(cell).text()));
       });
 
     // Parse Data Rows
     $(tableElement)
-      .find('tbody tr')
+      .find('tr')
       .slice(1)
       .each((_, row) => {
         const cells = $(row).find('td');
@@ -206,6 +228,7 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
           }
         });
 
+        // Tìm cột Tooth Number
         const toothVal = cleanValue(rowData['toothnumber'] || rowData['tooth']);
         if (!toothVal) return;
 
@@ -214,6 +237,7 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
       });
   });
 
+  console.log(`[Parser] HTML Parse complete. Found ${stepsMap.size} steps from ${tableCount} tables.`);
   return stepsMap;
 }
 
@@ -232,24 +256,27 @@ export const parseMovementData = (
 
     const contentStr = buffer.toString('utf-8').trim();
 
-    // 1. Detect HTML
-    if (
-      contentStr.startsWith('<') &&
-      (contentStr.includes('<html') || contentStr.includes('<!DOCTYPE'))
-    ) {
+    // ✅ FIX: Logic nhận diện HTML lỏng hơn để chấp nhận file thiếu <html> hoặc <!DOCTYPE>
+    const isHtml =
+      contentStr.includes('<table') ||
+      contentStr.includes('<head') ||
+      contentStr.includes('<body') ||
+      (contentStr.startsWith('<') && contentStr.includes('OrthoSheet')); // Class đặc thù trong file của bạn
+
+    if (isHtml) {
       return parseHtmlFormat(contentStr);
     }
 
     // 2. Detect Excel / CSV
+    console.log(`[Parser] Detecting as Excel/CSV...`);
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
 
-    // Check Flat vs Report format
-    // FIX: Removed 'limit: 1' as it is not a valid option in Sheet2JSONOpts
     const firstRow: any[] = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       range: 0,
     })[0] as any[];
+
     const isFlat =
       firstRow &&
       firstRow.some((cell) => normalizeHeader(String(cell)) === 'step');
@@ -261,6 +288,7 @@ export const parseMovementData = (
       return parseExcelReportFormat(sheet);
     }
   } catch (error: any) {
+    console.error(`[Parser Error]`, error);
     throw new BadRequestException(
       'Failed to parse movement data: ' + error.message,
     );
