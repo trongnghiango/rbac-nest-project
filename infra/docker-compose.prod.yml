@@ -1,25 +1,24 @@
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: rbac_postgres_prod
+    container_name: dental_postgres_prod
     restart: always
     env_file:
       - ../.env.production
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-rbac_system}
+      POSTGRES_DB: ${DB_NAME:-dental_system}
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
     networks:
-      - rbac_prod_net
+      - dental_prod_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-dental_system}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s # Cho phép DB khởi động chậm chút
-    # Limit resource cho DB để tránh ăn hết RAM server
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -28,10 +27,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: rbac_redis_prod
+    container_name: dental_redis_prod
     restart: always
     networks:
-      - rbac_prod_net
+      - dental_prod_net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -46,7 +45,7 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
-    container_name: rbac_api_prod
+    container_name: dental_api_prod
     restart: always
     depends_on:
       postgres:
@@ -60,7 +59,6 @@ services:
       - REDIS_HOST=redis
       - RUN_MIGRATIONS=true
       - NODE_ENV=production
-      # Tối ưu Garbage Collection cho Node trong container (đặt thấp hơn limit Docker)
       - NODE_OPTIONS=--max-old-space-size=1536
     volumes:
       - dental_data:/app/uploads
@@ -68,18 +66,26 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - rbac_prod_net
+      - dental_prod_net
+      - lvt_tunnel_net
     deploy:
       resources:
         limits:
-          cpus: '2.0' # Cần CPU cho worker 3D
-          memory: 2G  # Cần RAM cho xử lý file lớn
+          cpus: '2.0'
+          memory: 2G
 
 networks:
-  rbac_prod_net:
+  dental_prod_net:
     driver: bridge
+
+  lvt_tunnel_net:
+    # SỬ DỤNG BIẾN MÔI TRƯỜNG TẠI ĐÂY
+    # Nếu không tìm thấy biến, nó sẽ báo lỗi hoặc bạn có thể set default (không khuyến khích nếu ID thay đổi)
+    name: ${EXTERNAL_NETWORK_NAME} 
+    external: true
 
 volumes:
   pgdata_prod:
   dental_data:
   api_logs:
+  
