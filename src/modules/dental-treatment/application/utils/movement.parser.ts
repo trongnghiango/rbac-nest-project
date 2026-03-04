@@ -167,14 +167,14 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
   const stepsMap: ParsedMovementMap = new Map();
 
   let tableCount = 0;
+  // 👇 Biến theo dõi step lớn nhất đã tìm thấy (để dùng cho bảng FINAL)
+  let maxStepSeen = 0; 
 
   // Tìm tất cả các bảng OrthoAutoTable
   $('table.OrthoAutoTable').each((tableIndex, tableElement) => {
     tableCount++;
-    // Logic: Giả định bảng xuất hiện tuần tự là Step 1, Step 2...
-    let stepIndex = 0;
-
-    // Tìm caption
+    
+    // Tìm caption của bảng
     const captionText =
       $(tableElement).find('caption').text() ||
       $(tableElement).prev().text() ||
@@ -182,31 +182,48 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
 
     console.log(`[Parser] Found Table #${tableIndex}. Caption: "${captionText}"`);
 
+    let stepIndex = 0;
+
+    // 1. Thử tìm số step trong caption (VD: "Stage 10", "Step 5")
     const stepMatch = captionText.match(/(?:subsetup|stage|step)\s*(\d+)/i);
+    
     if (stepMatch) {
       stepIndex = parseInt(stepMatch[1], 10);
-    } else {
-      // Fallback nếu không tìm thấy số step trong caption (vd: "FINAL")
-      // Bỏ qua các bảng không phải movement data (vd: Tooth Width Analysis)
-      const headerText = $(tableElement).text().toLowerCase();
-      if(!headerText.includes("rotation") && !headerText.includes("angulation")) {
-        return; // Skip bảng không phải movement
+      
+      // Cập nhật maxStepSeen nếu tìm thấy step mới lớn hơn
+      if (stepIndex > maxStepSeen) {
+        maxStepSeen = stepIndex;
       }
-      // Nếu là bảng FINAL ở cuối mà không có số -> Gán ID lớn
-      if (captionText.toUpperCase().includes("FINAL")) {
-        stepIndex = 999;
+    } else {
+      // 2. Logic xử lý bảng "FINAL"
+      // Điều kiện: Có chữ FINAL + KHÔNG chứa bất kỳ chữ số nào (\d)
+      const isFinalNoNumber = 
+        captionText.toUpperCase().includes("FINAL") && 
+        !/\d/.test(captionText);
+
+      if (isFinalNoNumber) {
+        // Gán stepIndex bằng với step lớn nhất hiện tại (step cuối cùng của aligner)
+        stepIndex = maxStepSeen;
+        console.log(`[Parser] Detected 'FINAL' table with no number. Assigning to Step ${stepIndex}`);
+      } else {
+        // Fallback: Skip bảng không xác định hoặc bảng không phải movement
+        const headerText = $(tableElement).text().toLowerCase();
+        if(!headerText.includes("rotation") && !headerText.includes("angulation")) {
+          return; // Skip
+        }
       }
     }
 
-    if (stepIndex === 0) return; // Skip nếu không xác định được step
+    if (stepIndex === 0) return; // Skip nếu không xác định được step hoặc step = 0
 
+    // Khởi tạo object trong Map nếu chưa có
     if (!stepsMap.has(stepIndex)) stepsMap.set(stepIndex, {});
     const stepData = stepsMap.get(stepIndex)!;
 
     // Parse Headers
     const headers: string[] = [];
     $(tableElement)
-      .find('tr') // Tìm tất cả row, row đầu tiên thường là header
+      .find('tr') 
       .eq(0)
       .find('td, th')
       .each((_, cell) => {
@@ -216,7 +233,7 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
     // Parse Data Rows
     $(tableElement)
       .find('tr')
-      .slice(1)
+      .slice(1) // Bỏ qua row header
       .each((_, row) => {
         const cells = $(row).find('td');
         const rowData: any = {};
@@ -233,6 +250,8 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
         if (!toothVal) return;
 
         const tooth = String(toothVal);
+        
+        // Lưu dữ liệu (Gộp vào dữ liệu cũ nếu stepIndex này đã tồn tại - trường hợp FINAL trùng step cuối)
         stepData[tooth] = mapRowToData(rowData);
       });
   });
@@ -240,6 +259,7 @@ function parseHtmlFormat(htmlContent: string): ParsedMovementMap {
   console.log(`[Parser] HTML Parse complete. Found ${stepsMap.size} steps from ${tableCount} tables.`);
   return stepsMap;
 }
+
 
 // ==========================================
 // 4. MAIN EXPORT

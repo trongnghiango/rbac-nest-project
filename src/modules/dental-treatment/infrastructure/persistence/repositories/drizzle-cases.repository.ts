@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { eq, desc, and, asc } from 'drizzle-orm';
+import { eq, desc, and, asc, sql } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import {
   IOrthoRepository,
@@ -21,6 +21,7 @@ import {
 } from '@database/schema';
 
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { ParsedMovementMap } from '@modules/dental-treatment/application/utils/movement.parser';
 
 @Injectable()
 export class DrizzleOrthoRepository
@@ -246,12 +247,36 @@ export class DrizzleOrthoRepository
       .orderBy(asc(treatmentSteps.stepIndex));
   }
 
-  // 👇 ĐÃ SỬA LỖI Ở ĐÂY: Thêm 'async saveSteps('
   async saveSteps(
     caseId: number,
-    steps: any[],
+    stepsMap: ParsedMovementMap,
     tx?: Transaction,
   ): Promise<void> {
-    // Deprecated or Not Implemented
+    const db = this.getDb(tx);
+
+    if (stepsMap.size === 0) return;
+
+    // 1. Convert Map to Array for Batch Insert
+    const valuesToInsert = Array.from(stepsMap.entries()).map(
+      ([stepIndex, data]) => ({
+        caseId: caseId,
+        stepIndex: stepIndex,
+        teethData: data as any, // Cast JSONB
+        // Mặc định false, có thể update logic parse để lấy thông tin này nếu HTML có
+        hasIpr: false, 
+        hasAttachments: false,
+      }),
+    );
+
+    // 2. Bulk Upsert (Insert nếu chưa có, Update nếu trùng caseId + stepIndex)
+    await db
+      .insert(treatmentSteps)
+      .values(valuesToInsert)
+      .onConflictDoUpdate({
+        target: [treatmentSteps.caseId, treatmentSteps.stepIndex], // Dựa vào Unique Index đã tạo ở step 1
+        set: {
+          teethData: sql`EXCLUDED.teeth_data`, // Cập nhật dữ liệu mới
+        },
+      });
   }
 }

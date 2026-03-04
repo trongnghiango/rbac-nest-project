@@ -35,6 +35,7 @@ import { DentistService } from '@modules/medical-staff/domain/services/dentist.s
 // Infra Workers
 import { PISCINA_POOL } from '../../infrastructure/workers/piscina.provider';
 import { DentalGateway } from '../../infrastructure/gateways/dental.gateway';
+import { parseMovementData } from '../utils/movement.parser';
 
 @Injectable()
 export class UploadCaseUseCase {
@@ -146,6 +147,46 @@ export class UploadCaseUseCase {
       throw new BadRequestException('Invalid Zip File: ' + e.message);
     }
 
+    // ============================================================
+    // 👉 NEW LOGIC: PROCESS HTML MOVEMENT DATA (SYNC)
+    // ============================================================
+    try {
+      // Tìm file .html hoặc .htm
+      const htmlFiles = await this.storage.findFilesRecursively(extractPath, '.html');
+      // Nếu không thấy .html, thử tìm .htm
+      if (htmlFiles.length === 0) {
+        const htmFiles = await this.storage.findFilesRecursively(extractPath, '.htm');
+        htmlFiles.push(...htmFiles);
+      }
+
+      if (htmlFiles.length > 0) {
+        // Lấy file đầu tiên tìm được (thường là report)
+        const reportPath = htmlFiles[0];
+        this.logger.info(`📄 Found movement report: ${this.storage.getBasename(reportPath)}`);
+        
+        const reportBuffer = await this.storage.readFile(reportPath);
+        
+        // Parse dữ liệu
+        const movementMap = parseMovementData(reportBuffer, this.storage.getBasename(reportPath));
+        
+        // Lưu vào DB (Bulk Upsert)
+        await this.caseRepo.saveSteps(Number(caseId), movementMap);
+        
+        this.logger.info(`✅ Updated movement data for Case ${caseId}: ${movementMap.size} steps.`);
+      } else {
+        this.logger.warn(`⚠️ No HTML report found for Case ${caseId}. Skipping movement data update.`);
+      }
+    } catch (error) {
+      // ⚠️ Quan trọng: Lỗi parse HTML không nên chặn luồng xử lý 3D Model chính
+      // Chỉ log error và tiếp tục
+      this.logger.error(`❌ Failed to process HTML report for Case ${caseId}`, error);
+    }
+
+    // ============================================================
+    // 👉 END NEW LOGIC
+    // ============================================================
+
+    // 4. Processing 3D Models (Queueing Tasks)
     const objFiles = await this.storage.findFilesRecursively(
       extractPath,
       '.obj',
@@ -197,6 +238,7 @@ export class UploadCaseUseCase {
       message: 'Processing started',
       caseId,
       stepCount: tasks.length / 2,
+      movementDataUpdated: true, 
       status: 'PROCESSING',
     };
   }

@@ -7,7 +7,7 @@ import {
   jsonb,
   date,
   boolean,
-  index,
+  uniqueIndex,
   pgEnum,
   numeric,
   bigint,
@@ -64,7 +64,8 @@ export const treatmentSteps = pgTable(
     createdAt: timestamp('created_at').defaultNow(),
   },
   (table) => ({
-    caseStepIdx: index('idx_case_step').on(table.caseId, table.stepIndex),
+    // caseStepIdx: index('idx_case_step').on(table.caseId, table.stepIndex),
+    unqCaseStep: uniqueIndex('unq_case_step').on(table.caseId, table.stepIndex),
   }),
 );
 

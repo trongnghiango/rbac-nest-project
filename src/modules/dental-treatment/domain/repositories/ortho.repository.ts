@@ -1,5 +1,6 @@
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 import { CaseHistoryDTO, TeethMovementRecord } from '../types/dental.types';
+import { ParsedMovementMap } from '@modules/dental-treatment/application/utils/movement.parser';
 
 // ==========================================
 // 1. DATA TYPES (ENTITIES & DTOs)
@@ -84,5 +85,6 @@ export interface IOrthoRepository {
 
   deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
 
-  saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+  // saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
+  saveSteps(caseId: number, steps: ParsedMovementMap, tx?: Transaction): Promise<void>;
 }
