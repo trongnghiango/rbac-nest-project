@@ -1,20 +1,12 @@
-import { Module, OnModuleInit } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { UserModule } from '../user/user.module';
-import { RbacModule } from '../rbac/rbac.module'; // Import RBAC
+import { RbacModule } from '../rbac/rbac.module'; 
 import { DatabaseSeeder } from './seeders/database.seeder';
 import { TestController } from './controllers/test.controller';
 
 @Module({
-  imports: [
-    UserModule,
-    RbacModule, // <--- QUAN TRỌNG: Cần thiết cho PermissionGuard
-  ],
+  imports: [UserModule, RbacModule],
   controllers: [TestController],
   providers: [DatabaseSeeder],
 })
-export class TestModule implements OnModuleInit {
-  constructor(private s: DatabaseSeeder) {}
-  async onModuleInit() {
-    await this.s.onModuleInit();
-  }
-}
+export class TestModule {} 
