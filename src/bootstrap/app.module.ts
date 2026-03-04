@@ -28,7 +28,7 @@ import { DentalModule } from '@modules/dental/dental.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`, 
       load: [
         databaseConfig,
         appConfig,
