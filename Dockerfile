@@ -1,24 +1,29 @@
-FROM node:18-alpine
+FROM node:22-bookworm-slim
 
-# Cài đặt bash để có thể chui vào container debug nếu cần
-RUN apk add --no-cache bash
+# Cài đặt công cụ hệ thống
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/app
+WORKDIR /app
 
-# Copy package files trước để tận dụng cache layer của Docker
 COPY package*.json ./
 
-# Cài đặt dependencies
+# Cài đặt toàn bộ dependencies bao gồm cả devDependencies (để có drizzle-kit)
 RUN npm install
 
-# Copy toàn bộ source code
 COPY . .
 
-# Build dự án
+# Build NestJS
 RUN npm run build
 
-# Expose port
-EXPOSE 3000
+# Tạo thư mục upload
+RUN mkdir -p uploads/dental/temp uploads/dental/converted && chmod -R 777 uploads
 
-# Chạy app ở chế độ development
-CMD ["npm", "run", "start:dev"]
+EXPOSE 8080
+
+# Chạy lệnh push trước khi khởi động app
+# Chúng ta dùng sh -c để gộp nhiều lệnh
+CMD sh -c "npx drizzle-kit push && npm run start:prod"

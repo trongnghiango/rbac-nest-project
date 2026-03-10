@@ -1,41 +1,59 @@
+
+import { InferInsertModel } from 'drizzle-orm';
 import { User } from '../../../domain/entities/user.entity';
-import { UserOrmEntity } from '../entities/user.orm-entity';
+import { users } from '@database/schema';
+
+// Type insert cho bảng users (flat)
+type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  static toDomain(ormEntity: UserOrmEntity | null): User | null {
-    if (!ormEntity) return null;
+  /**
+   * Map từ kết quả query Drizzle (có Relation) sang Domain Entity
+   * `raw` ở đây là `any` vì type của Drizzle Query Builder rất phức tạp để define tĩnh
+   */
+  static toDomain(raw: any): User | null {
+    if (!raw) return null;
+
+    // ✅ Logic Strict RBAC: Map từ bảng nối ra mảng string
+    const roles: string[] = raw.userRoles
+      ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
+      : [];
 
     return new User(
-      Number(ormEntity.id),
-      ormEntity.username,
-      ormEntity.email || undefined,
-      ormEntity.hashedPassword || undefined,
-      ormEntity.fullName || undefined,
-      ormEntity.isActive,
-      ormEntity.phoneNumber || undefined,
-      ormEntity.avatarUrl || undefined,
-      ormEntity.profile || undefined,
-      ormEntity.createdAt,
-      ormEntity.updatedAt,
+      raw.id,
+      raw.username,
+      raw.email || undefined,
+      raw.hashedPassword || undefined,
+      raw.fullName || undefined,
+      raw.isActive ?? true,
+      roles, // ✅ Inject Roles
+      raw.telegramId || undefined, // ✅ Inject TelegramId
+      raw.phoneNumber || undefined,
+      raw.avatarUrl || undefined,
+      (raw.profile as any) || undefined,
+      raw.createdAt || undefined,
+      raw.updatedAt || undefined,
     );
   }
 
-  static toPersistence(domainEntity: User): UserOrmEntity {
-    const ormEntity = new UserOrmEntity();
-    if (domainEntity.id !== undefined) {
-      ormEntity.id = domainEntity.id;
-    }
-    ormEntity.username = domainEntity.username;
-    ormEntity.email = domainEntity.email || null;
-    ormEntity.hashedPassword = domainEntity.hashedPassword || null;
-    ormEntity.fullName = domainEntity.fullName || null;
-    ormEntity.isActive = domainEntity.isActive;
-    ormEntity.phoneNumber = domainEntity.phoneNumber || null;
-    ormEntity.avatarUrl = domainEntity.avatarUrl || null;
-    ormEntity.profile = domainEntity.profile || null;
-
-    ormEntity.createdAt = domainEntity.createdAt || new Date();
-    ormEntity.updatedAt = domainEntity.updatedAt || new Date();
-    return ormEntity;
+  /**
+   * Map từ Domain sang Persistence (Chỉ map các field thuộc bảng `users`)
+   * Không map `roles` vì roles nằm ở bảng `user_roles`
+   */
+  static toPersistence(domain: User): UserInsert {
+    return {
+      id: domain.id,
+      username: domain.username,
+      email: domain.email || null,
+      hashedPassword: domain.hashedPassword || null,
+      fullName: domain.fullName || null,
+      isActive: domain.isActive,
+      telegramId: domain.telegramId || null, // ✅ Map TelegramId
+      phoneNumber: domain.phoneNumber || null,
+      avatarUrl: domain.avatarUrl || null,
+      profile: domain.profile || null,
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
   }
 }

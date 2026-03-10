@@ -2,42 +2,50 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import * as fs from 'fs';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const uploadDir = 'uploads/dental/converted';
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
   const config = app.get(ConfigService);
+  const logger = app.get(LOGGER_TOKEN);
+  app.useLogger(logger);
 
   const prefix: string = config.get('app.apiPrefix', 'api');
   app.setGlobalPrefix(prefix);
 
-  app.enableCors();
+  app.enableCors({
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
 
-  // --- SWAGGER CONFIGURATION ---
   const swaggerConfig = new DocumentBuilder()
     .setTitle('RBAC System API')
     .setDescription('The RBAC System API description')
     .setVersion('1.0')
-    .addBearerAuth() // Thêm nút "Authorize" để nhập Token
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
-  // Đường dẫn tài liệu: /docs
   SwaggerModule.setup('docs', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true, // Giữ token khi refresh trang
-    },
+    swaggerOptions: { persistAuthorization: true },
   });
-  // -----------------------------
 
-  const port: number = config.get('app.port', 3000);
+  const port: number = config.get('app.port', 8080);
   await app.listen(port);
 
-  console.log(`🚀 API is running on: http://localhost:${port}/${prefix}`);
-  console.log(`📚 Swagger Docs:      http://localhost:${port}/docs`);
-  console.log(
-    `📊 Health check:      http://localhost:${port}/${prefix}/test/health`,
-  );
+  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, {
+    context: 'Bootstrap',
+  });
+  logger.info(`📂 Static Files on:   http://localhost:${port}/models`, {
+    context: 'Bootstrap',
+  });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 bootstrap().catch((err) => console.error('Err::', err['message']));

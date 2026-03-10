@@ -1,13 +1,15 @@
 import { Injectable, Inject } from '@nestjs/common';
-import type {
+import {
   IRoleRepository,
   IPermissionRepository,
-} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+} from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
-import {
-  SystemRole,
-  SystemPermission,
-} from '../../domain/constants/rbac.constants';
+
+export interface CreateRoleParams {
+  name: string;
+  description?: string;
+  isSystem?: boolean;
+}
 
 export interface AccessControlItem {
   role: string;
@@ -19,11 +21,11 @@ export interface AccessControlItem {
 @Injectable()
 export class RoleService {
   constructor(
-    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
-    @Inject('IPermissionRepository') private permRepo: IPermissionRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
   ) {}
 
-  async createRole(data: any): Promise<Role> {
+  async createRole(data: CreateRoleParams): Promise<Role> {
     const existing = await this.roleRepo.findByName(data.name);
     if (existing) throw new Error('Role exists');
     const role = new Role(
@@ -36,27 +38,25 @@ export class RoleService {
     return this.roleRepo.save(role);
   }
 
+  async findAllRoles(): Promise<Role[]> {
+    return this.roleRepo.findAll();
+  }
+
   async getAccessControlList(): Promise<AccessControlItem[]> {
     const roles = await this.roleRepo.findAll();
     const acl: AccessControlItem[] = [];
     roles.forEach((role) => {
-      role.permissions.forEach((p) => {
-        acl.push({
-          role: role.name.toLowerCase(),
-          resource: p.resourceType || '*',
-          action: p.action || '*',
-          attributes: p.attributes,
+      if (role.permissions) {
+        role.permissions.forEach((p) => {
+          acl.push({
+            role: role.name.toLowerCase(),
+            resource: p.resourceType || '*',
+            action: p.action || '*',
+            attributes: p.attributes,
+          });
         });
-      });
+      }
     });
     return acl;
-  }
-
-  // Seeder logic remains in seeder file mostly, but keeping init logic if needed
-  async initializeSystemRoles(): Promise<void> {
-    // Implementation placeholder if called from module init
-  }
-  async initializeSystemPermissions(): Promise<void> {
-    // Implementation placeholder
   }
 }

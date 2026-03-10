@@ -4,6 +4,8 @@
   "sourceRoot": "src",
   "entryFile": "bootstrap/main",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "webpack": false,
+    "tsConfigPath": "tsconfig.json"
   }
 }

@@ -1,11 +1,9 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
-import { UserOrmEntity } from '../../user/infrastructure/persistence/entities/user.orm-entity';
-import { RoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/role.orm-entity';
-import { PermissionOrmEntity } from '../../rbac/infrastructure/persistence/entities/permission.orm-entity';
-import { UserRoleOrmEntity } from '../../rbac/infrastructure/persistence/entities/user-role.orm-entity';
 import {
   SystemPermission,
   SystemRole,
@@ -13,100 +11,152 @@ import {
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
-  constructor(
-    @InjectRepository(UserOrmEntity) private uRepo: Repository<UserOrmEntity>,
-    @InjectRepository(RoleOrmEntity) private rRepo: Repository<RoleOrmEntity>,
-    @InjectRepository(PermissionOrmEntity)
-    private pRepo: Repository<PermissionOrmEntity>,
-    @InjectRepository(UserRoleOrmEntity)
-    private urRepo: Repository<UserRoleOrmEntity>,
-  ) {}
+  private readonly logger = new Logger(DatabaseSeeder.name);
+
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
 
   async onModuleInit() {
-    if (process.env.NODE_ENV !== 'development') return;
-    console.log('Seeding...');
-    await this.seedPerms();
-    await this.seedRoles();
-    await this.seedUsers();
-    await this.assign();
-    console.log('Seeded.');
+    // Chỉ chạy khi biến môi trường cho phép hoặc ở môi trường dev
+    if (process.env.RUN_SEEDS !== 'true' && process.env.NODE_ENV !== 'development') {
+      return;
+    }
+
+    this.logger.log('🌱 Seeding database (Drizzle)...');
+    
+    try {
+      await this.seedPermissions();
+      await this.seedRoles();
+      await this.seedUsers();
+      await this.assignPermissionsToRoles(); // Gán quyền cho Admin
+      await this.assignRolesToUsers();       // Gán role Admin cho user
+      
+      this.logger.log('✅ Database seeded successfully!');
+    } catch (error) {
+      this.logger.error('❌ Seeding failed:', error);
+    }
   }
 
-  async seedPerms() {
-    for (const name of Object.values(SystemPermission)) {
+  private async seedPermissions() {
+    const values = Object.values(SystemPermission).map((name) => {
       const [res, act] = name.split(':');
-      if (!(await this.pRepo.findOne({ where: { name } }))) {
-        await this.pRepo.save(
-          this.pRepo.create({
-            name,
-            resourceType: res,
-            action: act,
-            isActive: true,
-          }),
-        );
-      }
+      return {
+        name,
+        resourceType: res,
+        action: act,
+        isActive: true,
+        description: `System permission: ${name}`,
+      };
+    });
+
+    if (values.length > 0) {
+      // Bulk Insert + Bỏ qua nếu trùng tên (yêu cầu cột 'name' phải là unique trong schema)
+      await this.db
+        .insert(schema.permissions)
+        .values(values)
+        .onConflictDoNothing({ target: schema.permissions.name });
     }
+    this.logger.log(` - Checked/Inserted ${values.length} permissions`);
   }
 
-  async seedRoles() {
-    for (const name of Object.values(SystemRole)) {
-      if (!(await this.rRepo.findOne({ where: { name } }))) {
-        await this.rRepo.save(
-          this.rRepo.create({ name, isSystem: true, isActive: true }),
-        );
-      }
+  private async seedRoles() {
+    const values = Object.values(SystemRole).map((name) => ({
+      name,
+      description: `System role: ${name}`,
+      isSystem: true,
+      isActive: true,
+    }));
+
+    if (values.length > 0) {
+      await this.db
+        .insert(schema.roles)
+        .values(values)
+        .onConflictDoNothing({ target: schema.roles.name });
     }
+    this.logger.log(` - Checked/Inserted ${values.length} roles`);
   }
 
-  async seedUsers() {
-    const pw = await bcrypt.hash('123456', 10);
-    const users = [
+  private async seedUsers() {
+    const hashedPassword = await bcrypt.hash('123456', 10);
+    const usersData = [
       {
         username: 'superadmin',
         fullName: 'Super Admin',
         email: 'admin@test.com',
+        hashedPassword,
+        isActive: true,
       },
-      { username: 'user1', fullName: 'Normal User', email: 'user@test.com' },
+      {
+        username: 'user1',
+        fullName: 'Normal User',
+        email: 'user@test.com',
+        hashedPassword,
+        isActive: true,
+      },
     ];
-    for (const u of users) {
-      if (!(await this.uRepo.findOne({ where: { username: u.username } }))) {
-        await this.uRepo.save(
-          this.uRepo.create({
-            ...u,
-            hashedPassword: pw,
-            isActive: true,
-            createdAt: new Date(),
-          }),
-        );
-      }
-    }
+
+    await this.db
+      .insert(schema.users)
+      .values(usersData)
+      .onConflictDoNothing({ target: schema.users.username }); // Yêu cầu username unique
+
+    this.logger.log(' - Users checked/inserted');
   }
 
-  async assign() {
-    const adminRole = await this.rRepo.findOne({
-      where: { name: SystemRole.SUPER_ADMIN },
-      relations: ['permissions'],
+  private async assignPermissionsToRoles() {
+    // 1. Lấy Admin Role
+    const adminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
     });
-    if (!adminRole) return;
 
-    // Assign all perms to superadmin
-    const allPerms = await this.pRepo.find();
-    adminRole.permissions = allPerms;
-    await this.rRepo.save(adminRole);
+    if (!adminRole) {
+      this.logger.warn('⚠️ Super Admin role not found, skipping permission assignment.');
+      return;
+    }
 
-    const adminUser = await this.uRepo.findOne({
-      where: { username: 'superadmin' },
-    });
-    if (adminUser) {
-      const ur = await this.urRepo.findOne({
-        where: { userId: adminUser.id, roleId: adminRole.id },
-      });
-      if (!ur)
-        await this.urRepo.save({
+    // 2. Lấy tất cả permissions hiện có trong DB
+    const allPerms = await this.db.select({ id: schema.permissions.id }).from(schema.permissions);
+
+    if (allPerms.length === 0) return;
+
+    // 3. Chuẩn bị data mapping
+    const rolePermissionsValues = allPerms.map((perm) => ({
+      roleId: adminRole.id,
+      permissionId: perm.id,
+    }));
+
+    // 4. Bulk Insert vào bảng trung gian
+    // Lưu ý: onConflictDoNothing ở đây cần composite unique key (role_id + permission_id) trong schema
+    await this.db
+      .insert(schema.rolePermissions)
+      .values(rolePermissionsValues)
+      .onConflictDoNothing();
+
+    this.logger.log(` - Assigned ${allPerms.length} permissions to Super Admin`);
+  }
+
+  private async assignRolesToUsers() {
+    // Cách query tối ưu: Lấy cả 2 ID cùng lúc nếu có thể, hoặc query song song
+    const [adminUser, adminRole] = await Promise.all([
+      this.db.query.users.findFirst({
+        where: eq(schema.users.username, 'superadmin'),
+        columns: { id: true }, // Chỉ lấy ID cho nhẹ
+      }),
+      this.db.query.roles.findFirst({
+        where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
+        columns: { id: true },
+      }),
+    ]);
+
+    if (adminUser && adminRole) {
+      await this.db
+        .insert(schema.userRoles)
+        .values({
           userId: adminUser.id,
           roleId: adminRole.id,
-          assignedAt: new Date(),
-        });
+        })
+        .onConflictDoNothing(); // Cần unique constraint (userId, roleId)
+      
+      this.logger.log(' - Assigned Super Admin role to user: superadmin');
     }
   }
 }

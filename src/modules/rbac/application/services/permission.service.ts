@@ -1,20 +1,20 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import type { Cache } from 'cache-manager';
-import type {
+import {
   IUserRoleRepository,
   IRoleRepository,
-} from '../../domain/repositories/rbac-repository.interface'; // FIX: import type
+} from '../../domain/repositories/rbac.repository';
+// IMPORT Interface
+import { ICacheService } from '@core/shared/application/ports/cache.port';
 
 @Injectable()
 export class PermissionService {
-  private readonly CACHE_TTL = 300;
+  private readonly CACHE_TTL = 300; // Fallback nếu không truyền vào set()
   private readonly CACHE_PREFIX = 'rbac:permissions:';
 
   constructor(
-    @Inject('IUserRoleRepository') private userRoleRepo: IUserRoleRepository,
-    @Inject('IRoleRepository') private roleRepo: IRoleRepository,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
   ) {}
 
   async userHasPermission(
@@ -22,16 +22,19 @@ export class PermissionService {
     permissionName: string,
   ): Promise<boolean> {
     const cacheKey = `${this.CACHE_PREFIX}${userId}`;
-    const cached = await this.cacheManager.get<string[]>(cacheKey);
+
+    // Sử dụng abstraction layer
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
     if (cached) return cached.includes(permissionName) || cached.includes('*');
 
     const userRoles = await this.userRoleRepo.findByUserId(userId);
-    // Note: Assuming repo returns domain objects with populated role (if implemented that way)
-    // or we fetch roles separately. For simplicity assuming basic flow:
+    const activeRoles = userRoles.filter(
+      (ur) => ur.isActive() && ur.role?.isActive,
+    );
+    if (activeRoles.length === 0) return false;
 
-    if (userRoles.length === 0) return false;
-    const roleIds = userRoles.map((ur) => ur.roleId);
-
+    const roleIds = activeRoles.map((ur) => ur.roleId);
     const roles = await this.roleRepo.findAllWithPermissions(roleIds);
 
     const permissions = new Set<string>();
@@ -42,7 +45,12 @@ export class PermissionService {
     );
 
     const permArray = Array.from(permissions);
-    await this.cacheManager.set(cacheKey, permArray, this.CACHE_TTL);
+
+    // Cache result
+    await this.cacheService.set(cacheKey, permArray);
+    // Mặc định adapter sẽ lấy TTL từ config nếu không truyền,
+    // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
+
     return permArray.includes(permissionName);
   }
 
@@ -53,7 +61,6 @@ export class PermissionService {
   ): Promise<void> {
     const existing = await this.userRoleRepo.findOne(userId, roleId);
     if (!existing) {
-      // Construct basic UserRole object
       const userRole: any = {
         userId,
         roleId,
@@ -61,7 +68,9 @@ export class PermissionService {
         assignedAt: new Date(),
       };
       await this.userRoleRepo.save(userRole);
-      await this.cacheManager.del(`${this.CACHE_PREFIX}${userId}`);
+
+      // Invalidate cache
+      await this.cacheService.del(`${this.CACHE_PREFIX}${userId}`);
     }
   }
 }

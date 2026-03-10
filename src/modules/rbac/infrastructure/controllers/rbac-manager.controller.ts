@@ -22,7 +22,7 @@ import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard
 import { PermissionGuard } from '../guards/permission.guard';
 import { Permissions } from '../decorators/permission.decorator';
 import { RbacManagerService } from '../../application/services/rbac-manager.service';
-import { BypassTransform } from '../../../../core/decorators/bypass-transform.decorator';
+import { BypassTransform } from '@core/decorators/bypass-transform.decorator';
 
 @ApiTags('RBAC - Import/Export')
 @ApiBearerAuth()
