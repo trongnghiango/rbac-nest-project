@@ -11,7 +11,7 @@ export interface IPatientRepository {
   findPatientByCode(
     code: string,
     tx?: Transaction,
-  ): Promise<{ id: number } | null>;
+  ): Promise<{ id: number; fullName: string } | null>;
   createPatient(
     data: CreatePatientDto,
     tx?: Transaction,

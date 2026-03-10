@@ -21,7 +21,7 @@ export interface CreateUserParams {
 export class UserService {
   constructor(
     @Inject(IUserRepository) private userRepository: IUserRepository,
-  ) {}
+  ) { }
 
   async createUser(
     data: CreateUserParams,
@@ -42,12 +42,14 @@ export class UserService {
       data.email,
       hashedPassword,
       data.fullName,
-      true,
-      undefined,
-      undefined,
-      undefined,
-      new Date(),
-      new Date(),
+      true,       // isActive
+      [],         // roles (Mặc định rỗng, gán role sau)
+      undefined,  // telegramId
+      undefined,  // phoneNumber
+      undefined,  // avatarUrl
+      undefined,  // profile
+      new Date(), // createdAt
+      new Date(), // updatedAt 
     );
 
     const user = await this.userRepository.save(newUser);

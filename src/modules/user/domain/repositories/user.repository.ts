@@ -9,9 +9,15 @@ export interface IUserRepository {
   findById(id: number, tx?: Transaction): Promise<User | null>;
   findByUsername(username: string, tx?: Transaction): Promise<User | null>;
   findByEmail(email: string, tx?: Transaction): Promise<User | null>;
+
+  findByTelegramId(telegramId: string): Promise<User | null>;
+  updateTelegramId(userId: string | number, telegramId: string): Promise<void>;
+  removeTelegramId(telegramId: string): Promise<void>;
+
   findAllActive(): Promise<User[]>;
-  save(user: User, tx?: Transaction): Promise<User>;
   findAll(): Promise<User[]>;
+
+  save(user: User, tx?: Transaction): Promise<User>;
   update(id: number, data: Partial<User>): Promise<User>;
   delete(id: number, tx?: Transaction): Promise<void>;
   exists(id: number, tx?: Transaction): Promise<boolean>;

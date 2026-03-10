@@ -13,15 +13,14 @@ import {
 @Injectable()
 export class DrizzlePatientRepository
   extends DrizzleBaseRepository
-  implements IPatientRepository
-{
+  implements IPatientRepository {
   async findPatientByCode(
     code: string,
     tx?: Transaction,
-  ): Promise<{ id: number } | null> {
+  ): Promise<{ id: number; fullName: string } | null> {
     const db = this.getDb(tx);
     const res = await db
-      .select({ id: patients.id })
+      .select({ id: patients.id, fullName: patients.fullName })
       .from(patients)
       .where(eq(patients.patientCode, code))
       .limit(1);

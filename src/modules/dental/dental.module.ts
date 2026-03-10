@@ -4,38 +4,34 @@ import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 
 import { DentalController } from './infrastructure/controllers/dental.controller';
+import dentalConfig from '@config/dental.config';
 
-// --- IMPORT TỪ CÁC MODULE MỚI ---
+// Modules vệ tinh
 import { OrganizationModule } from '../organization/organization.module';
 import { PatientModule } from '../patient/patient.module';
 import { MedicalStaffModule } from '../medical-staff/medical-staff.module';
+// ✅ Import Core Module vừa sửa ở Bước 1
+import { DentalTreatmentModule } from '../dental-treatment/dental-treatment.module';
 
-// --- IMPORT USE CASE ---
+// Use Cases & Queries riêng của module này (nếu chưa chuyển sang Core)
 import { UploadCaseUseCase } from '../dental-treatment/application/use-cases/upload-case.use-case';
+import { ProcessMovementDataUseCase } from '../dental-treatment/application/use-cases/process-movement-data.use-case';
+import { GetCaseModelsQuery } from '../dental-treatment/application/queries/get-case-models.query';
 
-// --- IMPORT INTERFACES (PORTS) TỪ MODULE DENTAL-TREATMENT ---
-import { IOrthoRepository } from '../dental-treatment/domain/repositories/ortho.repository';
-import { IDentalStorage } from '../dental-treatment/domain/ports/dental-storage.port';
-import { IDentalWorker } from '../dental-treatment/domain/ports/dental-worker.port';
-
-// --- IMPORT IMPLEMENTATIONS (ADAPTERS) TỪ MODULE DENTAL-TREATMENT ---
-// Lưu ý: Tên class trong file repositories mới có thể vẫn là DrizzleOrthoRepository (do copy sang)
-import { DrizzleOrthoRepository } from '../dental-treatment/infrastructure/persistence/repositories/drizzle-cases.repository';
-import { FileSystemDentalStorage } from '../dental-treatment/infrastructure/adapters/fs-dental-storage.adapter';
-import { PiscinaDentalWorker } from '../dental-treatment/infrastructure/adapters/piscina-worker.adapter';
+// Infrastructure riêng của module này (Workers, Gateway)
 import { PiscinaProvider } from '../dental-treatment/infrastructure/workers/piscina.provider';
 import { DentalGateway } from '../dental-treatment/infrastructure/gateways/dental.gateway';
-
-import dentalConfig from '@config/dental.config';
-import { GetCaseModelsQuery } from '@modules/dental-treatment/application/queries/get-case-models.query';
-import { GetPatientHistoryQuery } from '@modules/dental-treatment/application/queries/get-patient-history.query';
-import { GetCaseDetailsQuery } from '@modules/dental-treatment/application/queries/get-case-details.query';
-import { ProcessMovementDataUseCase } from '@modules/dental-treatment/application/use-cases/process-movement-data.use-case';
+import { IDentalWorker } from '../dental-treatment/domain/ports/dental-worker.port';
+import { PiscinaDentalWorker } from '../dental-treatment/infrastructure/adapters/piscina-worker.adapter';
+import { IDentalStorage } from '../dental-treatment/domain/ports/dental-storage.port';
 
 @Module({
   imports: [
     ConfigModule.forFeature(dentalConfig),
-    // Import các module vệ tinh
+
+    // ✅ Import module Core: Tự động có Repo, Query, Storage từ exports của nó
+    DentalTreatmentModule,
+
     OrganizationModule,
     PatientModule,
     MedicalStaffModule,
@@ -45,8 +41,7 @@ import { ProcessMovementDataUseCase } from '@modules/dental-treatment/applicatio
       useFactory: async (config: ConfigService) => ({
         storage: diskStorage({
           destination: (req, file, cb) => {
-            const uploadDir =
-              config.get<string>('dental.uploadDir') || 'uploads/dental/temp';
+            const uploadDir = config.get<string>('dental.uploadDir') || 'uploads/dental/temp';
             cb(null, uploadDir);
           },
           filename: (req, file, cb) => {
@@ -59,38 +54,18 @@ import { ProcessMovementDataUseCase } from '@modules/dental-treatment/applicatio
   ],
   controllers: [DentalController],
   providers: [
-    // 1. Use Case & Services
-    UploadCaseUseCase,
-    ProcessMovementDataUseCase,
-    GetPatientHistoryQuery,
-    GetCaseDetailsQuery,
-    GetCaseModelsQuery,
-    // 2. Hạ tầng (Infrastructure Providers)
-    DentalGateway,
-    PiscinaProvider,
 
-    // 3. BINDING PORTS -> ADAPTERS (Đây là phần bạn bị thiếu)
-    {
-      provide: IOrthoRepository, // Khi ai đó xin IOrthoRepository
-      useClass: DrizzleOrthoRepository, // Thì đưa cho họ class này (lấy từ dental-treatment)
-    },
-    {
-      provide: IDentalStorage,
-      useClass: FileSystemDentalStorage, // Lấy từ dental-treatment
-    },
-    {
-      provide: IDentalWorker,
-      useClass: PiscinaDentalWorker, // Lấy từ dental-treatment
-    },
   ],
-  exports: [UploadCaseUseCase, ProcessMovementDataUseCase],
+  exports: [],
 })
 export class DentalModule implements OnModuleInit {
   constructor(
+    // Inject được vì DentalTreatmentModule đã export IDentalStorage
     @Inject(IDentalStorage) private readonly dentalStorage: IDentalStorage,
-  ) {}
+  ) { }
 
   onModuleInit() {
     this.dentalStorage.ensureDirectories();
   }
 }
+

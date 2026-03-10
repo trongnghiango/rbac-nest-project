@@ -1,11 +1,8 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IOrthoRepository } from '../../domain/repositories/ortho.repository';
 import { IDentalStorage } from '../../domain/ports/dental-storage.port';
-import {
-  ModelStep,
-  TeethMovementRecord,
-} from '../../domain/types/dental.types';
+import { ModelStep, TeethMovementRecord } from '../../domain/types/dental.types';
 
 @Injectable()
 export class GetCaseModelsQuery {
@@ -16,26 +13,33 @@ export class GetCaseModelsQuery {
     @Inject(IDentalStorage) private readonly storage: IDentalStorage,
     private readonly config: ConfigService,
   ) {
-    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(
-      /\/$/,
-      '',
-    );
+    this.appUrl = (process.env.APP_URL || 'http://localhost:8080').replace(/\/$/, '');
   }
 
-  async execute(clientId: string, caseId?: string): Promise<ModelStep[]> {
-    // 1. Resolve Case ID
-    const id = caseId || (await this.repo.findLatestCaseIdByCode(clientId));
-    if (!id) return [];
+  async execute(patientCode: string, caseId?: string): Promise<ModelStep[]> {
+    let targetId: number | null = null;
+
+    // 1. Resolve Target Case ID
+    if (caseId) {
+      targetId = Number(caseId);
+      if (isNaN(targetId)) throw new BadRequestException('Invalid Case ID');
+    } else {
+      targetId = await this.repo.findLatestCaseIdByPatientCode(patientCode);
+    }
+
+    if (!targetId) return [];
+
+    const idStr = String(targetId); // Cần string cho đường dẫn file
 
     // 2. Scan Files from Storage
-    const clientDir = this.storage.joinPath(this.storage.outputDir, id);
+    const clientDir = this.storage.joinPath(this.storage.outputDir, idStr);
     const exists = await this.storage.exists(clientDir);
     const allEncFiles = exists
       ? await this.storage.findFilesRecursively(clientDir, '.enc')
       : [];
 
     // 3. Get Steps Logic from DB
-    const dbSteps = await this.repo.getStepsByCaseId(Number(id));
+    const dbSteps = await this.repo.getStepsByCaseId(targetId);
     const stepsMap = new Map<number, ModelStep>();
 
     // 4. Map DB Data
@@ -54,7 +58,8 @@ export class GetCaseModelsQuery {
       const matches = filename.match(/(\d+)/g);
       const index = matches ? parseInt(matches[matches.length - 1], 10) : 0;
       const relPath = this.storage.getRelativePath(this.storage.outputDir, fp);
-      const url = `${this.appUrl}/models/${relPath}`;
+      // Sử dụng encodeURIComponent để đảm bảo URL an toàn
+      const url = `${this.appUrl}/models/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 
       if (!stepsMap.has(index)) {
         stepsMap.set(index, { index, maxillary: null, mandibular: null });

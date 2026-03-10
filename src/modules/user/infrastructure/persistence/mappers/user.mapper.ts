@@ -1,14 +1,24 @@
-import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
-// FIX PATH: 3 dots ../../../
+
+import { InferInsertModel } from 'drizzle-orm';
 import { User } from '../../../domain/entities/user.entity';
 import { users } from '@database/schema';
 
-type UserSelect = InferSelectModel<typeof users>;
+// Type insert cho bảng users (flat)
 type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  static toDomain(raw: UserSelect | null): User | null {
+  /**
+   * Map từ kết quả query Drizzle (có Relation) sang Domain Entity
+   * `raw` ở đây là `any` vì type của Drizzle Query Builder rất phức tạp để define tĩnh
+   */
+  static toDomain(raw: any): User | null {
     if (!raw) return null;
+
+    // ✅ Logic Strict RBAC: Map từ bảng nối ra mảng string
+    const roles: string[] = raw.userRoles
+      ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
+      : [];
+
     return new User(
       raw.id,
       raw.username,
@@ -16,6 +26,8 @@ export class UserMapper {
       raw.hashedPassword || undefined,
       raw.fullName || undefined,
       raw.isActive ?? true,
+      roles, // ✅ Inject Roles
+      raw.telegramId || undefined, // ✅ Inject TelegramId
       raw.phoneNumber || undefined,
       raw.avatarUrl || undefined,
       (raw.profile as any) || undefined,
@@ -24,6 +36,10 @@ export class UserMapper {
     );
   }
 
+  /**
+   * Map từ Domain sang Persistence (Chỉ map các field thuộc bảng `users`)
+   * Không map `roles` vì roles nằm ở bảng `user_roles`
+   */
   static toPersistence(domain: User): UserInsert {
     return {
       id: domain.id,
@@ -32,6 +48,7 @@ export class UserMapper {
       hashedPassword: domain.hashedPassword || null,
       fullName: domain.fullName || null,
       isActive: domain.isActive,
+      telegramId: domain.telegramId || null, // ✅ Map TelegramId
       phoneNumber: domain.phoneNumber || null,
       avatarUrl: domain.avatarUrl || null,
       profile: domain.profile || null,

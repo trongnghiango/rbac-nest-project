@@ -70,11 +70,11 @@ export class UploadCaseUseCase {
     if (!file) throw new BadRequestException('No file uploaded');
 
     const isOverwrite = String(dto.overwrite) === 'true';
-    let caseId: string | null = null;
+    let caseId = null;
 
     // 1. Handle Overwrite Logic
     if (isOverwrite) {
-      caseId = await this.caseRepo.findLatestCaseIdByCode(dto.patientCode);
+      caseId = await this.caseRepo.findLatestCaseIdByPatientCode(dto.patientCode);
       if (caseId) {
         this.logger.warn(`Cleaning Case ${caseId} for overwrite`);
         const caseDir = this.storage.joinPath(this.storage.outputDir, caseId);
@@ -163,15 +163,15 @@ export class UploadCaseUseCase {
         // Lấy file đầu tiên tìm được (thường là report)
         const reportPath = htmlFiles[0];
         this.logger.info(`📄 Found movement report: ${this.storage.getBasename(reportPath)}`);
-        
+
         const reportBuffer = await this.storage.readFile(reportPath);
-        
+
         // Parse dữ liệu
         const movementMap = parseMovementData(reportBuffer, this.storage.getBasename(reportPath));
-        
+
         // Lưu vào DB (Bulk Upsert)
         await this.caseRepo.saveSteps(Number(caseId), movementMap);
-        
+
         this.logger.info(`✅ Updated movement data for Case ${caseId}: ${movementMap.size} steps.`);
       } else {
         this.logger.warn(`⚠️ No HTML report found for Case ${caseId}. Skipping movement data update.`);
@@ -238,7 +238,7 @@ export class UploadCaseUseCase {
       message: 'Processing started',
       caseId,
       stepCount: tasks.length / 2,
-      movementDataUpdated: true, 
+      movementDataUpdated: true,
       status: 'PROCESSING',
     };
   }

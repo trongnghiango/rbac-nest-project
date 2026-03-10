@@ -10,6 +10,8 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
+import { users } from './users.schema';
+
 // --- 1. TABLES DEFINITIONS ---
 
 // Permissions Table
@@ -36,13 +38,16 @@ export const roles = pgTable('roles', {
 });
 
 // User Roles (Pivot Table: Users <-> Roles)
+// ✅ Cập nhật bảng nối userRoles: Thêm references cho userId
 export const userRoles = pgTable(
   'user_roles',
   {
-    userId: bigint('userId', { mode: 'number' }).notNull(),
-    roleId: integer('roleId') // Lưu ý: DB column name nên để 'role_id' nếu muốn chuẩn snake_case, ở đây giữ nguyên theo code cũ của bạn
+    userId: bigint('userId', { mode: 'number' })
       .notNull()
-      .references(() => roles.id),
+      .references(() => users.id), // Link tới bảng users
+    roleId: integer('roleId')
+      .notNull()
+      .references(() => roles.id), // Link tới bảng roles
     assignedBy: bigint('assignedBy', { mode: 'number' }),
     expiresAt: timestamp('expiresAt', { withTimezone: true }),
     assignedAt: timestamp('assignedAt').defaultNow(),
@@ -51,6 +56,21 @@ export const userRoles = pgTable(
     pk: primaryKey({ columns: [t.userId, t.roleId] }),
   }),
 );
+// export const userRoles = pgTable(
+//   'user_roles',
+//   {
+//     userId: bigint('userId', { mode: 'number' }).notNull(),
+//     roleId: integer('roleId') // Lưu ý: DB column name nên để 'role_id' nếu muốn chuẩn snake_case, ở đây giữ nguyên theo code cũ của bạn
+//       .notNull()
+//       .references(() => roles.id),
+//     assignedBy: bigint('assignedBy', { mode: 'number' }),
+//     expiresAt: timestamp('expiresAt', { withTimezone: true }),
+//     assignedAt: timestamp('assignedAt').defaultNow(),
+//   },
+//   (t) => ({
+//     pk: primaryKey({ columns: [t.userId, t.roleId] }),
+//   }),
+// );
 
 // Role Permissions (Pivot Table: Roles <-> Permissions)
 export const rolePermissions = pgTable(
@@ -98,12 +118,14 @@ export const rolePermissionsRelations = relations(
 );
 
 // Relations cho UserRoles (Bảng nối) - PHẦN BỊ THIẾU GÂY LỖI
+// ✅ Cập nhật Relation cho bảng nối: Định nghĩa 2 chiều
 export const userRolesRelations = relations(userRoles, ({ one }) => ({
   role: one(roles, {
     fields: [userRoles.roleId],
     references: [roles.id],
   }),
-  // Chúng ta chưa import bảng 'users' ở đây để tránh Circular Dependency.
-  // Nếu cần query user từ bảng nối này, cần import 'users' cẩn thận.
-  // Hiện tại chỉ cần 'role' để Drizzle hiểu graph khi query từ Role.
+  user: one(users, {
+    fields: [userRoles.userId],
+    references: [users.id],
+  }),
 }));

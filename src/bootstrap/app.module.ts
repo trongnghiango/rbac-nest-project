@@ -23,12 +23,14 @@ import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
 import { NotificationModule } from '@modules/notification/notification.module';
 import { DentalModule } from '@modules/dental/dental.module';
+import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
+import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatment.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`, 
+      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
       load: [
         databaseConfig,
         appConfig,
@@ -67,12 +69,14 @@ import { DentalModule } from '@modules/dental/dental.module';
     DrizzleModule,
     LoggingModule.forRootAsync(),
     RedisCacheModule,
+    ChatbotCoreModule,
 
     UserModule,
     AuthModule,
     RbacModule,
     NotificationModule,
-    DentalModule,
+    DentalTreatmentModule, // ✅ Core Logic & Chatbot Handler
+    DentalModule,          // ✅ API Controller & File Upload
     TestModule,
   ],
 })

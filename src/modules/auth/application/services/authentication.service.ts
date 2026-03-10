@@ -35,7 +35,7 @@ export class AuthenticationService {
     @Inject(IEventBus) private eventBus: IEventBus,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     private jwtService: JwtService,
-  ) {}
+  ) { }
 
   async login(credentials: {
     username: string;
@@ -86,6 +86,20 @@ export class AuthenticationService {
     };
   }
 
+  // ✅ THÊM HÀM NÀY CHO CHATBOT
+  async validateCredentials(username: string, password: string): Promise<User | null> {
+    // 1. Tìm user (Lưu ý: LoginDto của bạn dùng username, Chatbot đang nhập email -> Cần thống nhất)
+    // Ở đây mình giả định dùng username cho khớp hệ thống
+    const user = await this.userRepository.findByUsername(username);
+
+    if (!user || !user.isActive || !user.hashedPassword) return null;
+
+    // 2. Check pass
+    const isValid = await PasswordUtil.compare(password, user.hashedPassword);
+
+    return isValid ? user : null;
+  }
+
   async validateUser(
     payload: JwtPayload,
   ): Promise<ReturnType<User['toJSON']> | null> {
@@ -107,6 +121,8 @@ export class AuthenticationService {
       hashedPassword,
       data.fullName,
       true,
+      [],
+      undefined,
       undefined,
       undefined,
       undefined,

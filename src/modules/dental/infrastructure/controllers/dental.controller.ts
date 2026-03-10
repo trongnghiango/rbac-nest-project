@@ -48,7 +48,7 @@ export class DentalController {
     private readonly modelsQuery: GetCaseModelsQuery,
     private readonly detailsQuery: GetCaseDetailsQuery,
     private readonly historyQuery: GetPatientHistoryQuery,
-  ) {}
+  ) { }
 
   // =========================================================================
   // WRITE OPERATIONS
@@ -112,7 +112,7 @@ export class DentalController {
     @Query('clientId') clientId: string,
     @Query('caseId') caseId?: string,
   ) {
-    return this.detailsQuery.execute(clientId, caseId);
+    return this.detailsQuery.execute(clientId, 'PatientCode');
   }
 
   @Get('history')

@@ -2,10 +2,6 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 import { CaseHistoryDTO, TeethMovementRecord } from '../types/dental.types';
 import { ParsedMovementMap } from '@modules/dental-treatment/application/utils/movement.parser';
 
-// ==========================================
-// 1. DATA TYPES (ENTITIES & DTOs)
-// ==========================================
-
 export interface OrthoCase {
   id: number;
   orderId?: string | null;
@@ -13,8 +9,6 @@ export interface OrthoCase {
   status: string | null;
   createdAt: Date | null;
 }
-
-// ❌ Đã xóa interface FullCaseInput (Không còn dùng)
 
 export interface CaseDetailsDTO {
   patientName: string;
@@ -25,57 +19,19 @@ export interface CaseDetailsDTO {
   createdAt: Date;
 }
 
-// ==========================================
-// 2. INPUT TYPES (Granular)
-// ==========================================
-
 export interface CreateCaseInput {
   patientId: number;
   dentistId?: number | null;
-  productType: string; // 'aligner' | 'retainer'
+  productType: string;
   notes?: string;
 }
-
-// ==========================================
-// 3. REPOSITORY INTERFACE
-// ==========================================
 
 export const IOrthoRepository = Symbol('IOrthoRepository');
 
 export interface IOrthoRepository {
-  // ❌ Đã xóa createFullCase (Deprecated)
-
-  // --- GRANULAR METHODS ---
+  // --- WRITE ---
   createCase(data: CreateCaseInput, tx?: Transaction): Promise<{ id: number }>;
 
-  // --- QUERY / READ METHODS ---
-  findLatestCaseIdByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<string | null>;
-
-  checkCaseBelongsToPatient(
-    caseId: string,
-    patientCode: string,
-    tx?: Transaction,
-  ): Promise<boolean>;
-
-  findCasesByPatientCode(
-    patientCode: string,
-    tx?: Transaction,
-  ): Promise<CaseHistoryDTO[]>;
-
-  getCaseDetails(
-    identifier: string,
-    isCaseId: boolean,
-    tx?: Transaction,
-  ): Promise<CaseDetailsDTO | null>;
-
-  getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
-
-  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
-
-  // --- MOVEMENT DATA & STEPS ---
   updateStepMovementData(
     caseId: string,
     stepIndex: number,
@@ -83,8 +39,23 @@ export interface IOrthoRepository {
     tx?: Transaction,
   ): Promise<void>;
 
+  saveSteps(caseId: number, steps: ParsedMovementMap, tx?: Transaction): Promise<void>;
+
   deleteStepsByCaseId(caseId: number, tx?: Transaction): Promise<void>;
 
-  // saveSteps(caseId: number, steps: any[], tx?: Transaction): Promise<void>;
-  saveSteps(caseId: number, steps: ParsedMovementMap, tx?: Transaction): Promise<void>;
+  // --- READ ---
+
+  // 1. Tìm ID case mới nhất dựa trên Mã Bệnh Nhân (Thay cho findLatestCaseIdByCode)
+  findLatestCaseIdByPatientCode(patientCode: string, tx?: Transaction): Promise<number | null>;
+
+  // 2. Lấy chi tiết Case theo ID chính xác (Thay cho getCaseDetails với boolean)
+  findCaseDetailById(caseId: number, tx?: Transaction): Promise<CaseDetailsDTO | null>;
+
+  checkCaseBelongsToPatient(caseId: string, patientCode: string, tx?: Transaction): Promise<boolean>;
+
+  findCasesByPatientCode(patientCode: string, tx?: Transaction): Promise<CaseHistoryDTO[]>;
+
+  getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]>;
+
+  findCaseById(id: number, tx?: Transaction): Promise<OrthoCase | null>;
 }

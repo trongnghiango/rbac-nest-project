@@ -8,10 +8,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
-import { Response } from 'express'; // Nhớ import Response từ express
+import { Response } from 'express';
 import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
 
-// 1. Định nghĩa Interface cho object trả về để kiểm soát kiểu dữ liệu
 export interface AppResponse<T> {
   success: boolean;
   statusCode: number;
@@ -24,12 +23,19 @@ export class TransformResponseInterceptor<T> implements NestInterceptor<
   T,
   AppResponse<T> | StreamableFile
 > {
-  constructor(private reflector: Reflector) {}
+  constructor(private reflector: Reflector) { }
 
   intercept(
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<AppResponse<T> | StreamableFile> {
+
+    // 🛑 FIX: Chỉ áp dụng Interceptor này cho HTTP Request
+    // Nếu là 'rpc' (Microservice) hoặc ngữ cảnh của Telegraf, thì bỏ qua (return luôn)
+    if (context.getType() !== 'http') {
+      return next.handle();
+    }
+
     const bypass = this.reflector.get<boolean>(
       BYPASS_TRANSFORM_KEY,
       context.getHandler(),
@@ -40,16 +46,11 @@ export class TransformResponseInterceptor<T> implements NestInterceptor<
     }
 
     return next.handle().pipe(
-      // FIX LỖI Ở ĐÂY:
-      // Thay vì map((data) => ...), ta khai báo map((data: T) => ...)
-      // TypeScript sẽ hiểu data có kiểu T, không phải any.
       map((data: T) => {
-        // Double check: Nếu data là StreamableFile thì return luôn
         if (data instanceof StreamableFile) {
           return data;
         }
 
-        // Lấy Response object từ Express để lấy statusCode chính xác
         const response = context.switchToHttp().getResponse<Response>();
         const status = response.statusCode;
 
@@ -61,7 +62,7 @@ export class TransformResponseInterceptor<T> implements NestInterceptor<
               'response_message',
               context.getHandler(),
             ) || 'Success',
-          result: data, // Lúc này việc gán data (T) vào result là an toàn
+          result: data,
         };
       }),
     );

@@ -26,8 +26,7 @@ import { ParsedMovementMap } from '@modules/dental-treatment/application/utils/m
 @Injectable()
 export class DrizzleOrthoRepository
   extends DrizzleBaseRepository
-  implements IOrthoRepository
-{
+  implements IOrthoRepository {
   // ==========================================
   // 1. LEGACY MONOLITHIC METHOD
   // (Giữ lại để tương thích ngược, nhưng nên hạn chế dùng)
@@ -59,32 +58,6 @@ export class DrizzleOrthoRepository
   // ==========================================
   // 3. READ / QUERY METHODS (Type Safe)
   // ==========================================
-
-  async findLatestCaseIdByCode(
-    code: string,
-    tx?: Transaction,
-  ): Promise<string | null> {
-    const db = this.getDb(tx);
-    // 1. Check if code is numeric Case ID
-    if (!isNaN(Number(code))) {
-      const caseById = await db.query.cases.findFirst({
-        where: eq(cases.id, Number(code)),
-        columns: { id: true },
-      });
-      if (caseById) return String(caseById.id);
-    }
-
-    // 2. Check if code is Patient Code
-    const result = await db
-      .select({ caseId: cases.id })
-      .from(cases)
-      .innerJoin(patients, eq(cases.patientId, patients.id))
-      .where(eq(patients.patientCode, code))
-      .orderBy(desc(cases.createdAt))
-      .limit(1);
-
-    return result.length > 0 ? String(result[0].caseId) : null;
-  }
 
   async checkCaseBelongsToPatient(
     caseId: string,
@@ -238,6 +211,41 @@ export class DrizzleOrthoRepository
     await db.delete(treatmentSteps).where(eq(treatmentSteps.caseId, caseId));
   }
 
+  async findLatestCaseIdByPatientCode(patientCode: string, tx?: Transaction): Promise<number | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({ caseId: cases.id })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .where(eq(patients.patientCode, patientCode))
+      .orderBy(desc(cases.createdAt))
+      .limit(1);
+
+    return result.length > 0 ? result[0].caseId : null;
+  }
+
+  // ✅ REFACTOR 2: Lấy chi tiết theo ID (Bỏ logic if/else phức tạp)
+  async findCaseDetailById(caseId: number, tx?: Transaction): Promise<CaseDetailsDTO | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({
+        patientName: patients.fullName,
+        patientCode: patients.patientCode,
+        caseId: cases.id,
+        doctorName: dentists.fullName,
+        clinicName: clinics.name,
+        createdAt: cases.createdAt,
+      })
+      .from(cases)
+      .innerJoin(patients, eq(cases.patientId, patients.id))
+      .leftJoin(dentists, eq(cases.dentistId, dentists.id))
+      .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+      .where(eq(cases.id, caseId))
+      .limit(1);
+
+    return result[0] ? (result[0] as CaseDetailsDTO) : null;
+  }
+
   async getStepsByCaseId(caseId: number, tx?: Transaction): Promise<any[]> {
     const db = this.getDb(tx);
     return await db
@@ -263,7 +271,7 @@ export class DrizzleOrthoRepository
         stepIndex: stepIndex,
         teethData: data as any, // Cast JSONB
         // Mặc định false, có thể update logic parse để lấy thông tin này nếu HTML có
-        hasIpr: false, 
+        hasIpr: false,
         hasAttachments: false,
       }),
     );
