@@ -1,36 +1,23 @@
-# Sử dụng đúng phiên bản Node 22.15-alpine như file mẫu của bạn
 FROM node:22.15-alpine
 
 WORKDIR /app
 
-# 1. CÀI ĐẶT FULL BỘ THƯ VIỆN HỆ THỐNG (COPY Y NGUYÊN TỪ FILE MẪU CỦA BẠN)
-# Đây là chìa khóa để build được Sharp và native modules trên Node 22 Alpine
+# 1. Cài đặt thư viện hệ thống (Giữ nguyên vì Alpine cần C++ compiler)
 RUN apk add --no-cache \
-    build-base \
-    gcc \
-    g++ \
-    autoconf \
-    automake \
-    zlib-dev \
-    libtool \
-    python3 \
-    make \
-    nasm \
-    vips-dev \
-    git \
-    linux-headers \
-    procps
+    build-base gcc g++ autoconf automake zlib-dev libtool \
+    python3 make nasm vips-dev git linux-headers procps
 
-# 2. COPY TOÀN BỘ CODE VÀO TRƯỚC (Để fix vấn đề "thiếu file" mà bạn nghi ngờ)
-# Điều này đảm bảo postinstall scripts tìm thấy tsconfig.json, nest-cli.json...
+# 2. KÍCH HOẠT PNPM
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# 3. Copy file config và lockfile của pnpm
+COPY package.json pnpm-lock.yaml* ./
+
+# 4. Cài đặt dependencies bằng pnpm
+RUN pnpm install --frozen-lockfile
+
+# 5. Copy toàn bộ source code
 COPY . .
-
-# 3. Cài node-gyp global (Hỗ trợ npm build tốt hơn)
-RUN npm install -g node-gyp
-
-# 4. CÀI DEPENDENCIES
-# Dùng --unsafe-perm để root user chạy được các script biên dịch C++
-RUN npm install --unsafe-perm
 
 ENV NODE_ENV=development
 

@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-@Catch() // Bỏ trống để bắt mọi loại lỗi (kể cả lỗi Database)
+@Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: any, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -22,15 +22,25 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let message = 'Internal server error';
     let errors = null;
 
+    // ✅ Kiểm tra môi trường
+    const isProduction = process.env.NODE_ENV === 'production';
+
     if (exception instanceof HttpException) {
       const res: any = exception.getResponse();
       message =
         typeof res === 'string' ? res : res.message || res.error || message;
       errors = res.message || null;
     } else {
-      // Đây là lỗi hệ thống (Database, v.v.)
-      console.error('🔥 System Error:', exception);
-      message = exception.message || 'Database Transaction Error';
+      // 🚨 Đây là lỗi hệ thống (Database, Runtime Exception, v.v.)
+      console.error('🔥 System Error:', exception); // Ghi log ra Winston
+
+      // ✅ BẢO MẬT: Ẩn chi tiết lỗi nếu đang ở Production
+      if (isProduction) {
+        message = 'Internal server error. Please try again later.';
+      } else {
+        // Chỉ hiện lỗi thật lúc code (Development)
+        message = exception.message || 'Database Transaction Error';
+      }
     }
 
     response.status(status).json({

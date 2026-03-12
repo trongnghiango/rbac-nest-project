@@ -1,113 +1,100 @@
-version: '3.8'
 
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: rbac_postgres_prod
-    restart: always
+    container_name: rbac_postgres_dev
+    restart: unless-stopped
     env_file:
-      - ../.env.production
+      - ../.env.development
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-rbac_system}
     volumes:
-      - pgdata_prod:/var/lib/postgresql/data
+      - pgdata_dev:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
-      - rbac_prod_net
+      - rbac_dev_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
 
   redis:
     image: redis:7-alpine
-    container_name: rbac_redis_prod
-    restart: always
+    container_name: rbac_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
     networks:
-      - rbac_prod_net
+      - rbac_dev_net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 256M
 
   # 👇 THÊM SERVICE TELEGRAM LOCAL VÀO ĐÂY
   telegram-api:
     image: aiogram/telegram-bot-api:latest
-    container_name: rbac_telegram_api_prod
-    restart: always
+    container_name: rbac_telegram_api_dev
+    restart: unless-stopped
     env_file:
-      - ../.env.production
+      - ../.env.development
     environment:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       TELEGRAM_STAT: 1
       TELEGRAM_LOCAL: 1
     volumes:
+      # Map thư mục data của Telegram ra ổ cứng thật của bạn
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
     networks:
-      - rbac_prod_net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+      - rbac_dev_net
 
   api:
     build:
       context: ..
-      dockerfile: infra/docker/Dockerfile
-    container_name: rbac_api_prod
-    restart: always
+      dockerfile: infra/docker/Dockerfile.dev
+    container_name: rbac_api_dev
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Đợi Telegram bật lên mới chạy API
       telegram-api:
-        condition: service_started
+        condition: service_started 
     env_file:
-      - ../.env.production
+      - ../.env.development
     environment:
       - RUN_MIGRATIONS=true
-      - NODE_OPTIONS=--max-old-space-size=1536
+      # Ghi đè cấu hình để API gọi vào đúng Container Telegram
       - TELEGRAM_API_ROOT=http://telegram-api:8081
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
     volumes:
-      - dental_data_prod:/app/uploads
-      - api_logs_prod:/app/logs
-      # Map chung thư mục data Telegram
+      - ..:/app
+      - /app/node_modules
+      - dental_data_dev:/app/uploads
+      # 💡 Trick siêu hay: Map chung thư mục data Telegram vào API 
+      # để NestJS lấy thẳng file do Telegram tải về mà không cần qua mạng HTTP
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
     ports:
       - "${PORT:-8080}:8080"
+      - "9229:9229"
     networks:
-      - rbac_prod_net
-    healthcheck:
-      test: ["CMD", "/healthcheck.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
+      - rbac_dev_net
 
 networks:
-  rbac_prod_net:
+  rbac_dev_net:
     driver: bridge
 
 volumes:
-  pgdata_prod:
-  dental_data_prod:
-  api_logs_prod:
+  pgdata_dev:
+  dental_data_dev:

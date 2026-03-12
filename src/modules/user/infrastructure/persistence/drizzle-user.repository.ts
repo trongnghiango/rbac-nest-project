@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, inArray, or } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
@@ -175,5 +175,39 @@ export class DrizzleUserRepository implements IUserRepository {
   async count(): Promise<number> {
     const result = await this.db.execute('SELECT COUNT(*) as count FROM users');
     return Number(result.rows[0].count);
+  }
+
+  // ✅ THÊM MỚI: Lấy danh sách user đã tồn tại (chỉ 1 query duy nhất)
+  async findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction) {
+    if (!identifiers || identifiers.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db
+      .select({ username: schema.users.username, email: schema.users.email })
+      .from(schema.users)
+      .where(
+        or(
+          inArray(schema.users.username, identifiers),
+          inArray(schema.users.email, identifiers)
+        )
+      );
+    return results;
+  }
+
+  // ✅ THÊM MỚI: Bulk Insert (Insert 1 phát 1000 records)
+  async saveMany(users: User[], tx?: Transaction): Promise<User[]> {
+    if (!users || users.length === 0) return [];
+    const db = this.getDb(tx);
+    const dataToInsert = users.map(user => {
+      const data = UserMapper.toPersistence(user);
+      delete (data as any).id; // Bỏ ID để DB tự gen
+      return data;
+    });
+
+    const results = await db
+      .insert(schema.users)
+      .values(dataToInsert as typeof schema.users.$inferInsert[])
+      .returning();
+
+    return results.map(r => UserMapper.toDomain({ ...r, userRoles: [] })!);
   }
 }

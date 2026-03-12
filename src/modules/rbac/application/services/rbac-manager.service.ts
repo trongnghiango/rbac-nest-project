@@ -16,6 +16,7 @@ type RbacCsvRow = {
   description: string;
 };
 
+
 @Injectable()
 export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
@@ -24,27 +25,24 @@ export class RbacManagerService {
     @Inject(IRoleRepository) private roleRepo: IRoleRepository,
     @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
     @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
-  ) {}
+  ) { }
 
   async importFromCsv(csvContent: string): Promise<any> {
-    // Sử dụng Adapter để parse (Implementation nên dùng thư viện csv-parse)
-    // Hiện tại adapter đang simple split, nhưng service đã decouple
-    let lines = csvContent.split(/\r?\n/).filter((line) => line.trim() !== '');
-    if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
-      lines.shift();
-    }
+    // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
+    const records = this.fileParser.parseCsv<RbacCsvRow>(csvContent);
 
     let createdCount = 0;
     let updatedCount = 0;
 
-    for (const line of lines) {
-      const cols = line.split(',').map((c) => c.trim());
-      if (cols.length < 3) continue;
+    for (const row of records) {
+      // 2. Lấy data từ Object (Rất an toàn, không sợ phẩy trong ngoặc kép nữa)
+      const { role: roleName, resource, action, attributes, description } = row;
 
-      const [roleName, resource, action, attributes, description] = cols;
-      const permName =
-        resource === '*' ? 'manage:all' : `${resource}:${action}`;
+      if (!roleName || !resource) continue;
 
+      const permName = resource === '*' ? 'manage:all' : `${resource}:${action}`;
+
+      // Xử lý Permission
       let perm = await this.permRepo.findByName(permName);
       if (!perm) {
         perm = new Permission(
@@ -60,6 +58,7 @@ export class RbacManagerService {
         createdCount++;
       }
 
+      // Xử lý Role
       let role = await this.roleRepo.findByName(roleName);
       if (!role) {
         role = new Role(
@@ -73,12 +72,14 @@ export class RbacManagerService {
         role = await this.roleRepo.save(role);
       }
 
+      // Gán quyền vào Role
       if (!role.permissions) role.permissions = [];
       const hasPerm = role.permissions.some((p) => p.name === perm!.name);
 
       if (!hasPerm) {
         role.permissions.push(perm!);
         await this.roleRepo.save(role);
+        updatedCount++;
       }
     }
     return { created: createdCount, updated: updatedCount };

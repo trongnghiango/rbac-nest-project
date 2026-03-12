@@ -11,7 +11,7 @@ import eventBusConfig from '@config/event-bus.config';
 import dentalConfig from '@config/dental.config';
 
 import { CoreModule } from '@core/core.module';
-import { SharedModule } from '@modules/shared/shared.module';
+import { SharedModule } from '@core/shared/shared.module';
 import { DrizzleModule } from '@database/drizzle.module';
 import { LoggingModule } from '@modules/logging/logging.module';
 import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
@@ -22,9 +22,8 @@ import { AuthModule } from '@modules/auth/auth.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
 import { NotificationModule } from '@modules/notification/notification.module';
-import { DentalModule } from '@modules/dental/dental.module';
 import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
-import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatment.module';
+import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
 
 @Module({
   imports: [
@@ -75,9 +74,11 @@ import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatmen
     AuthModule,
     RbacModule,
     NotificationModule,
-    DentalTreatmentModule, // ✅ Core Logic & Chatbot Handler
-    DentalModule,          // ✅ API Controller & File Upload
+
     TestModule,
+
+    //
+    OrgStructureModule,
   ],
 })
 export class AppModule {

@@ -38,3 +38,7 @@ docker-compose.yml
 
 infra/
 !infra/scripts/
+
+telegram-data
+uploads
+logs

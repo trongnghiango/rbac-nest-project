@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { IUserRepository } from '../../domain/repositories/user.repository';
-import { PasswordUtil } from '../../../shared/utils/password.util';
+import { PasswordUtil } from '@core/shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
 import { UserProfile } from '../../domain/types/user-profile.type';
 

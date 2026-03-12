@@ -26,8 +26,8 @@ async function bootstrap() {
   });
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('RBAC System API')
-    .setDescription('The RBAC System API description')
+    .setTitle('ERP/HRM System API')
+    .setDescription('The ERP/HRM System API description')
     .setVersion('1.0')
     .addBearerAuth()
     .build();

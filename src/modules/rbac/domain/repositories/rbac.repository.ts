@@ -10,6 +10,9 @@ export interface IRoleRepository {
   save(role: Role, tx?: Transaction): Promise<Role>;
   findAllWithPermissions(roleIds: number[], tx?: Transaction): Promise<Role[]>;
   findAll(tx?: Transaction): Promise<Role[]>;
+
+  // ✅ THÊM MỚI
+  findInNames(names: string[], tx?: Transaction): Promise<Role[]>;
 }
 
 // 2. Permission Repository
@@ -31,4 +34,7 @@ export interface IUserRoleRepository {
     tx?: Transaction,
   ): Promise<UserRole | null>;
   delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
+
+  // ✅ THÊM MỚI
+  saveMany(userRoles: UserRole[], tx?: Transaction): Promise<void>;
 }

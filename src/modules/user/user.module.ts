@@ -4,12 +4,16 @@ import { UserController } from './infrastructure/controllers/user.controller';
 import { DrizzleUserRepository } from './infrastructure/persistence/drizzle-user.repository';
 // FIX IMPORT
 import { IUserRepository } from './domain/repositories/user.repository';
+import { UserImportService } from './application/services/user-import.service';
+import { UserImportController } from './infrastructure/controllers/user-import.controller';
+import { RbacModule } from '@modules/rbac/rbac.module';
 
 @Module({
-  imports: [],
-  controllers: [UserController],
+  imports: [RbacModule],
+  controllers: [UserController, UserImportController],
   providers: [
     UserService,
+    UserImportService,
     {
       provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,
@@ -17,4 +21,4 @@ import { IUserRepository } from './domain/repositories/user.repository';
   ],
   exports: [UserService, IUserRepository], // FIX: Export Symbol
 })
-export class UserModule {}
+export class UserModule { }
