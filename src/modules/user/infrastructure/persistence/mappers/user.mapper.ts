@@ -46,12 +46,8 @@ export class UserMapper {
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
-      fullName: domain.fullName || null,
       isActive: domain.isActive,
       telegramId: domain.telegramId || null, // ✅ Map TelegramId
-      phoneNumber: domain.phoneNumber || null,
-      avatarUrl: domain.avatarUrl || null,
-      profile: domain.profile || null,
       createdAt: domain.createdAt || new Date(),
       updatedAt: domain.updatedAt || new Date(),
     };

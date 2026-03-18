@@ -20,6 +20,7 @@ import {
   LOGGER_TOKEN,
 } from '@core/shared/application/ports/logger.port';
 import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
+import { ICacheService } from '@core/shared/application/ports/cache.port';
 
 export type AuthResponse = {
   accessToken: string;
@@ -34,56 +35,81 @@ export class AuthenticationService {
     @Inject(ITransactionManager) private txManager: ITransactionManager,
     @Inject(IEventBus) private eventBus: IEventBus,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(ICacheService) private readonly cacheService: ICacheService,
     private jwtService: JwtService,
   ) { }
 
-  async login(credentials: {
-    username: string;
-    password: string;
-    ip?: string;
-    userAgent?: string;
-  }): Promise<AuthResponse> {
+  // =========================================================================
+  // 1. NÂNG CẤP LOGIN (Lưu vào DB + Redis)
+  // =========================================================================
+  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string; }): Promise<AuthResponse> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
-    if (!user || !user.isActive)
-      throw new UnauthorizedException('Invalid credentials');
-    if (!user.hashedPassword)
-      throw new UnauthorizedException('Password not set');
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
+    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
 
-    const isValid = await PasswordUtil.compare(
-      credentials.password,
-      user.hashedPassword,
-    );
+    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
-
     if (!user.id) throw new InternalServerErrorException('User ID is missing');
 
-    const payload: JwtPayload = {
-      sub: user.id,
-      username: user.username,
-      roles: [],
-    };
+    const payload: JwtPayload = { sub: user.id, username: user.username, roles: [] };
     const accessToken = this.jwtService.sign(payload);
 
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
+    expiresAt.setDate(expiresAt.getDate() + 1); // Token sống 1 ngày
 
-    const session = new Session(
-      undefined,
-      user.id,
-      accessToken,
-      expiresAt,
-      credentials.ip,
-      credentials.userAgent,
-      new Date(),
-    );
-
+    // A. Lưu vào Database (PostgreSQL)
+    const session = new Session(undefined, user.id, accessToken, expiresAt, credentials.ip, credentials.userAgent, new Date());
     await this.sessionRepository.create(session);
 
-    return {
-      accessToken,
-      user: user.toJSON(),
-    };
+    // B. 👉 Lưu vào Redis (Tính TTL theo giây để Redis tự động xóa khi hết hạn)
+    const ttlInSeconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+    const redisKey = `auth:session:${accessToken}`;
+    // Lưu một object nhỏ (chứa userId) để tăng tốc độ truy xuất sau này
+    await this.cacheService.set(redisKey, { userId: user.id }, ttlInSeconds);
+
+    return { accessToken, user: user.toJSON() };
+  }
+
+  // =========================================================================
+  // 2. NÂNG CẤP LOGOUT (Xóa khỏi DB + Redis)
+  // =========================================================================
+  async logout(token: string): Promise<void> {
+    const redisKey = `auth:session:${token}`;
+
+    // Xóa song song trên cả 2 hệ thống để tối ưu tốc độ
+    await Promise.all([
+      this.cacheService.del(redisKey),             // Xóa Cache
+      this.sessionRepository.deleteByToken(token)  // Xóa DB
+    ]);
+  }
+
+  // =========================================================================
+  // 3. THÊM HÀM MỚI: KIỂM TRA TOKEN (Redis -> DB -> Restore Redis)
+  // =========================================================================
+  async validateTokenAndGetUserId(token: string): Promise<number | null> {
+    const redisKey = `auth:session:${token}`;
+
+    // LỚP 1: TÌM TRONG REDIS (Tốc độ mili-giây)
+    const cachedSession = await this.cacheService.get<{ userId: number }>(redisKey);
+    if (cachedSession) {
+      return cachedSession.userId; // Trả về luôn, kết thúc hành trình!
+    }
+
+    // LỚP 2: NẾU REDIS KHÔNG CÓ (Có thể do Redis bị restart/clear cache) -> MÒ XUỐNG DB
+    const session = await this.sessionRepository.findByToken(token);
+    if (!session || session.isExpired()) {
+      return null; // Token sai, đã bị xóa hoặc hết hạn
+    }
+
+    // LỚP 3: PHỤC HỒI LẠI CACHE (Warming Cache)
+    // Để các request mili-giây tiếp theo của user này không cần xuống DB nữa
+    const ttlInSeconds = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
+    if (ttlInSeconds > 0) {
+      await this.cacheService.set(redisKey, { userId: session.userId }, ttlInSeconds);
+    }
+
+    return session.userId;
   }
 
   // ✅ THÊM HÀM NÀY CHO CHATBOT
@@ -167,4 +193,5 @@ export class AuthenticationService {
       return { accessToken, user: savedUser.toJSON() };
     });
   }
+
 }

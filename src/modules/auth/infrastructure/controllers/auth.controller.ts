@@ -17,7 +17,7 @@ import type { Request } from 'express'; // Import Request
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthenticationService) {}
+  constructor(private authService: AuthenticationService) { }
 
   @Public()
   @Post('login')
@@ -43,5 +43,16 @@ export class AuthController {
   @Get('profile')
   getProfile(@CurrentUser() user: User) {
     return { user: user.toJSON() };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() request: Request) {
+    // Lấy token từ header gửi lên
+    const token = request.headers.authorization?.split(' ')[1];
+    if (token) {
+      await this.authService.logout(token);
+    }
+    return { success: true, message: 'Đăng xuất thành công' };
   }
 }

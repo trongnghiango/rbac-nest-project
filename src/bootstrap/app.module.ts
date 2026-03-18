@@ -24,6 +24,7 @@ import { TestModule } from '@modules/test/test.module';
 import { NotificationModule } from '@modules/notification/notification.module';
 import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
 import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
+import { EmployeeModule } from '@modules/employee/employee.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { OrgStructureModule } from '@modules/org-structure/org-structure.module'
 
     //
     OrgStructureModule,
+    EmployeeModule,
   ],
 })
 export class AppModule {

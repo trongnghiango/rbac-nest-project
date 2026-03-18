@@ -7,4 +7,8 @@ export interface ISessionRepository {
   create(session: Session, tx?: Transaction): Promise<void>;
   findByUserId(userId: number): Promise<Session[]>;
   deleteByUserId(userId: number): Promise<void>;
+
+  // 👉 THÊM tinh nang thu hoi Token - MỚI
+  findByToken(token: string): Promise<Session | null>;
+  deleteByToken(token: string): Promise<void>;
 }

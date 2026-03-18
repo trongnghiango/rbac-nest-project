@@ -1,9 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
-import { IOrgStructureRepository, OrgUnitEntity } from '../../domain/repositories/org-structure.repository';
-import { orgUnits } from '@database/schema'; // Import Schema tổng
-//import { orgUnits } from '@database/schema/hrm.schema'; // Import Schema tổng
+import { IOrgStructureRepository, OrgUnitEntity, PositionEntity } from '../../domain/repositories/org-structure.repository';
+import { orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
 
 @Injectable()
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
@@ -39,6 +38,16 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
         const db = this.getDb();
         const result = await db.select().from(orgUnits).where(eq(orgUnits.id, id)).limit(1);
         return result[0] ? (result[0] as OrgUnitEntity) : null;
+    }
+
+    async findPositionById(id: number): Promise<PositionEntity | null> {
+        const db = this.getDb();
+        const result = await db.select()
+            .from(positions)
+            .where(eq(positions.id, id))
+            .limit(1);
+
+        return result[0] ? (result[0] as PositionEntity) : null;
     }
 
     async findAllActiveUnits(): Promise<OrgUnitEntity[]> {

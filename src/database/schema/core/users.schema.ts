@@ -1,33 +1,36 @@
 import { relations } from 'drizzle-orm';
-import {
-  pgTable,
-  bigserial,
-  text,
-  boolean,
-  timestamp,
-  jsonb,
-  varchar,
-} from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, text, boolean, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { userRoles } from '../rbac/rbac.schema';
+import { employees } from '../hrm/employees.schema';
+import { organizations } from '../crm/organizations.schema';
 
-import { userRoles } from '@database/schema';
-
+// --- TABLE ---
 export const users = pgTable('users', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   username: text('username').notNull().unique(),
-  telegramId: varchar('telegram_id', { length: 50 }).unique(),
-  email: text('email').unique(), // Nullable by default
+  email: text('email').unique(),
   hashedPassword: text('hashedPassword'),
+  telegramId: varchar('telegram_id', { length: 50 }).unique(), // Dùng cho Chatbot
 
-  fullName: text('fullName'),
-  isActive: boolean('isActive').default(true),
-  phoneNumber: text('phoneNumber'),
-  avatarUrl: text('avatarUrl'),
-  profile: jsonb('profile'),
-  createdAt: timestamp('createdAt').defaultNow(),
-  updatedAt: timestamp('updatedAt').defaultNow(),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// ✅ Định nghĩa Relation: Một User có nhiều Role (thông qua bảng nối userRoles)
-export const usersRelations = relations(users, ({ many }) => ({
+// --- RELATIONS (Nhìn code như nhìn sơ đồ ERD) ---
+export const usersRelations = relations(users, ({ one, many }) => ({
+  // 1 User có nhiều Roles
   userRoles: many(userRoles),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Nhân viên (HRM)
+  employeeProfile: one(employees, {
+    fields: [users.id],
+    references: [employees.userId],
+  }),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Khách hàng Doanh nghiệp (CRM)
+  organizationProfile: one(organizations, {
+    fields: [users.id],
+    references: [organizations.userId],
+  }),
 }));
