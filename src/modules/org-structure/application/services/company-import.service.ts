@@ -32,8 +32,8 @@ export class CompanyImportService {
         @Inject(IFileParser) private fileParser: IFileParser,
     ) { }
 
-    async importCoreCompany(csvContent: string, adminId: number) {
-        const records = this.fileParser.parseCsv<CoreEmployeeCsvRow>(csvContent);
+    async importCoreCompany(csvBuffer: Buffer, adminId: number) {
+        const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
         if (!records.length) return { success: false, message: 'File CSV rỗng' };
 
         // 1. Bóc tách dữ liệu Unique (Set/Map)

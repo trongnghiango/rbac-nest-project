@@ -41,6 +41,7 @@ export const orgUnits = pgTable('org_units', {
     code: varchar('code', { length: 50 }).unique().notNull(),
     name: varchar('name', { length: 255 }).notNull(),
     isActive: boolean('is_active').default(true),
+    deletedAt: timestamp('deleted_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
 });

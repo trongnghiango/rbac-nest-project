@@ -156,9 +156,18 @@ export class DrizzleUserRepository implements IUserRepository {
     return UserMapper.toDomain(result[0])!;
   }
 
+  // 👉 MỚI (SOFT DELETE):
   async delete(id: number, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
-    await db.delete(schema.users).where(eq(schema.users.id, id));
+
+    // Thay vì dùng db.delete(), ta dùng db.update()
+    await db.update(schema.users)
+      .set({
+        isActive: false,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(schema.users.id, id));
   }
 
   async exists(id: number, tx?: Transaction): Promise<boolean> {

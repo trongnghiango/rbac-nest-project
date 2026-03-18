@@ -13,6 +13,9 @@ export const users = pgTable('users', {
   telegramId: varchar('telegram_id', { length: 50 }).unique(), // Dùng cho Chatbot
 
   isActive: boolean('is_active').default(true),
+
+  deletedAt: timestamp('deleted_at'),
+
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });

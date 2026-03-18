@@ -27,9 +27,9 @@ export class UserImportService {
         @Inject(IFileParser) private fileParser: IFileParser,
     ) { }
 
-    async importFromCsv(csvContent: string, adminId: number) {
+    async importFromCsv(csvBuffer: Buffer, adminId: number) {
         // 1. Parse CSV
-        const records = this.fileParser.parseCsv<UserCsvRow>(csvContent);
+        const records = await this.fileParser.parseCsvAsync<UserCsvRow>(csvBuffer);
         if (!records.length) return { success: false, message: 'File rỗng' };
 
         const errors: string[] = [];

@@ -27,9 +27,9 @@ export class RbacManagerService {
     @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
   ) { }
 
-  async importFromCsv(csvContent: string): Promise<any> {
+  async importFromCsv(csvBuffer: Buffer): Promise<any> {
     // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
-    const records = this.fileParser.parseCsv<RbacCsvRow>(csvContent);
+    const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
 
     let createdCount = 0;
     let updatedCount = 0;

@@ -28,8 +28,8 @@ export class UserImportController {
         if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
         if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
 
-        const content = file.buffer.toString('utf-8');
-        const result = await this.userImportService.importFromCsv(content, admin.id);
+        // const content = file.buffer.toString('utf-8');
+        const result = await this.userImportService.importFromCsv(file.buffer, admin.id);
 
         return result;
     }
