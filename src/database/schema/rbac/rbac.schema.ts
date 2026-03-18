@@ -10,7 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
-import { users } from './users.schema';
+import { users } from '@database/schema';
 
 // --- 1. TABLES DEFINITIONS ---
 

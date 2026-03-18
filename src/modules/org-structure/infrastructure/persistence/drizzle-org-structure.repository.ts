@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { IOrgStructureRepository, OrgUnitEntity } from '../../domain/repositories/org-structure.repository';
-import { orgUnits } from '@database/schema/hrm.schema'; // Import Schema tổng
+import { orgUnits } from '@database/schema'; // Import Schema tổng
+//import { orgUnits } from '@database/schema/hrm.schema'; // Import Schema tổng
 
 @Injectable()
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
