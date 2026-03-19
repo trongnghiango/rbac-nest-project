@@ -21,26 +21,32 @@ export class DrizzleUserRepository implements IUserRepository {
 
   // --- READ METHODS (Dùng Query Builder để join bảng roles) ---
 
+  // 🚀 1. HÀM DÙNG CHO API /api/auth/profile (Cần xem đầy đủ dữ liệu)
   async findById(id: number, tx?: Transaction): Promise<User | null> {
     const db = this.getDb(tx);
-    // ✅ Dùng query API để fetch relations (user -> userRoles -> role)
     const result = await db.query.users.findFirst({
       where: eq(schema.users.id, id),
       with: {
-        userRoles: {
-          with: { role: true },
+        userRoles: { with: { role: true } },
+        // ✅ Bật Join bảng HRM
+        employeeProfile: {
+          with: { location: true, position: { with: { orgUnit: true, jobTitle: true } } },
         },
+        // ✅ Bật Join bảng CRM
+        organizationProfile: true,
       },
     });
     return UserMapper.toDomain(result);
   }
 
+  // ⚡ 2. HÀM DÙNG ĐỂ LOGIN / XÁC THỰC TOKEN (Phải chạy cực nhanh)
   async findByUsername(username: string, tx?: Transaction): Promise<User | null> {
     const db = this.getDb(tx);
     const result = await db.query.users.findFirst({
       where: eq(schema.users.username, username),
       with: {
         userRoles: { with: { role: true } },
+        // ❌ KHÔNG JOIN bảng Employee hay Organization ở đây để tiết kiệm DB
       },
     });
     return UserMapper.toDomain(result);

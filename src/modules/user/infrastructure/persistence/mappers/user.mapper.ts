@@ -1,6 +1,6 @@
 
 import { InferInsertModel } from 'drizzle-orm';
-import { User } from '../../../domain/entities/user.entity';
+import { AssociatedProfiles, User } from '../../../domain/entities/user.entity';
 import { users } from '@database/schema';
 
 // Type insert cho bảng users (flat)
@@ -19,21 +19,47 @@ export class UserMapper {
       ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
       : [];
 
-    return new User(
-      raw.id,
-      raw.username,
-      raw.email || undefined,
-      raw.hashedPassword || undefined,
-      raw.fullName || undefined,
-      raw.isActive ?? true,
-      roles, // ✅ Inject Roles
-      raw.telegramId || undefined, // ✅ Inject TelegramId
-      raw.phoneNumber || undefined,
-      raw.avatarUrl || undefined,
-      (raw.profile as any) || undefined,
-      raw.createdAt || undefined,
-      raw.updatedAt || undefined,
-    );
+    // ✅ LOGIC MỚI: Khởi tạo cái túi rỗng
+    const businessProfiles: AssociatedProfiles = {};
+
+    // 1. Nhặt dữ liệu HRM (Nếu User là Nhân viên)
+    if (raw.employeeProfile) {
+      businessProfiles.employee = {
+        employeeCode: raw.employeeProfile.employeeCode,
+        fullName: raw.employeeProfile.fullName,
+        position: raw.employeeProfile.position?.name || raw.employeeProfile.position?.jobTitle?.name,
+        departmentCode: raw.employeeProfile.position?.orgUnit?.code,
+        location: raw.employeeProfile.location?.name,
+      };
+    }
+
+    // 2. Nhặt dữ liệu CRM (Nếu User là Đối tác/Doanh nghiệp B2B)
+    if (raw.organizationProfile) {
+      businessProfiles.organization = {
+        companyName: raw.organizationProfile.companyName,
+        taxCode: raw.organizationProfile.taxCode,
+        industry: raw.organizationProfile.industry,
+        status: raw.organizationProfile.status,
+      };
+    }
+
+    // ✅ TRUYỀN DƯỚI DẠNG OBJECT
+    return new User({
+      id: raw.id,
+      username: raw.username,
+      email: raw.email || undefined,
+      hashedPassword: raw.hashedPassword || undefined,
+      fullName: raw.fullName || undefined,
+      isActive: raw.isActive ?? true,
+      roles: roles,
+      telegramId: raw.telegramId || undefined,
+      phoneNumber: raw.phoneNumber || undefined,
+      avatarUrl: raw.avatarUrl || undefined,
+      profile: (raw.profile as any) || undefined,
+      profiles: businessProfiles, // Truyền cái túi vào
+      createdAt: raw.createdAt || undefined,
+      updatedAt: raw.updatedAt || undefined,
+    });
   }
 
   /**

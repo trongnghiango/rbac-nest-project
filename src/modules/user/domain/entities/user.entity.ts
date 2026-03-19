@@ -1,23 +1,65 @@
 import { UserProfile } from '../types/user-profile.type';
 
+export interface AssociatedProfiles {
+  employee?: Record<string, any>;
+  organization?: Record<string, any>;
+  customer?: Record<string, any>;
+}
+
+// ✅ 1. TẠO INTERFACE PROPS
+export interface UserProps {
+  id?: number; // Đổi thành Optional để khi Create mới không cần hack `undefined as any`
+  username: string;
+  email?: string;
+  hashedPassword?: string;
+  fullName?: string;
+  isActive?: boolean;
+  roles?: string[];
+  telegramId?: string;
+  phoneNumber?: string;
+  avatarUrl?: string;
+  profile?: UserProfile;
+  profiles?: AssociatedProfiles;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export class User {
-  constructor(
-    private _id: number,
-    private _username: string,
-    private _email?: string,
-    private _hashedPassword?: string,
-    private _fullName?: string,
-    private _isActive: boolean = true,
-    // ✅ Strict RBAC: Role là danh sách mảng string
-    private _roles: string[] = [],
-    // ✅ Chatbot Integration
-    private _telegramId?: string,
-    private _phoneNumber?: string,
-    private _avatarUrl?: string,
-    private _profile?: UserProfile,
-    private _createdAt?: Date,
-    private _updatedAt?: Date,
-  ) { }
+  private _id?: number;
+  private _username: string;
+  private _email?: string;
+  private _hashedPassword?: string;
+  private _fullName?: string;
+  private _isActive: boolean;
+  private _roles: string[];
+  private _telegramId?: string;
+  private _phoneNumber?: string;
+  private _avatarUrl?: string;
+  private _profile?: UserProfile;
+  private _profiles: AssociatedProfiles;
+  private _createdAt?: Date;
+  private _updatedAt?: Date;
+
+  // ✅ 2. CONSTRUCTOR NHẬN 1 OBJECT DUY NHẤT
+  constructor(props: UserProps) {
+    this._id = props.id;
+    this._username = props.username;
+    this._email = props.email;
+    this._hashedPassword = props.hashedPassword;
+    this._fullName = props.fullName;
+
+    // Xử lý các giá trị mặc định (Default values)
+    this._isActive = props.isActive ?? true;
+    this._roles = props.roles || [];
+    this._profiles = props.profiles || {};
+
+    this._telegramId = props.telegramId;
+    this._phoneNumber = props.phoneNumber;
+    this._avatarUrl = props.avatarUrl;
+    this._profile = props.profile;
+    this._createdAt = props.createdAt;
+    this._updatedAt = props.updatedAt;
+  }
 
   // --- Getters ---
   get id() { return this._id; }
@@ -31,6 +73,9 @@ export class User {
   get phoneNumber() { return this._phoneNumber; }
   get avatarUrl() { return this._avatarUrl; }
   get profile() { return this._profile; }
+  // Getter mới
+  get profiles() { return this._profiles; }
+
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
 
@@ -65,6 +110,7 @@ export class User {
   }
 
   toJSON() {
+    return this._email;
     return {
       id: this._id,
       username: this._username,
@@ -76,6 +122,7 @@ export class User {
       phoneNumber: this._phoneNumber,
       avatarUrl: this._avatarUrl,
       profile: this._profile,
+      profiles: this._profiles,
       createdAt: this._createdAt,
       updatedAt: this._updatedAt,
     };

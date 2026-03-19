@@ -6,12 +6,14 @@ import { DrizzleNotificationRepository } from './infrastructure/persistence/driz
 import { INotificationRepository } from './domain/repositories/notification.repository';
 import { ConsoleEmailAdapter } from './infrastructure/adapters/console-email.adapter';
 import { IEmailSender } from './application/ports/email-sender.port';
+import { OtpRequestedListener } from './application/listeners/otp-requested.listener';
 
 @Module({
   controllers: [NotificationController],
   providers: [
     NotificationService,
     UserRegisteredListener, // Đăng ký Listener để EventBus Explorer quét được
+    OtpRequestedListener, // ✅ Đăng ký Listener tại đây để EventBus quét được
     {
       provide: INotificationRepository,
       useClass: DrizzleNotificationRepository,
@@ -23,4 +25,4 @@ import { IEmailSender } from './application/ports/email-sender.port';
   ],
   exports: [NotificationService],
 })
-export class NotificationModule {}
+export class NotificationModule { }

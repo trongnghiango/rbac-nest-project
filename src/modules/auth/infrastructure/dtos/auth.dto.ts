@@ -1,5 +1,6 @@
 import {
   IsString,
+  Length,
   MinLength,
   IsNumber,
   IsOptional,
@@ -43,4 +44,37 @@ export class RegisterDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+}
+
+export class ChangePasswordDto {
+  @ApiProperty({ example: 'OldPass123!' })
+  @IsString()
+  oldPassword: string;
+
+  @ApiProperty({ example: 'NewPass123!', description: 'Mật khẩu mới (Tối thiểu 6 ký tự)' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'user@test.com', description: 'Email đã đăng ký tài khoản' })
+  @IsEmail()
+  email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ example: 'user@test.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ example: '123456', description: 'Mã OTP 6 số nhận từ Email' })
+  @IsString()
+  @Length(6, 6)
+  otp: string;
+
+  @ApiProperty({ example: 'NewPass123!' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
 }

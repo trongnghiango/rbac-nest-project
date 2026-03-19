@@ -89,15 +89,16 @@ export class UserImportService {
             );
 
             chunk.forEach((row, j) => {
-                usersToInsert.push(new User(
-                    undefined as any,
-                    row.username,
-                    row.email || undefined,
-                    hashedPasswords[j],
-                    row.fullName,
-                    true,
-                    [], undefined, undefined, undefined, undefined, new Date(), new Date()
-                ));
+                usersToInsert.push(new User({
+                    username: row.username,
+                    email: row.email || undefined,
+                    hashedPassword: hashedPasswords[j],
+                    fullName: row.fullName,
+                    isActive: true,
+                    roles: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                }));
             });
         }
 

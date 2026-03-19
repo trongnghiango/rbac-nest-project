@@ -21,6 +21,7 @@ import {
 } from '@core/shared/application/ports/logger.port';
 import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
 import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
 
 export type AuthResponse = {
   accessToken: string;
@@ -52,7 +53,11 @@ export class AuthenticationService {
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
     if (!user.id) throw new InternalServerErrorException('User ID is missing');
 
-    const payload: JwtPayload = { sub: user.id, username: user.username, roles: [] };
+    const payload: JwtPayload = {
+      sub: user.id,
+      username: user.username,
+      roles: user.roles || []
+    };
     const accessToken = this.jwtService.sign(payload);
 
     const expiresAt = new Date();
@@ -140,21 +145,17 @@ export class AuthenticationService {
 
     const hashedPassword = await PasswordUtil.hash(data.password);
 
-    const newUser = new User(
-      data.id,
-      data.username,
-      data.email,
-      hashedPassword,
-      data.fullName,
-      true,
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      new Date(),
-      new Date(),
-    );
+    const newUser = new User({
+      id: data.id,
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      fullName: data.fullName,
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     return this.txManager.runInTransaction(async (tx) => {
       const savedUser = await this.userRepository.save(newUser, tx);
@@ -192,6 +193,83 @@ export class AuthenticationService {
 
       return { accessToken, user: savedUser.toJSON() };
     });
+  }
+
+  // =========================================================================
+  // 4. ĐỔI MẬT KHẨU (Dành cho User đang đăng nhập)
+  // =========================================================================
+  async changePassword(userId: number, dto: any): Promise<void> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || !user.hashedPassword) throw new BadRequestException('User không hợp lệ');
+
+    // Kiểm tra mật khẩu cũ
+    const isMatch = await PasswordUtil.compare(dto.oldPassword, user.hashedPassword);
+    if (!isMatch) throw new BadRequestException('Mật khẩu cũ không chính xác');
+
+    // Hash mật khẩu mới và gọi hàm của Rich Domain Entity
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew); // Logic đổi trạng thái nằm gọn trong Entity
+
+    await this.txManager.runInTransaction(async (tx) => {
+      // 1. Lưu user
+      await this.userRepository.save(user, tx);
+
+      // 2. Bảo mật: Xóa toàn bộ Session cũ trong DB để ép các thiết bị khác văng ra (Đăng xuất khỏi mọi nơi)
+      await this.sessionRepository.deleteByUserId(userId);
+    });
+  }
+
+  // =========================================================================
+  // 5. QUÊN MẬT KHẨU (Gửi OTP)
+  // =========================================================================
+  async forgotPassword(email: string): Promise<void> {
+    const user = await this.userRepository.findByEmail(email);
+
+    // Bảo mật: Không ném lỗi NotFound để tránh hacker dò quét email trong hệ thống
+    if (!user || !user.isActive) return;
+
+    // Sinh OTP 6 số ngẫu nhiên
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Lưu vào Redis (TTL 5 phút = 300 giây)
+    const redisKey = `auth:otp:${email}`;
+    await this.cacheService.set(redisKey, otpCode, 300);
+
+    // Bắn Event để NotificationModule lo việc gửi Email
+    await this.eventBus.publish(
+      new OtpRequestedEvent(email, {
+        email: user.email!,
+        fullName: user.fullName || 'Người dùng',
+        otpCode: otpCode,
+      })
+    );
+  }
+
+  // =========================================================================
+  // 6. ĐẶT LẠI MẬT KHẨU (Xác thực OTP)
+  // =========================================================================
+  async resetPassword(dto: any): Promise<void> {
+    const redisKey = `auth:otp:${dto.email}`;
+    const cachedOtp = await this.cacheService.get<string>(redisKey);
+
+    if (!cachedOtp || cachedOtp !== dto.otp) {
+      throw new BadRequestException('Mã OTP không hợp lệ hoặc đã hết hạn');
+    }
+
+    const user = await this.userRepository.findByEmail(dto.email);
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    // Cập nhật mật khẩu mới
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew);
+
+    await this.txManager.runInTransaction(async (tx) => {
+      await this.userRepository.save(user, tx);
+      await this.sessionRepository.deleteByUserId(user.id); // Xóa session cũ
+    });
+
+    // Hủy OTP trong Redis sau khi dùng thành công
+    await this.cacheService.del(redisKey);
   }
 
 }
