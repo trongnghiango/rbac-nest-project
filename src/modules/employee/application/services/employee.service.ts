@@ -75,7 +75,8 @@ export class EmployeeService {
             // 6. Cập nhật lại hồ sơ nhân viên: Gắn ID của tài khoản vừa tạo vào hồ sơ
             await this.employeeRepo.save({
                 id: employeeId,       // CÓ ID -> Repository sẽ hiểu đây là lệnh UPDATE
-                userId: newUser.id,   // Gắn userId vào
+                // userId: newUser.id,   // Gắn userId vàoo
+                userId: (newUser as { id: number }).id,
             });
 
             // 7. Trả về kết quả cho IT hoặc tự động gửi email cho nhân viên
