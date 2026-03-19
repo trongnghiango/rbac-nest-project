@@ -1,0 +1,22 @@
+role,resource,action,attributes,description
+SUPER_ADMIN,*,*,*,Toàn quyền hệ thống
+ADMIN,system,config,*,Cấu hình hệ thống
+ADMIN,user,manage,*,Quản lý tài khoản
+ADMIN,org,manage,*,Quản lý cơ cấu tổ chức
+ADMIN,employee,manage,*,Quản lý hồ sơ nhân sự
+ADMIN,report,manage,*,Quản lý báo cáo
+ADMIN,audit,view,*,Xem lịch sử hệ thống
+MANAGER,org,read,*,Xem sơ đồ tổ chức
+MANAGER,employee,read,*,Xem hồ sơ cấp dưới
+MANAGER,employee,update,*,Cập nhật nhân viên
+MANAGER,report,view,*,Xem báo cáo phòng
+MANAGER,booking,manage,*,Quản lý đơn hàng
+STAFF,org,read,*,Xem sơ đồ
+STAFF,user,read,*,Xem danh bạ
+STAFF,booking,create,*,Tạo đơn hàng
+STAFF,booking,read,*,Xem đơn hàng
+STAFF,booking,update,*,Cập nhật đơn
+IT_ADMIN,rbac,manage,*,Phân quyền hệ thống
+IT_ADMIN,user,manage,*,Reset mật khẩu
+QA_AUDITOR,audit,view,*,Xem log hệ thống
+QA_AUDITOR,report,export,*,Xuất báo cáo chất lượng

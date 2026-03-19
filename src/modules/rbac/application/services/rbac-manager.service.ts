@@ -31,6 +31,12 @@ export class RbacManagerService {
     // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
     const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
 
+    // ✅ THÊM LOG ĐỂ DEBUG
+    this.logger.debug(`[CSV Import] Đã parse được: ${records.length} dòng.`);
+    if (records.length > 0) {
+      this.logger.debug(`[CSV Import] Dữ liệu mẫu dòng 1: ${JSON.stringify(records[0])}`);
+    }
+
     let createdCount = 0;
     let updatedCount = 0;
 
@@ -38,7 +44,11 @@ export class RbacManagerService {
       // 2. Lấy data từ Object (Rất an toàn, không sợ phẩy trong ngoặc kép nữa)
       const { role: roleName, resource, action, attributes, description } = row;
 
-      if (!roleName || !resource) continue;
+      // ✅ THÊM LOG ĐỂ XEM CÓ BỊ SKIP KHÔNG
+      if (!roleName || !resource) {
+        this.logger.warn(`[CSV Import] Bỏ qua dòng do thiếu role hoặc resource: ${JSON.stringify(row)}`);
+        continue;
+      }
 
       const permName = resource === '*' ? 'manage:all' : `${resource}:${action}`;
 

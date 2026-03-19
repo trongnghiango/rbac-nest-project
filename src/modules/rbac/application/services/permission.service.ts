@@ -5,6 +5,7 @@ import {
 } from '../../domain/repositories/rbac.repository';
 // IMPORT Interface
 import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { CORE_ROLES } from '@modules/rbac/domain/constants/rbac.constants';
 
 @Injectable()
 export class PermissionService {
@@ -15,9 +16,9 @@ export class PermissionService {
     @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
     @Inject(IRoleRepository) private roleRepo: IRoleRepository,
     @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
-  ) {}
+  ) { }
 
-  async userHasPermission(
+  async userHasPermission_old(
     userId: number,
     permissionName: string,
   ): Promise<boolean> {
@@ -52,6 +53,56 @@ export class PermissionService {
     // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
 
     return permArray.includes(permissionName);
+  }
+
+  async userHasPermission(userId: number, permissionName: string): Promise<boolean> {
+    const cacheKey = `${this.CACHE_PREFIX}${userId}`;
+
+    // 1. Lấy từ Cache
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
+    if (cached) {
+      // ✅ Bổ sung logic: Nếu trong cache có role SUPER_ADMIN hoặc quyền '*' -> Cho qua luôn
+      if (cached.includes(CORE_ROLES.SUPER_ADMIN) || cached.includes('*') || cached.includes('manage:all')) {
+        return true;
+      }
+      return cached.includes(permissionName);
+    }
+
+    // 2. Query DB nếu Cache Miss
+    const userRoles = await this.userRoleRepo.findByUserId(userId);
+    const activeRoles = userRoles.filter((ur) => ur.isActive() && ur.role?.isActive);
+
+    if (activeRoles.length === 0) return false;
+
+    // ✅ KIỂM TRA SUPER_ADMIN Bypass
+    const isSuperAdmin = activeRoles.some(ur => ur.role?.name === CORE_ROLES.SUPER_ADMIN);
+
+    const roleIds = activeRoles.map((ur) => ur.roleId);
+    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+
+    const permissions = new Set<string>();
+
+    // Nếu là Super Admin, cache lại keyword nhận diện để lần sau bỏ qua nhanh
+    if (isSuperAdmin) {
+      permissions.add(CORE_ROLES.SUPER_ADMIN);
+      permissions.add('*');
+    } else {
+      roles.forEach((r) =>
+        r.permissions?.forEach((p) => {
+          if (p.isActive) permissions.add(p.name); // Lưu string "module:action"
+        }),
+      );
+    }
+
+    const permArray = Array.from(permissions);
+
+    // Lưu vào cache Redis
+    await this.cacheService.set(cacheKey, permArray, this.CACHE_TTL);
+
+    // Trả về kết quả
+    if (isSuperAdmin) return true;
+    return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
   }
 
   async assignRole(

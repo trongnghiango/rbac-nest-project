@@ -1,50 +1,65 @@
-export enum SystemRole {
-  SUPER_ADMIN = 'SUPER_ADMIN',
-  ADMIN = 'ADMIN',
-  MANAGER = 'MANAGER',
-  STAFF = 'STAFF',
-  USER = 'USER',
-  GUEST = 'GUEST',
-}
+import { ORG_PERMISSIONS } from "@modules/org-structure/domain/constants/org.permissions";
+import { USER_PERMISSIONS } from "@modules/user/domain/constants/user.permissions";
 
-export enum SystemPermission {
-  // User permissions
-  USER_CREATE = 'user:create',
-  USER_READ = 'user:read',
-  USER_UPDATE = 'user:update',
-  USER_DELETE = 'user:delete',
-  USER_MANAGE = 'user:manage',
+/**
+ * 1. CORE ROLES
+ * Chỉ khai báo các Role mang tính hệ thống (Bypass quyền, Default User).
+ * Tuyệt đối không khai báo MANAGER, STAFF, HR... ở đây.
+ */
+export const CORE_ROLES = {
+  SUPER_ADMIN: 'SUPER_ADMIN', // Thượng phương bảo kiếm (Bypass mọi Guard)
+  DEFAULT_USER: 'USER',       // Vai trò mặc định khi có người đăng ký mới
+} as const;
 
-  // Booking permissions
-  BOOKING_CREATE = 'booking:create',
-  BOOKING_READ = 'booking:read',
-  BOOKING_UPDATE = 'booking:update',
-  BOOKING_DELETE = 'booking:delete',
-  BOOKING_MANAGE = 'booking:manage',
+/**
+ * 2. CORE ACTIONS
+ * Các hành động CRUD chuẩn. Dùng để tham chiếu trong code nếu cần, 
+ * giúp đồng bộ với file rbac.csv
+ */
+export const ACTIONS = {
+  MANAGE: 'manage', // Toàn quyền (Tương đương *)
+  CREATE: 'create',
+  READ: 'read',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  EXPORT: 'export',
+} as const;
 
-  // Payment permissions
-  PAYMENT_PROCESS = 'payment:process',
-  PAYMENT_REFUND = 'payment:refund',
-  PAYMENT_VIEW = 'payment:view',
-
-  // Report permissions
-  REPORT_VIEW = 'report:view',
-  REPORT_EXPORT = 'report:export',
-  REPORT_MANAGE = 'report:manage',
-
-  // System permissions
-  SYSTEM_CONFIG = 'system:config',
-  RBAC_MANAGE = 'rbac:manage',
-  AUDIT_VIEW = 'audit:view',
-}
-
-export const ROLE_HIERARCHY: Record<SystemRole, number> = {
-  [SystemRole.SUPER_ADMIN]: 100,
-  [SystemRole.ADMIN]: 90,
-  [SystemRole.MANAGER]: 80,
-  [SystemRole.STAFF]: 70,
-  [SystemRole.USER]: 60,
-  [SystemRole.GUEST]: 50,
+/**
+ * 3. HIERARCHY
+ * So sánh cấp bậc (Giúp Admin không thể xóa/sửa Super Admin).
+ */
+export const ROLE_HIERARCHY: Record<string, number> = {
+  [CORE_ROLES.SUPER_ADMIN]: 100,
+  'ADMIN': 90,
+  'MANAGER': 80,
+  'STAFF': 70,
+  [CORE_ROLES.DEFAULT_USER]: 60,
 };
 
-export const DEFAULT_ROLE = SystemRole.USER;
+/**
+ * 4. BỘ TỪ ĐIỂN QUYỀN (Dành cho Developer)
+ * - Đây KHÔNG PHẢI là giới hạn của hệ thống.
+ * - Đây chỉ là bộ hằng số để Developer gõ code có Auto-complete, tránh sai chính tả.
+ * - Nếu có module mới (VD: payroll), Dev có thể gõ thẳng string 'payroll:view' 
+ *   hoặc bổ sung vào đây cho team cùng dùng.
+ */
+// Nhờ Spread Operator (...), nếu bạn thêm module mới (VD: PAYROLL), 
+// bạn chỉ cần import PAYROLL_PERMISSIONS vào đây.
+export const PERMISSIONS = {
+  ...USER_PERMISSIONS,
+  ...ORG_PERMISSIONS,
+  // Thêm các module khác vào đây...
+
+  // Các quyền gốc của hệ thống (System)
+  SYSTEM_CONFIG: 'system:config',
+  RBAC_MANAGE: 'rbac:manage',
+} as const;
+
+
+// Trích xuất các value thành 1 Type (VD: 'system:config' | 'rbac:manage' | ...)
+export type KnownPermission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
+
+// 🚀 MAGIC TRICK: Cho phép Auto-complete các quyền đã biết, 
+// nhưng VẪN CHO PHÉP Dev gõ string bất kỳ nếu hệ thống có Module mới!
+export type PermissionString = KnownPermission | (string & {});

@@ -19,6 +19,8 @@ export class CsvParserAdapter implements IFileParser {
         columns: true, // Lấy dòng đầu làm Headers
         skip_empty_lines: true,
         trim: true,
+        bom: true, // ✅ QUAN TRỌNG: Thêm dòng này để loại bỏ ký tự ẩn \uFEFF của Windows
+        relax_quotes: true, // ✅ Cho phép parse thoáng hơn nếu file có dấu ngoặc kép thừa
       })
     );
 

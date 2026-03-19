@@ -140,17 +140,7 @@ export class DrizzleModule {}
 
 ```
 
-## File: src/database/schema/index.ts
-```
-export * from './users.schema';
-export * from './sessions.schema';
-export * from './rbac.schema';
-export * from './notifications.schema';
-
-export * from './hrm.schema'
-```
-
-## File: src/database/schema/notifications.schema.ts
+## File: src/database/schema/system/notifications.schema.ts
 ```
 import {
   pgTable,
@@ -174,7 +164,197 @@ export const notifications = pgTable('notifications', {
 
 ```
 
-## File: src/database/schema/rbac.schema.ts
+## File: src/database/schema/hrm/employees.schema.ts
+```
+import { pgTable, serial, text, integer, date, timestamp, bigint, numeric } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from '../core/users.schema';
+import { locations, positions } from './org-structure.schema';
+
+// 1. Hồ sơ Nhân viên
+export const employees = pgTable('employees', {
+    id: serial('id').primaryKey(),
+    userId: bigint('user_id', { mode: 'number' })
+        .unique() // Vẫn giữ unique để 1 User chỉ map 1 Employee
+        .references(() => users.id, { onDelete: 'set null' }), // Đổi cascade thành set null để khi xóa User, hồ sơ NV vẫn còn
+
+    employeeCode: text('employee_code').notNull().unique(), // VD: 001, 007
+    fullName: text('full_name').notNull(),
+    dateOfBirth: date('date_of_birth'),
+    phoneNumber: text('phone_number'),
+    avatarUrl: text('avatar_url'),
+
+    // 👉 THAY ĐỔI LỚN: NV liên kết trực tiếp với Vị trí (Position) và Địa điểm (Location)
+    locationId: integer('location_id').references(() => locations.id), // Nơi làm việc (HCM)
+    positionId: integer('position_id').references(() => positions.id), // Vị trí công việc (Bao hàm cả Phòng, Chức danh, Bậc)
+
+    managerId: integer('manager_id'), // Người quản lý trực tiếp
+
+    joinDate: date('join_date'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// 2. 🔥 BẢNG MỚI: KỲ ĐÁNH GIÁ (PERFORMANCE REVIEWS - Lộ trình thăng tiến)
+export const performanceReviews = pgTable('performance_reviews', {
+    id: serial('id').primaryKey(),
+    employeeId: integer('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    reviewerId: integer('reviewer_id').references(() => employees.id), // Người đánh giá (Manager)
+
+    reviewPeriod: text('review_period').notNull(), // VD: "Q1-2026"
+    score: numeric('score', { precision: 5, scale: 2 }), // Điểm đánh giá
+    comments: text('comments'),
+
+    // Đề xuất sau đánh giá
+    proposedPositionId: integer('proposed_position_id').references(() => positions.id), // Đề xuất lên vị trí/bậc mới
+    status: text('status').default('PENDING'), // PENDING, APPROVED, REJECTED
+
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
+// --- RELATIONS ---
+export const employeesRelations = relations(employees, ({ one, many }) => ({
+    user: one(users, { fields: [employees.userId], references: [users.id] }),
+    location: one(locations, { fields: [employees.locationId], references: [locations.id] }),
+
+    // Liên kết chặt chẽ với Ma trận Vị trí
+    position: one(positions, { fields: [employees.positionId], references: [positions.id] }),
+
+    manager: one(employees, { fields: [employees.managerId], references: [employees.id], relationName: 'managerRelation' }),
+    subordinates: many(employees, { relationName: 'managerRelation' }),
+    reviews: many(performanceReviews, { relationName: 'employeeReviews' }),
+}));
+
+export const performanceReviewsRelations = relations(performanceReviews, ({ one }) => ({
+    employee: one(employees, { fields: [performanceReviews.employeeId], references: [employees.id], relationName: 'employeeReviews' }),
+    reviewer: one(employees, { fields: [performanceReviews.reviewerId], references: [employees.id] }),
+    proposedPosition: one(positions, { fields: [performanceReviews.proposedPositionId], references: [positions.id] }),
+}));
+
+
+```
+
+## File: src/database/schema/hrm/org-structure.schema.ts
+```
+import { pgTable, serial, varchar, integer, boolean, timestamp, numeric } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { employees } from './employees.schema';
+
+// 1. Địa điểm làm việc (Chi nhánh, Tòa nhà)
+export const locations = pgTable('locations', {
+    id: serial('id').primaryKey(),
+    code: varchar('code', { length: 50 }).unique().notNull(), // VD: HCM, HN
+    name: varchar('name', { length: 255 }).notNull(),
+    isActive: boolean('is_active').default(true),
+});
+
+// 2. Cấp bậc lương / Rank (Từ Bậc 1 -> Bậc 10 như Hình 2)
+export const grades = pgTable('grades', {
+    id: serial('id').primaryKey(),
+    levelNumber: integer('level_number').notNull().unique(), // 1, 2... 10
+    code: varchar('code', { length: 50 }).unique().notNull(), // BAC_1, BAC_10
+    name: varchar('name', { length: 255 }).notNull(),
+});
+
+// 3. Thang bảng lương (Salary Scales) - Link với Bậc
+export const salaryScales = pgTable('salary_scales', {
+    id: serial('id').primaryKey(),
+    gradeId: integer('grade_id').notNull().references(() => grades.id, { onDelete: 'cascade' }),
+    baseSalary: numeric('base_salary', { precision: 15, scale: 2 }), // Lương cơ bản
+    coefficient: numeric('coefficient', { precision: 5, scale: 2 }), // Hệ số lương (VD: 2.34)
+    effectiveDate: timestamp('effective_date'), // Ngày áp dụng
+});
+
+// 4. Chức danh công việc chung (Generic Job Titles)
+export const jobTitles = pgTable('job_titles', {
+    id: serial('id').primaryKey(),
+    name: varchar('name', { length: 255 }).notNull().unique(), // Trưởng phòng, Chuyên viên, Trợ lý...
+});
+
+// 5. Cơ cấu tổ chức (Sơ đồ cây: Công ty -> Khối -> Phòng -> Nhóm)
+export const orgUnits = pgTable('org_units', {
+    id: serial('id').primaryKey(),
+    parentId: integer('parent_id'),
+    type: varchar('type', { length: 50 }).notNull(), // COMPANY, BOD, DEPARTMENT, TEAM
+    code: varchar('code', { length: 50 }).unique().notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    isActive: boolean('is_active').default(true),
+    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// 6. 🔥 BẢNG MỚI: VỊ TRÍ ĐỊNH BIÊN (POSITIONS - MA TRẬN CHỨC DANH)
+// Đại diện cho các ô màu vàng/xanh trong Hình 3
+export const positions = pgTable('positions', {
+    id: serial('id').primaryKey(),
+    code: varchar('code', { length: 50 }).unique().notNull(), // VD: POS-IT-06
+    name: varchar('name', { length: 255 }).notNull(), // VD: "CV-IT" hoặc "Chuyên viên B2"
+
+    orgUnitId: integer('org_unit_id').notNull().references(() => orgUnits.id), // Thuộc phòng nào
+    jobTitleId: integer('job_title_id').notNull().references(() => jobTitles.id), // Mang chức danh gì
+    gradeId: integer('grade_id').notNull().references(() => grades.id), // Ở bậc mấy
+
+    headcountLimit: integer('headcount_limit').default(1), // Định biên nhân sự (Số lượng tối đa cho vị trí này)
+    isActive: boolean('is_active').default(true),
+});
+
+// --- RELATIONS ---
+export const orgUnitsRelations = relations(orgUnits, ({ one, many }) => ({
+    parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id] }),
+    children: many(orgUnits),
+    positions: many(positions), // 1 Phòng ban có nhiều Vị trí
+}));
+
+export const gradesRelations = relations(grades, ({ many }) => ({
+    salaryScales: many(salaryScales),
+    positions: many(positions),
+}));
+
+export const positionsRelations = relations(positions, ({ one, many }) => ({
+    orgUnit: one(orgUnits, { fields: [positions.orgUnitId], references: [orgUnits.id] }),
+    jobTitle: one(jobTitles, { fields: [positions.jobTitleId], references: [jobTitles.id] }),
+    grade: one(grades, { fields: [positions.gradeId], references: [grades.id] }),
+    employees: many(employees), // 1 Vị trí có thể có nhiều nhân viên (nếu headcount > 1)
+}));
+
+```
+
+## File: src/database/schema/crm/organizations.schema.ts
+```
+import { pgTable, serial, text, timestamp, bigint } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from '../core/users.schema';
+
+export const organizations = pgTable('organizations', {
+    id: serial('id').primaryKey(),
+
+    // FK trỏ về Users (One-to-One) để đăng nhập cổng Portal CRM
+    userId: bigint('user_id', { mode: 'number' })
+        .notNull()
+        .unique()
+        .references(() => users.id, { onDelete: 'cascade' }),
+
+    companyName: text('company_name').notNull(),
+    taxCode: text('tax_code').unique(), // Mã số thuế
+    industry: text('industry'), // IT, Y Tế, Sản Xuất...
+    website: text('website'),
+
+    contactPerson: text('contact_person'),
+    contactPhone: text('contact_phone'),
+
+    status: text('status').default('LEAD'), // LEAD, ACTIVE_CUSTOMER, CHURNED
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
+// --- RELATIONS ---
+export const organizationsRelations = relations(organizations, ({ one }) => ({
+    user: one(users, { fields: [organizations.userId], references: [users.id] }),
+}));
+
+```
+
+## File: src/database/schema/rbac/rbac.schema.ts
 ```
 import {
   pgTable,
@@ -188,7 +368,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
-import { users } from './users.schema';
+import { users } from '@database/schema';
 
 // --- 1. TABLES DEFINITIONS ---
 
@@ -310,119 +490,116 @@ export const userRolesRelations = relations(userRoles, ({ one }) => ({
 
 ```
 
-## File: src/database/schema/users.schema.ts
+## File: src/database/schema/index.ts
+```
+// Core
+export * from './core/users.schema';
+export * from './core/sessions.schema';
+
+
+export * from './rbac/rbac.schema';
+export * from './system/notifications.schema';
+
+export * from './hrm/org-structure.schema';
+export * from './hrm/employees.schema';
+```
+
+## File: src/database/schema/core/users.schema.ts
 ```
 import { relations } from 'drizzle-orm';
-import {
-  pgTable,
-  bigserial,
-  text,
-  boolean,
-  timestamp,
-  jsonb,
-  varchar,
-} from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, text, boolean, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { userRoles } from '../rbac/rbac.schema';
+import { employees } from '../hrm/employees.schema';
+import { organizations } from '../crm/organizations.schema';
 
-import { userRoles } from './rbac.schema';
-
+// --- TABLE ---
 export const users = pgTable('users', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
   username: text('username').notNull().unique(),
-  telegramId: varchar('telegram_id', { length: 50 }).unique(),
-  email: text('email').unique(), // Nullable by default
+  email: text('email').unique(),
   hashedPassword: text('hashedPassword'),
+  telegramId: varchar('telegram_id', { length: 50 }).unique(), // Dùng cho Chatbot
 
-  fullName: text('fullName'),
-  isActive: boolean('isActive').default(true),
-  phoneNumber: text('phoneNumber'),
-  avatarUrl: text('avatarUrl'),
-  profile: jsonb('profile'),
-  createdAt: timestamp('createdAt').defaultNow(),
-  updatedAt: timestamp('updatedAt').defaultNow(),
+  isActive: boolean('is_active').default(true),
+
+  deletedAt: timestamp('deleted_at'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// ✅ Định nghĩa Relation: Một User có nhiều Role (thông qua bảng nối userRoles)
-export const usersRelations = relations(users, ({ many }) => ({
+// --- RELATIONS (Nhìn code như nhìn sơ đồ ERD) ---
+export const usersRelations = relations(users, ({ one, many }) => ({
+  // 1 User có nhiều Roles
   userRoles: many(userRoles),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Nhân viên (HRM)
+  employeeProfile: one(employees, {
+    fields: [users.id],
+    references: [employees.userId],
+  }),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Khách hàng Doanh nghiệp (CRM)
+  organizationProfile: one(organizations, {
+    fields: [users.id],
+    references: [organizations.userId],
+  }),
 }));
+
 ```
 
-## File: src/database/schema/sessions.schema.ts
+## File: src/database/schema/core/sessions.schema.ts
 ```
-import {
-  pgTable,
-  uuid,
-  bigint,
-  text,
-  timestamp,
-  index,
-} from 'drizzle-orm/pg-core';
+import { pgTable, uuid, bigint, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from './users.schema';
 
 export const sessions = pgTable(
   'sessions',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    userId: bigint('userId', { mode: 'number' }).notNull(),
+    userId: bigint('user_id', { mode: 'number' }).notNull().references(() => users.id, { onDelete: 'cascade' }),
     token: text('token').notNull(),
-    expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
-    ipAddress: text('ipAddress'),
-    userAgent: text('userAgent'),
-    createdAt: timestamp('createdAt').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
   },
-  (table) => {
-    return {
-      userIdIdx: index('idx_sessions_user_id').on(table.userId),
-    };
-  },
+  (table) => ({
+    userIdIdx: index('idx_sessions_user_id').on(table.userId),
+  }),
 );
 
-```
-
-## File: src/database/schema/hrm.schema.ts
-```
-import { pgTable, serial, varchar, integer, boolean, timestamp } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
-
-// 1. Địa điểm (Locations)
-export const locations = pgTable('locations', {
-    id: serial('id').primaryKey(),
-    code: varchar('code', { length: 50 }).unique().notNull(), // HCM, HN...
-    name: varchar('name', { length: 255 }).notNull(),
-    isActive: boolean('is_active').default(true),
-});
-
-// 2. Cấp bậc (Grades)
-export const grades = pgTable('grades', {
-    id: serial('id').primaryKey(),
-    levelNumber: integer('level_number').notNull(), // 1, 2, 3...
-    code: varchar('code', { length: 50 }).unique().notNull(), // A1, B2...
-    name: varchar('name', { length: 255 }).notNull(), // Trợ lý A1...
-});
-
-// 3. Chức danh (Job Titles)
-export const jobTitles = pgTable('job_titles', {
-    id: serial('id').primaryKey(),
-    name: varchar('name', { length: 255 }).notNull().unique(), // Giám đốc, Trưởng phòng...
-});
-
-// 4. Cơ cấu tổ chức (Org Units - Cây phân cấp)
-export const orgUnits = pgTable('org_units', {
-    id: serial('id').primaryKey(),
-    parentId: integer('parent_id'), // Soft FK or Hard FK tự tham chiếu
-    type: varchar('type', { length: 50 }).notNull(), // COMPANY, BRANCH, DEPARTMENT, TEAM
-    code: varchar('code', { length: 50 }).unique().notNull(),
-    name: varchar('name', { length: 255 }).notNull(),
-    isActive: boolean('is_active').default(true),
-    createdAt: timestamp('created_at').defaultNow(),
-    updatedAt: timestamp('updated_at').defaultNow(),
-});
-
-// Định nghĩa quan hệ cha-con cho Drizzle
-export const orgUnitsRelations = relations(orgUnits, ({ one, many }) => ({
-    parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id] }),
-    children: many(orgUnits),
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, { fields: [sessions.userId], references: [users.id] }),
 }));
 
+```
+
+## File: src/database/schema/note.md
+```
+
+
+### 📂 Cấu trúc thư mục Database Schema
+```
+src/database/schema/
+├── index.ts                           # File gom (Export all) để cấu hình Drizzle
+├── core/
+│   ├── users.schema.ts                # Định danh, Đăng nhập (Identity)
+│   └── sessions.schema.ts             # Phiên làm việc (Tokens)
+├── rbac/
+│   └── rbac.schema.ts                 # Roles, Permissions, Phân quyền
+├── hrm/
+│   ├── org-structure.schema.ts        # Sơ đồ tổ chức, chức danh, cấp bậc
+│   └── employees.schema.ts            # Hồ sơ Nhân viên (Profile)
+├── crm/
+│   └── organizations.schema.ts        # Hồ sơ Doanh nghiệp/Đối tác B2B (Profile)
+└── system/
+    └── notifications.schema.ts        # Thông báo hệ thống
+```
+
+> Vì sao lại tổ chức cấu trúc thư mục `schema` như cấu trúc trên? Rõ ràng theo modules nên khi tách microservices sẽ dễ dàng theo modules và thấy rõ schema của module nào cần tách. Đồng thời cũng phù hợp vói cách tổ chức của Drizzle ORM.
+### 
 ```
 
 ## File: src/database/drizzle.provider.ts
@@ -836,7 +1013,8 @@ export interface ICacheService {
 export const IFileParser = Symbol('IFileParser');
 
 export interface IFileParser {
-  parseCsv<T>(content: string): T[];
+  // Thay đổi: Nhận vào raw Buffer và trả về Promise để không block Event Loop
+  parseCsvAsync<T>(buffer: Buffer): Promise<T[]>;
 }
 
 ```
@@ -856,26 +1034,42 @@ export interface IChatbotService {
 ```
 import { Injectable } from '@nestjs/common';
 import { IFileParser } from '../../application/ports/file-parser.port';
-import { parse } from 'csv-parse/sync'; // Import module đồng bộ của csv-parse
+import { parse } from 'csv-parse'; // 👉 DÙNG MODULE BẤT ĐỒNG BỘ
+import { Readable } from 'stream'; // 👉 Core module của Node.js
 
 @Injectable()
 export class CsvParserAdapter implements IFileParser {
-  parseCsv<T>(content: string): T[] {
-    if (!content || content.trim() === '') return [];
+  async parseCsvAsync<T>(buffer: Buffer): Promise<T[]> {
+    if (!buffer || buffer.length === 0) return [];
+
+    const records: T[] = [];
+
+    // 1. Biến Buffer (cục data trên RAM) thành một Stream (Luồng dữ liệu chảy từ từ)
+    const stream = Readable.from(buffer);
+
+    // 2. Cấu hình luồng Parse
+    const parser = stream.pipe(
+      parse({
+        columns: true, // Lấy dòng đầu làm Headers
+        skip_empty_lines: true,
+        trim: true,
+      })
+    );
 
     try {
-      // Parse CSV chuyển thành mảng Objects tự động map theo Headers dòng đầu tiên
-      const records = parse(content, {
-        columns: true, // Lấy dòng đầu làm key (headers)
-        skip_empty_lines: true, // Bỏ qua dòng trống
-        trim: true, // Xóa khoảng trắng 2 đầu chữ
-      });
-      return records as T[];
+      // 3. Sử dụng Async Iterator (Tính năng cực mạnh của Node.js)
+      // Vòng lặp này sẽ đọc từng chunk nhỏ. Nó sẽ NHƯỜNG Event Loop (non-blocking) 
+      // cho các API khác chạy xen kẽ, giúp Server không bao giờ bị treo!
+      for await (const record of parser) {
+        records.push(record as T);
+      }
+      return records;
     } catch (error) {
       throw new Error(`Failed to parse CSV file: ${error.message}`);
     }
   }
 }
+
 
 ```
 
@@ -943,7 +1137,9 @@ export class InMemoryEventBusAdapter implements IEventBus {
   >();
 
   async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    const eventName = event.eventName;
+    // 👉 Lấy tên Event một cách an toàn từ instance: 
+    // Ưu tiên biến static EVENT_NAME, nếu không có thì lấy tên của Class (VD: "UserCreatedEvent")
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
     const handlers = this.handlers.get(eventName) || [];
 
     Promise.all(handlers.map((handler) => handler(event))).catch((err) =>
@@ -955,34 +1151,10 @@ export class InMemoryEventBusAdapter implements IEventBus {
     eventCls: Type<T> | string,
     handler: (event: T) => Promise<void>,
   ): void {
-    let eventName: string;
-
-    if (typeof eventCls === 'string') {
-      eventName = eventCls;
-    } else {
-      // ✅ SAFE FIX: Sử dụng Object.create để tránh gọi constructor thực thi logic validate
-      // Điều này ngăn chặn crash app khi khởi tạo Event Class rỗng
-      const instance = Object.create(eventCls.prototype);
-      // Nếu eventName là property instance (được gán trong constructor), ta không lấy được ở đây
-      // NHƯNG, với kiến trúc hiện tại, eventName thường hardcode.
-      // Cách tốt nhất: Fallback về tên Class nếu instance.eventName undefined
-      eventName = instance.eventName || eventCls.name;
-
-      // Nếu trường hợp eventName bắt buộc phải lấy từ instance thật và khác tên class
-      // thì nên refactor Event thành có static property.
-      // Ở đây ta dùng instance giả lập an toàn.
-      if (!eventName) {
-        try {
-          const realInstance = new eventCls({} as any, {} as any);
-          eventName = realInstance.eventName;
-        } catch (e) {
-          eventName = eventCls.name;
-          this.logger.warn(
-            `Could not extract eventName from ${eventCls.name}, using class name.`,
-          );
-        }
-      }
-    }
+    // 👉 ĐỌC TÊN EVENT TRỰC TIẾP TỪ CLASS (KHÔNG CẦN KHỞI TẠO OBJECT)
+    const eventName = typeof eventCls === 'string'
+      ? eventCls
+      : (eventCls as any).EVENT_NAME || eventCls.name;
 
     if (!this.handlers.has(eventName)) {
       this.handlers.set(eventName, []);
@@ -1009,7 +1181,8 @@ export class KafkaEventBusAdapter implements IEventBus, OnModuleInit {
   }
 
   async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    this.logger.log(`[Kafka] Publishing: ${event.eventName}`);
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
   }
 
   subscribe<T extends IDomainEvent>(
@@ -1035,8 +1208,7 @@ import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface'
 
 @Injectable()
 export class RabbitMQEventBusAdapter
-  implements IEventBus, OnModuleInit, OnModuleDestroy
-{
+  implements IEventBus, OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RabbitMQEventBusAdapter.name);
 
   async onModuleInit() {
@@ -1048,7 +1220,9 @@ export class RabbitMQEventBusAdapter
   }
 
   async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    this.logger.log(`[RabbitMQ] Publishing: ${event.eventName}`);
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
+
   }
 
   subscribe<T extends IDomainEvent>(
@@ -1437,7 +1611,6 @@ export class InvalidCredentialsException extends HttpException {
 ```
 export interface IDomainEvent {
   readonly aggregateId: string;
-  readonly eventName: string;
   readonly occurredAt: Date;
   readonly payload: Record<string, any>;
 }
@@ -1588,6 +1761,7 @@ import { TestModule } from '@modules/test/test.module';
 import { NotificationModule } from '@modules/notification/notification.module';
 import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
 import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
+import { EmployeeModule } from '@modules/employee/employee.module';
 
 @Module({
   imports: [
@@ -1643,6 +1817,7 @@ import { OrgStructureModule } from '@modules/org-structure/org-structure.module'
 
     //
     OrgStructureModule,
+    EmployeeModule,
   ],
 })
 export class AppModule {
@@ -1709,6 +1884,311 @@ async function bootstrap() {
 
 bootstrap().catch((err) => console.error('Err::', err['message']));
 
+```
+
+## File: src/modules/employee/employee.module.ts
+```
+import { Module } from '@nestjs/common';
+import { OrgStructureModule } from '../org-structure/org-structure.module'; // Import module hàng xóm
+
+import { EmployeeController } from './infrastructure/controllers/employee.controller';
+import { EmployeeService } from './application/services/employee.service';
+import { IEmployeeRepository } from './domain/repositories/employee.repository';
+import { DrizzleEmployeeRepository } from './infrastructure/persistence/drizzle-employee.repository';
+import { UserModule } from '@modules/user/user.module';
+
+@Module({
+    imports: [
+        UserModule,
+        OrgStructureModule, // Cần import để EmployeeService dùng được IOrgStructureRepository
+    ],
+    controllers: [
+        EmployeeController,
+    ],
+    providers: [
+        EmployeeService,
+        {
+            provide: IEmployeeRepository,
+            useClass: DrizzleEmployeeRepository, // Binding Interface với Implementation
+        },
+    ],
+    exports: [EmployeeService, IEmployeeRepository], // Export nếu sau này module Payroll cần mượn
+})
+export class EmployeeModule { }
+
+```
+
+## File: src/modules/employee/application/services/employee.service.ts
+```
+import { Injectable, Inject, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { IOrgStructureRepository } from '@modules/org-structure/domain/repositories/org-structure.repository';
+import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
+import { CreateEmployeeDto } from '../dtos/create-employee.dto';
+import { UserService } from '@modules/user/application/services/user.service';
+import { ProvisionAccountDto } from '../dtos/provision-account.dto';
+
+@Injectable()
+export class EmployeeService {
+    constructor(
+        @Inject(IEmployeeRepository) private employeeRepo: IEmployeeRepository,
+        // Mượn hàng xóm OrgStructure
+        @Inject(IOrgStructureRepository) private orgRepo: IOrgStructureRepository,
+
+        private userService: UserService,
+    ) { }
+
+    // =========================================================================
+    // HÀM 1: DÀNH CHO NHÂN SỰ (HR) - CHỈ TẠO HỒ SƠ, CHƯA CÓ TÀI KHOẢN
+    // =========================================================================
+    async onboardNewEmployee(dto: CreateEmployeeDto) {
+        // 1. Check vị trí trong sơ đồ tổ chức
+        const position = await this.orgRepo.findPositionById(dto.positionId);
+
+        if (!position) {
+            throw new BadRequestException('Vị trí bổ nhiệm không tồn tại trong sơ đồ tổ chức.');
+        }
+        if (!position.isActive) {
+            throw new BadRequestException('Vị trí này hiện đang bị đóng băng tuyển dụng.');
+        }
+
+        // 2. Lưu dữ liệu hồ sơ nhân viên (Lúc này userId thường là null)
+        const newEmployee = await this.employeeRepo.save({
+            userId: dto.userId || null,
+            employeeCode: dto.employeeCode,
+            fullName: dto.fullName,
+            locationId: dto.locationId,
+            positionId: position.id,
+        });
+
+        // Chỉ trả về thông tin nhân viên vừa tạo
+        return newEmployee;
+    }
+
+
+    // =========================================================================
+    // HÀM 2: DÀNH CHO IT - CẤP TÀI KHOẢN CHO NHÂN VIÊN ĐÃ ĐƯỢC HR TẠO HỒ SƠ
+    // =========================================================================
+    async provisionUserAccount(employeeId: number, dto: ProvisionAccountDto) {
+
+        // 1. Tìm nhân viên xem có tồn tại không
+        const employee = await this.employeeRepo.findById(employeeId);
+        if (!employee) throw new NotFoundException('Không tìm thấy hồ sơ nhân viên');
+
+        // 2. Nếu đã có tài khoản rồi thì báo lỗi
+        if (employee.userId) throw new BadRequestException('Nhân viên này đã có tài khoản ERP');
+
+        // 3. Chuẩn hóa Username (Lấy từ input hoặc dùng mã nhân viên)
+        const rawUsername = dto.username || employee.employeeCode;
+        const finalUsername = rawUsername.trim().toLowerCase();
+
+        // 4. Sinh password ngẫu nhiên an toàn
+        const defaultPassword = 'Hrm@' + Math.floor(1000 + Math.random() * 9000);
+
+        try {
+            // 5. Gọi module User để tạo tài khoản đăng nhập (Identity)
+            const newUser = await this.userService.createUser({
+                id: undefined as any,
+                username: finalUsername,
+                password: defaultPassword,
+                email: dto.email,
+                fullName: employee.fullName,
+            });
+
+            // 6. Cập nhật lại hồ sơ nhân viên: Gắn ID của tài khoản vừa tạo vào hồ sơ
+            await this.employeeRepo.save({
+                id: employeeId,       // CÓ ID -> Repository sẽ hiểu đây là lệnh UPDATE
+                userId: newUser.id,   // Gắn userId vào
+            });
+
+            // 7. Trả về kết quả cho IT hoặc tự động gửi email cho nhân viên
+            return {
+                success: true,
+                message: 'Đã cấp tài khoản thành công',
+                credentials: {
+                    username: finalUsername,
+                    password: defaultPassword
+                }
+            };
+        } catch (error) {
+            if (error.message === 'User already exists') {
+                throw new BadRequestException(`Tên đăng nhập '${finalUsername}' đã được sử dụng. Vui lòng chọn tên khác.`);
+            }
+            throw new InternalServerErrorException('Lỗi hệ thống khi cấp tài khoản');
+        }
+    }
+
+
+    async getAllEmployees() {
+        return this.employeeRepo.findAll();
+    }
+}
+
+```
+
+## File: src/modules/employee/application/dtos/provision-account.dto.ts
+```
+import { IsString, IsEmail, IsOptional, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class ProvisionAccountDto {
+    @ApiProperty({ description: 'Email của nhân viên để nhận thông báo', example: 'vana.nguyen@company.com' })
+    @IsEmail()
+    email: string;
+
+    @ApiPropertyOptional({
+        description: 'Tên đăng nhập tự chọn (Tối thiểu 4 ký tự). Nếu để trống hệ thống sẽ dùng Mã nhân viên.',
+        example: 'vana.nguyen'
+    })
+    @IsOptional()
+    @IsString()
+    @MinLength(4, { message: 'Username phải có ít nhất 4 ký tự' })
+    username?: string;
+}
+
+```
+
+## File: src/modules/employee/application/dtos/create-employee.dto.ts
+```
+import { IsString, IsNotEmpty, IsNumber, IsOptional } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class CreateEmployeeDto {
+    @ApiProperty({ description: 'ID của tài khoản User (Định danh)', example: 1 })
+    @IsNumber()
+    @IsOptional()
+    @IsNotEmpty()
+    userId?: number;
+
+    @ApiProperty({ description: 'Mã nhân viên', example: 'EMP-001' })
+    @IsString()
+    @IsNotEmpty()
+    employeeCode: string;
+
+    @ApiProperty({ description: 'Họ và tên', example: 'Nguyễn Văn A' })
+    @IsString()
+    @IsNotEmpty()
+    fullName: string;
+
+    @ApiProperty({ description: 'Bổ nhiệm vào Vị trí định biên (ID bảng positions)', example: 5 })
+    @IsNumber()
+    @IsNotEmpty()
+    positionId: number;
+
+    @ApiPropertyOptional({ description: 'Nơi làm việc (ID bảng locations)', example: 1 })
+    @IsOptional()
+    @IsNumber()
+    locationId?: number;
+}
+
+```
+
+## File: src/modules/employee/infrastructure/controllers/employee.controller.ts
+```
+import { Controller, Post, Get, Body, UseGuards, Param, ParseIntPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+// import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard'; // (Uncomment nếu có auth)
+import { EmployeeService } from '../../application/services/employee.service';
+import { CreateEmployeeDto } from '../../application/dtos/create-employee.dto';
+import { ProvisionAccountDto } from '@modules/employee/application/dtos/provision-account.dto';
+
+@ApiTags('Employee Management (Hồ sơ Nhân sự)')
+@ApiBearerAuth()
+@Controller('employees')
+// @UseGuards(JwtAuthGuard)
+export class EmployeeController {
+    constructor(private readonly employeeService: EmployeeService) { }
+
+    @Post('onboard')
+    @ApiOperation({ summary: 'Tiếp nhận nhân viên mới (Onboarding)' })
+    @ApiResponse({ status: 201, description: 'Tiếp nhận thành công' })
+    @ApiResponse({ status: 400, description: 'Vị trí bổ nhiệm không hợp lệ' })
+    async onboardEmployee(@Body() dto: CreateEmployeeDto) {
+        return this.employeeService.onboardNewEmployee(dto);
+    }
+
+    @Post(':id/provision-account')
+    @ApiOperation({ summary: 'Cấp tài khoản ERP cho nhân viên đã onboard' })
+    @ApiResponse({ status: 201, description: 'Cấp tài khoản thành công. Trả về thông tin đăng nhập.' })
+    @ApiResponse({ status: 400, description: 'Trùng username hoặc nhân viên đã có tài khoản.' })
+    async provisionAccount(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ProvisionAccountDto // Sử dụng DTO ở đây
+    ) {
+        return this.employeeService.provisionUserAccount(id, dto);
+    }
+
+    @Get()
+    @ApiOperation({ summary: 'Lấy danh sách toàn bộ nhân viên' })
+    async getAllEmployees() {
+        return this.employeeService.getAllEmployees();
+    }
+}
+
+```
+
+## File: src/modules/employee/infrastructure/persistence/drizzle-employee.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
+import { employees } from '@database/schema/hrm/employees.schema'; // Import schema mới
+
+@Injectable()
+export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements IEmployeeRepository {
+
+    async save(employeeData: any): Promise<any> {
+        const db = this.getDb();
+
+        // NẾU CÓ TRUYỀN ID -> THỰC HIỆN LỆNH UPDATE
+        if (employeeData.id) {
+            const [result] = await db.update(employees)
+                .set({
+                    ...employeeData,
+                    updatedAt: new Date(), // Tự động cập nhật thời gian
+                })
+                .where(eq(employees.id, employeeData.id))
+                .returning();
+            return result;
+        }
+
+        // NẾU KHÔNG CÓ ID -> THỰC HIỆN LỆNH INSERT (THÊM MỚI)
+        const [result] = await db.insert(employees)
+            .values(employeeData)
+            .returning();
+
+        return result;
+    }
+
+    async findById(id: number): Promise<any> {
+        const db = this.getDb();
+        const result = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+        return result[0] || null;
+    }
+
+    async findAll(): Promise<any[]> {
+        const db = this.getDb();
+        // Dùng Relational Query để lấy luôn thông tin User và Position (Nếu cần)
+        return await db.query.employees.findMany({
+            with: {
+                user: { columns: { username: true, email: true } },
+                position: true,
+            }
+        });
+    }
+}
+
+```
+
+## File: src/modules/employee/domain/repositories/employee.repository.ts
+```
+export const IEmployeeRepository = Symbol('IEmployeeRepository');
+
+export interface IEmployeeRepository {
+    save(employeeData: any): Promise<any>;
+    findById(id: number): Promise<any>;
+    findAll(): Promise<any[]>;
+}
 ```
 
 ## File: src/modules/logging/logging.module.ts
@@ -2126,6 +2606,201 @@ export class UserService {
 
 ```
 
+## File: src/modules/user/application/services/user-import.service.ts
+```
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { IUserRepository } from '../../domain/repositories/user.repository';
+import { IRoleRepository, IUserRoleRepository } from '@modules/rbac/domain/repositories/rbac.repository';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '../../domain/entities/user.entity';
+import { UserRole } from '@modules/rbac/domain/entities/user-role.entity';
+
+export type UserCsvRow = {
+    username: string;
+    email: string;
+    fullName: string;
+    roles: string; // VD: "ADMIN,MANAGER"
+    password?: string;
+};
+
+@Injectable()
+export class UserImportService {
+    private readonly logger = new Logger(UserImportService.name);
+
+    constructor(
+        @Inject(IUserRepository) private userRepo: IUserRepository,
+        @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+        @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
+        @Inject(ITransactionManager) private txManager: ITransactionManager,
+        @Inject(IFileParser) private fileParser: IFileParser,
+    ) { }
+
+    async importFromCsv(csvBuffer: Buffer, adminId: number) {
+        // 1. Parse CSV
+        const records = await this.fileParser.parseCsvAsync<UserCsvRow>(csvBuffer);
+        if (!records.length) return { success: false, message: 'File rỗng' };
+
+        const errors: string[] = [];
+        const validRows: UserCsvRow[] = [];
+
+        // 2. Thu thập dữ liệu để check 1 lần duy nhất (O(1) thay vì O(N))
+        const usernamesToCheck = [...new Set(records.map(r => r.username).filter(Boolean))];
+        const emailsToCheck = [...new Set(records.map(r => r.email).filter(Boolean))];
+        const allRolesSet = new Set<string>();
+
+        records.forEach(r => {
+            if (r.roles) {
+                r.roles.split(',').forEach(role => allRolesSet.add(role.trim().toUpperCase()));
+            }
+        });
+
+        // 3. Query DB 1 lần lấy dữ liệu đối chiếu
+        const existingUsers = await this.userRepo.findExistingUsernamesOrEmails([...usernamesToCheck, ...emailsToCheck]);
+        const existingUsernames = new Set(existingUsers.map(u => u.username));
+        const existingEmails = new Set(existingUsers.map(u => u.email));
+
+        const validDbRoles = await this.roleRepo.findInNames(Array.from(allRolesSet));
+        const roleMap = new Map(validDbRoles.map(r => [r.name.toUpperCase(), r.id]));
+
+        // 4. Validate từng dòng trên RAM
+        records.forEach((row, index) => {
+            const line = index + 2; // Dòng 1 là header
+            if (!row.username || !row.fullName) {
+                errors.push(`Dòng ${line}: Thiếu username hoặc fullName.`);
+                return;
+            }
+            if (existingUsernames.has(row.username)) {
+                errors.push(`Dòng ${line}: Username '${row.username}' đã tồn tại.`);
+                return;
+            }
+            if (row.email && existingEmails.has(row.email)) {
+                errors.push(`Dòng ${line}: Email '${row.email}' đã tồn tại.`);
+                return;
+            }
+            validRows.push(row);
+        });
+
+        if (validRows.length === 0) {
+            return { success: false, message: 'Không có dữ liệu hợp lệ để import', errors, stats: { total: records.length, success: 0, failed: errors.length } };
+        }
+
+        // 5. Chunk Hashing Password (Chống treo Node.js)
+        const usersToInsert: User[] = [];
+        const chunkSize = 50;
+
+        for (let i = 0; i < validRows.length; i += chunkSize) {
+            const chunk = validRows.slice(i, i + chunkSize);
+
+            // Xử lý song song 50 passwords cùng lúc
+            const hashedPasswords = await Promise.all(
+                chunk.map(row => PasswordUtil.hash(row.password || 'Hrm@2026'))
+            );
+
+            chunk.forEach((row, j) => {
+                usersToInsert.push(new User(
+                    undefined as any,
+                    row.username,
+                    row.email || undefined,
+                    hashedPasswords[j],
+                    row.fullName,
+                    true,
+                    [], undefined, undefined, undefined, undefined, new Date(), new Date()
+                ));
+            });
+        }
+
+        // 6. Thực thi Transaction Bulk Insert
+        await this.txManager.runInTransaction(async (tx) => {
+            // 6.1 Insert toàn bộ User (Và lấy ID trả về)
+            const insertedUsers = await this.userRepo.saveMany(usersToInsert, tx);
+
+            // 6.2 Chuẩn bị data cho bảng UserRoles
+            const userRolesToInsert: UserRole[] = [];
+
+            insertedUsers.forEach((savedUser) => {
+                // Tìm lại dòng CSV gốc dựa vào username
+                const originalRow = validRows.find(r => r.username === savedUser.username);
+                if (originalRow && originalRow.roles && savedUser.id) {
+                    const roleNames = originalRow.roles.split(',').map(r => r.trim().toUpperCase());
+                    roleNames.forEach(rName => {
+                        const roleId = roleMap.get(rName);
+                        if (roleId) {
+                            userRolesToInsert.push(new UserRole(
+                                savedUser.id!,
+                                roleId!,
+                                adminId, // Người thực hiện import
+                                undefined,
+                                new Date()
+                            ));
+                        }
+                    });
+                }
+            });
+
+            // 6.3 Insert toàn bộ UserRoles
+            if (userRolesToInsert.length > 0) {
+                await this.userRoleRepo.saveMany(userRolesToInsert, tx);
+            }
+        });
+
+        return {
+            success: true,
+            message: 'Import Users hoàn tất',
+            stats: {
+                totalProcessed: records.length,
+                successCount: validRows.length,
+                failedCount: errors.length
+            },
+            errors
+        };
+    }
+}
+
+```
+
+## File: src/modules/user/infrastructure/controllers/user-import.controller.ts
+```
+import { Controller, Post, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '../../domain/entities/user.entity';
+import { UserImportService } from '../../application/services/user-import.service';
+
+@ApiTags('Users Management')
+@ApiBearerAuth()
+@Controller('users/data')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class UserImportController {
+    constructor(private userImportService: UserImportService) { }
+
+    @ApiOperation({ summary: 'Bulk Import Users từ file CSV' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @Post('import')
+    @Permissions('user:manage') // Yêu cầu quyền quản lý User
+    @UseInterceptors(FileInterceptor('file'))
+    async importUsers(
+        @UploadedFile() file: Express.Multer.File,
+        @CurrentUser() admin: User
+    ) {
+        if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
+        if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
+
+        // const content = file.buffer.toString('utf-8');
+        const result = await this.userImportService.importFromCsv(file.buffer, admin.id);
+
+        return result;
+    }
+}
+
+```
+
 ## File: src/modules/user/infrastructure/controllers/user.controller.ts
 ```
 import {
@@ -2288,12 +2963,8 @@ export class UserMapper {
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
-      fullName: domain.fullName || null,
       isActive: domain.isActive,
       telegramId: domain.telegramId || null, // ✅ Map TelegramId
-      phoneNumber: domain.phoneNumber || null,
-      avatarUrl: domain.avatarUrl || null,
-      profile: domain.profile || null,
       createdAt: domain.createdAt || new Date(),
       updatedAt: domain.updatedAt || new Date(),
     };
@@ -2304,7 +2975,7 @@ export class UserMapper {
 ## File: src/modules/user/infrastructure/persistence/drizzle-user.repository.ts
 ```
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, inArray, or } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
@@ -2461,9 +3132,18 @@ export class DrizzleUserRepository implements IUserRepository {
     return UserMapper.toDomain(result[0])!;
   }
 
+  // 👉 MỚI (SOFT DELETE):
   async delete(id: number, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
-    await db.delete(schema.users).where(eq(schema.users.id, id));
+
+    // Thay vì dùng db.delete(), ta dùng db.update()
+    await db.update(schema.users)
+      .set({
+        isActive: false,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(schema.users.id, id));
   }
 
   async exists(id: number, tx?: Transaction): Promise<boolean> {
@@ -2480,6 +3160,40 @@ export class DrizzleUserRepository implements IUserRepository {
   async count(): Promise<number> {
     const result = await this.db.execute('SELECT COUNT(*) as count FROM users');
     return Number(result.rows[0].count);
+  }
+
+  // ✅ THÊM MỚI: Lấy danh sách user đã tồn tại (chỉ 1 query duy nhất)
+  async findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction) {
+    if (!identifiers || identifiers.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db
+      .select({ username: schema.users.username, email: schema.users.email })
+      .from(schema.users)
+      .where(
+        or(
+          inArray(schema.users.username, identifiers),
+          inArray(schema.users.email, identifiers)
+        )
+      );
+    return results;
+  }
+
+  // ✅ THÊM MỚI: Bulk Insert (Insert 1 phát 1000 records)
+  async saveMany(users: User[], tx?: Transaction): Promise<User[]> {
+    if (!users || users.length === 0) return [];
+    const db = this.getDb(tx);
+    const dataToInsert = users.map(user => {
+      const data = UserMapper.toPersistence(user);
+      delete (data as any).id; // Bỏ ID để DB tự gen
+      return data;
+    });
+
+    const results = await db
+      .insert(schema.users)
+      .values(dataToInsert as typeof schema.users.$inferInsert[])
+      .returning();
+
+    return results.map(r => UserMapper.toDomain({ ...r, userRoles: [] })!);
   }
 }
 
@@ -2619,6 +3333,10 @@ export interface IUserRepository {
   delete(id: number, tx?: Transaction): Promise<void>;
   exists(id: number, tx?: Transaction): Promise<boolean>;
   count(): Promise<number>;
+
+  //
+  findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction): Promise<{ username: string; email: string | null }[]>;
+  saveMany(users: User[], tx?: Transaction): Promise<User[]>;
 }
 
 ```
@@ -2629,12 +3347,13 @@ import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface'
 import { User } from '../entities/user.entity';
 
 export class UserCreatedEvent implements IDomainEvent {
-  readonly eventName = 'UserCreated';
+  static readonly EVENT_NAME = 'UserCreated';
+
   readonly occurredAt = new Date();
   constructor(
     public readonly aggregateId: string,
     public readonly payload: { user: User },
-  ) {}
+  ) { }
 }
 
 ```
@@ -2647,12 +3366,16 @@ import { UserController } from './infrastructure/controllers/user.controller';
 import { DrizzleUserRepository } from './infrastructure/persistence/drizzle-user.repository';
 // FIX IMPORT
 import { IUserRepository } from './domain/repositories/user.repository';
+import { UserImportService } from './application/services/user-import.service';
+import { UserImportController } from './infrastructure/controllers/user-import.controller';
+import { RbacModule } from '@modules/rbac/rbac.module';
 
 @Module({
-  imports: [],
-  controllers: [UserController],
+  imports: [RbacModule],
+  controllers: [UserController, UserImportController],
   providers: [
     UserService,
+    UserImportService,
     {
       provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,
@@ -2660,7 +3383,7 @@ import { IUserRepository } from './domain/repositories/user.repository';
   ],
   exports: [UserService, IUserRepository], // FIX: Export Symbol
 })
-export class UserModule {}
+export class UserModule { }
 
 ```
 
@@ -2695,9 +3418,9 @@ export class RbacManagerService {
     @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
   ) { }
 
-  async importFromCsv(csvContent: string): Promise<any> {
+  async importFromCsv(csvBuffer: Buffer): Promise<any> {
     // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
-    const records = this.fileParser.parseCsv<RbacCsvRow>(csvContent);
+    const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
 
     let createdCount = 0;
     let updatedCount = 0;
@@ -2966,7 +3689,7 @@ import { BypassTransform } from '@core/decorators/bypass-transform.decorator';
 @Controller('rbac/data')
 @UseGuards(JwtAuthGuard, PermissionGuard)
 export class RbacManagerController {
-  constructor(private rbacManagerService: RbacManagerService) {}
+  constructor(private rbacManagerService: RbacManagerService) { }
 
   @ApiOperation({ summary: 'Import RBAC Rules from CSV' })
   @ApiConsumes('multipart/form-data') // Báo cho Swagger biết đây là upload file
@@ -2993,8 +3716,7 @@ export class RbacManagerController {
       throw new BadRequestException('Only .csv files are allowed');
     }
 
-    const content = file.buffer.toString('utf-8');
-    const result = await this.rbacManagerService.importFromCsv(content);
+    const result = await this.rbacManagerService.importFromCsv(file.buffer);
 
     return {
       success: true,
@@ -3323,8 +4045,7 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 @Injectable()
 export class DrizzleRoleRepository
   extends DrizzleBaseRepository
-  implements IRoleRepository
-{
+  implements IRoleRepository {
   async findByName(name: string, tx?: Transaction): Promise<Role | null> {
     const db = this.getDb(tx);
     const result = await db.query.roles.findFirst({
@@ -3391,13 +4112,21 @@ export class DrizzleRoleRepository
     });
     return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
   }
+
+  async findInNames(names: string[], tx?: Transaction): Promise<Role[]> {
+    if (!names || names.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      where: inArray(roles.name, names),
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
 }
 
 @Injectable()
 export class DrizzlePermissionRepository
   extends DrizzleBaseRepository
-  implements IPermissionRepository
-{
+  implements IPermissionRepository {
   async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
     const db = this.getDb(tx);
     const result = await db
@@ -3437,8 +4166,7 @@ export class DrizzlePermissionRepository
 @Injectable()
 export class DrizzleUserRoleRepository
   extends DrizzleBaseRepository
-  implements IUserRoleRepository
-{
+  implements IUserRoleRepository {
   async findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]> {
     const db = this.getDb(tx);
     const results = await db.query.userRoles.findMany({
@@ -3483,6 +4211,18 @@ export class DrizzleUserRoleRepository
       .delete(userRoles)
       .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
+
+  async saveMany(usrRoles: UserRole[], tx?: Transaction): Promise<void> {
+    if (!usrRoles || usrRoles.length === 0) return;
+    const db = this.getDb(tx);
+    const data = usrRoles.map(ur => RbacMapper.toUserRolePersistence(ur));
+
+    await db
+      .insert(userRoles)
+      .values(data as typeof userRoles.$inferInsert[])
+      .onConflictDoNothing(); // Nếu đã có quyền thì bỏ qua
+  }
+
 }
 
 ```
@@ -3677,6 +4417,9 @@ export interface IRoleRepository {
   save(role: Role, tx?: Transaction): Promise<Role>;
   findAllWithPermissions(roleIds: number[], tx?: Transaction): Promise<Role[]>;
   findAll(tx?: Transaction): Promise<Role[]>;
+
+  // ✅ THÊM MỚI
+  findInNames(names: string[], tx?: Transaction): Promise<Role[]>;
 }
 
 // 2. Permission Repository
@@ -3698,6 +4441,9 @@ export interface IUserRoleRepository {
     tx?: Transaction,
   ): Promise<UserRole | null>;
   delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
+
+  // ✅ THÊM MỚI
+  saveMany(userRoles: UserRole[], tx?: Transaction): Promise<void>;
 }
 
 ```
@@ -3726,7 +4472,6 @@ import {
 
 @Module({
   imports: [
-    UserModule,
     // Không cần import CacheModule nữa vì RedisCacheModule là Global
   ],
   controllers: [RoleController, RbacManagerController],
@@ -3739,9 +4484,15 @@ import {
     { provide: IPermissionRepository, useClass: DrizzlePermissionRepository },
     { provide: IUserRoleRepository, useClass: DrizzleUserRoleRepository },
   ],
-  exports: [PermissionService, PermissionGuard, RoleService],
+  exports: [
+    PermissionService,
+    PermissionGuard,
+    RoleService,
+    IRoleRepository,
+    IUserRoleRepository,
+  ],
 })
-export class RbacModule {}
+export class RbacModule { }
 
 ```
 
@@ -3752,17 +4503,22 @@ import { OrgStructureController } from './infrastructure/controllers/org-structu
 import { OrgStructureService } from './application/services/org-structure.service';
 import { IOrgStructureRepository } from './domain/repositories/org-structure.repository';
 import { DrizzleOrgStructureRepository } from './infrastructure/persistence/drizzle-org-structure.repository';
+import { CompanyImportController } from './infrastructure/controllers/company-import.controller';
+import { CompanyImportService } from './application/services/company-import.service';
+import { RbacModule } from '@modules/rbac/rbac.module';
 
 @Module({
-    controllers: [OrgStructureController],
+    imports: [RbacModule],
+    controllers: [OrgStructureController, CompanyImportController],
     providers: [
         OrgStructureService,
+        CompanyImportService,
         {
             provide: IOrgStructureRepository,
             useClass: DrizzleOrgStructureRepository,
         },
     ],
-    exports: [OrgStructureService], // Export nếu các module khác (như Employee) cần gọi
+    exports: [OrgStructureService, IOrgStructureRepository], // Export nếu các module khác (như Employee) cần gọi
 })
 export class OrgStructureModule { }
 
@@ -3833,6 +4589,195 @@ export class OrgStructureService {
 
 ```
 
+## File: src/modules/org-structure/application/services/company-import.service.ts
+```
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { eq, inArray, and } from 'drizzle-orm';
+
+// Cấu trúc map 100% với File CSV mới
+export type CoreEmployeeCsvRow = {
+    username: string;
+    email: string;
+    fullName: string;
+    employeeCode: string;
+    locationCode: string;   // HCM, HQ
+    departmentCode: string; // Mã phòng
+    departmentName: string; // Tên phòng
+    positionName: string;   // VD: "CV-IT", "Chuyên viên B2" (Tên hiển thị trong Hình 3)
+    jobTitle: string;       // Tên chức danh chung (Trợ lý, Chuyên viên, Trưởng phòng)
+    gradeLevel: number;     // 1, 2, ..., 10
+    role: string;           // SUPER_ADMIN, STAFF...
+};
+
+@Injectable()
+export class CompanyImportService {
+    private readonly logger = new Logger(CompanyImportService.name);
+
+    constructor(
+        @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>,
+        @Inject(ITransactionManager) private txManager: ITransactionManager,
+        @Inject(IFileParser) private fileParser: IFileParser,
+    ) { }
+
+    async importCoreCompany(csvBuffer: Buffer, adminId: number) {
+        const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
+        if (!records.length) return { success: false, message: 'File CSV rỗng' };
+
+        // 1. Bóc tách dữ liệu Unique (Set/Map)
+        const locations = new Set<string>();
+        const departments = new Map<string, string>();
+        const jobTitles = new Set<string>();
+        const grades = new Set<number>();
+
+        records.forEach((r) => {
+            if (r.locationCode) locations.add(r.locationCode);
+            if (r.departmentCode) departments.set(r.departmentCode, r.departmentName);
+            if (r.jobTitle) jobTitles.add(r.jobTitle);
+            if (r.gradeLevel) grades.add(Number(r.gradeLevel));
+        });
+
+        const defaultPassword = await PasswordUtil.hash('Company@2026');
+
+        return await this.txManager.runInTransaction(async (tx: any) => {
+            const dbTx = tx as NodePgDatabase<typeof schema>;
+
+            // ==========================================
+            // BƯỚC 1: UPSERT CÁC DANH MỤC CƠ SỞ (Từ điển)
+            // ==========================================
+
+            // 1.1 Locations
+            if (locations.size > 0) {
+                await dbTx.insert(schema.locations)
+                    .values(Array.from(locations).map(l => ({ code: l, name: l })))
+                    .onConflictDoNothing({ target: schema.locations.code });
+            }
+            const locsDb = await dbTx.select().from(schema.locations).where(inArray(schema.locations.code, Array.from(locations)));
+            const locMap = new Map(locsDb.map(l => [l.code, l.id]));
+
+            // 1.2 Grades (Bậc)
+            if (grades.size > 0) {
+                await dbTx.insert(schema.grades)
+                    .values(Array.from(grades).map(g => ({ levelNumber: g, code: `BAC_${g}`, name: `Bậc ${g}` })))
+                    .onConflictDoNothing({ target: schema.grades.code });
+            }
+            const gradesDb = await dbTx.select().from(schema.grades).where(inArray(schema.grades.levelNumber, Array.from(grades)));
+            const gradeMap = new Map(gradesDb.map(g => [g.levelNumber, g.id]));
+
+            // 1.3 Job Titles (Chức danh)
+            if (jobTitles.size > 0) {
+                await dbTx.insert(schema.jobTitles)
+                    .values(Array.from(jobTitles).map(name => ({ name })))
+                    .onConflictDoNothing({ target: schema.jobTitles.name });
+            }
+            const titlesDb = await dbTx.select().from(schema.jobTitles).where(inArray(schema.jobTitles.name, Array.from(jobTitles)));
+            const titleMap = new Map(titlesDb.map(t => [t.name, t.id]));
+
+            // 1.4 Org Units (Phòng ban)
+            const orgUnitInserts = Array.from(departments.entries()).map(([code, name]) => ({
+                code, name: name || code, type: code === 'HQ' ? 'COMPANY' : 'DEPARTMENT',
+            }));
+            if (orgUnitInserts.length > 0) {
+                await dbTx.insert(schema.orgUnits).values(orgUnitInserts).onConflictDoNothing({ target: schema.orgUnits.code });
+            }
+            const orgsDb = await dbTx.select().from(schema.orgUnits).where(inArray(schema.orgUnits.code, Array.from(departments.keys())));
+            const orgMap = new Map(orgsDb.map(o => [o.code, o.id]));
+
+            // ==========================================
+            // BƯỚC 2: TỰ ĐỘNG SINH MA TRẬN VỊ TRÍ (POSITIONS)
+            // ==========================================
+            let successCount = 0;
+
+            for (const row of records) {
+                const orgId = orgMap.get(row.departmentCode);
+                const titleId = titleMap.get(row.jobTitle);
+                const gradeId = gradeMap.get(Number(row.gradeLevel));
+
+                if (!orgId || !titleId || !gradeId) continue;
+
+                // Code duy nhất cho Vị trí (VD: POS-P_DICHVU-6)
+                const posCode = `POS-${row.departmentCode}-${row.gradeLevel}`;
+
+                // Kiểm tra Vị trí đã có chưa
+                let position = await dbTx.query.positions.findFirst({
+                    where: eq(schema.positions.code, posCode)
+                });
+
+                // Nếu chưa có, tạo Vị trí (Định biên) mới
+                if (!position) {
+                    const [newPos] = await dbTx.insert(schema.positions).values({
+                        code: posCode,
+                        name: row.positionName || row.jobTitle, // Tên riêng cho vị trí (VD: CV-IT)
+                        orgUnitId: orgId,
+                        jobTitleId: titleId,
+                        gradeId: gradeId,
+                        headcountLimit: 10, // Giả sử cho phép 10 người cùng vị trí này
+                    }).returning();
+                    position = newPos;
+                }
+
+                // ==========================================
+                // BƯỚC 3: XỬ LÝ NHÂN VIÊN (USERS + EMPLOYEES)
+                // ==========================================
+                const existingUser = await dbTx.query.users.findFirst({
+                    where: eq(schema.users.username, row.username),
+                });
+
+                let userId: number;
+
+                if (!existingUser) {
+                    // A. Tạo Identity
+                    const [newUser] = await dbTx.insert(schema.users).values({
+                        username: row.username,
+                        email: row.email,
+                        hashedPassword: defaultPassword,
+                        isActive: true,
+                    }).returning({ id: schema.users.id });
+                    userId = newUser.id;
+
+                    // B. Tạo Employee Profile (Liên kết vào ĐỊA ĐIỂM và VỊ TRÍ VỪA TẠO)
+                    await dbTx.insert(schema.employees).values({
+                        userId: userId,
+                        employeeCode: row.employeeCode,
+                        fullName: row.fullName,
+                        locationId: locMap.get(row.locationCode) || null,
+                        positionId: position.id, // Bổ nhiệm vào vị trí chuẩn
+                    });
+
+                    successCount++;
+                } else {
+                    userId = existingUser.id;
+                }
+
+                // ==========================================
+                // BƯỚC 4: CẤP QUYỀN (RBAC)
+                // ==========================================
+                if (row.role) {
+                    const roleDb = await dbTx.query.roles.findFirst({ where: eq(schema.roles.name, row.role) });
+                    if (roleDb) {
+                        await dbTx.insert(schema.userRoles)
+                            .values({ userId: userId, roleId: roleDb.id, assignedBy: adminId })
+                            .onConflictDoNothing();
+                    }
+                }
+            }
+
+            return {
+                success: true,
+                message: 'Khởi tạo cấu trúc nhân sự (Ma trận vị trí) thành công!',
+                stats: { employeesImported: successCount },
+            };
+        });
+    }
+}
+
+```
+
 ## File: src/modules/org-structure/application/dtos/org-unit.dto.ts
 ```
 
@@ -3891,6 +4836,46 @@ export class UpdateOrgUnitDto {
     @IsOptional()
     @IsBoolean()
     isActive?: boolean;
+}
+
+```
+
+## File: src/modules/org-structure/infrastructure/controllers/company-import.controller.ts
+```
+import { Controller, Post, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { CompanyImportService } from '../../application/services/company-import.service';
+
+@ApiTags('Company Setup (Khởi tạo hệ thống)')
+@ApiBearerAuth()
+@Controller('company/setup')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class CompanyImportController {
+    constructor(private readonly importService: CompanyImportService) { }
+
+    @ApiOperation({ summary: 'Khởi tạo Nhân sự Chủ chốt từ file CSV (Production)' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @Post('import-core-employees')
+    @Permissions('system:config') // Yêu cầu quyền cấu hình hệ thống cao nhất
+    @UseInterceptors(FileInterceptor('file'))
+    async importCoreCompany(
+        @UploadedFile() file: Express.Multer.File,
+        @CurrentUser() admin: User
+    ) {
+        if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
+        if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
+
+        // Gọi Service xử lý
+        const result = await this.importService.importCoreCompany(file.buffer, admin.id!);
+        return result;
+    }
 }
 
 ```
@@ -3994,8 +4979,8 @@ export class OrgStructureController {
 import { Injectable } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
-import { IOrgStructureRepository, OrgUnitEntity } from '../../domain/repositories/org-structure.repository';
-import { orgUnits } from '@database/schema/hrm.schema'; // Import Schema tổng
+import { IOrgStructureRepository, OrgUnitEntity, PositionEntity } from '../../domain/repositories/org-structure.repository';
+import { orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
 
 @Injectable()
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
@@ -4033,6 +5018,16 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
         return result[0] ? (result[0] as OrgUnitEntity) : null;
     }
 
+    async findPositionById(id: number): Promise<PositionEntity | null> {
+        const db = this.getDb();
+        const result = await db.select()
+            .from(positions)
+            .where(eq(positions.id, id))
+            .limit(1);
+
+        return result[0] ? (result[0] as PositionEntity) : null;
+    }
+
     async findAllActiveUnits(): Promise<OrgUnitEntity[]> {
         const db = this.getDb();
         return await db.select().from(orgUnits).where(eq(orgUnits.isActive, true));
@@ -4052,6 +5047,21 @@ export interface OrgUnitEntity {
     code: string;
     name: string;
     isActive: boolean | null;
+
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+
+// Bổ sung Type cho Vị trí định biên (Position)
+export interface PositionEntity {
+    id: number;
+    code: string;
+    name: string;
+    orgUnitId: number;
+    jobTitleId: number;
+    gradeId: number;
+    headcountLimit: number | null;
+    isActive: boolean | null;
 }
 
 export interface IOrgStructureRepository {
@@ -4059,6 +5069,8 @@ export interface IOrgStructureRepository {
     updateOrgUnit(id: number, data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity | null>;
     deleteOrgUnit(id: number): Promise<boolean>;
     findById(id: number): Promise<OrgUnitEntity | null>;
+
+    findPositionById(id: number): Promise<PositionEntity | null>;
 
     // Lấy toàn bộ danh sách phòng ban (phục vụ việc vẽ cây)
     findAllActiveUnits(): Promise<OrgUnitEntity[]>;
@@ -4227,6 +5239,7 @@ import {
   LOGGER_TOKEN,
 } from '@core/shared/application/ports/logger.port';
 import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
+import { ICacheService } from '@core/shared/application/ports/cache.port';
 
 export type AuthResponse = {
   accessToken: string;
@@ -4241,56 +5254,81 @@ export class AuthenticationService {
     @Inject(ITransactionManager) private txManager: ITransactionManager,
     @Inject(IEventBus) private eventBus: IEventBus,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(ICacheService) private readonly cacheService: ICacheService,
     private jwtService: JwtService,
   ) { }
 
-  async login(credentials: {
-    username: string;
-    password: string;
-    ip?: string;
-    userAgent?: string;
-  }): Promise<AuthResponse> {
+  // =========================================================================
+  // 1. NÂNG CẤP LOGIN (Lưu vào DB + Redis)
+  // =========================================================================
+  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string; }): Promise<AuthResponse> {
     const user = await this.userRepository.findByUsername(credentials.username);
 
-    if (!user || !user.isActive)
-      throw new UnauthorizedException('Invalid credentials');
-    if (!user.hashedPassword)
-      throw new UnauthorizedException('Password not set');
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
+    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
 
-    const isValid = await PasswordUtil.compare(
-      credentials.password,
-      user.hashedPassword,
-    );
+    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
-
     if (!user.id) throw new InternalServerErrorException('User ID is missing');
 
-    const payload: JwtPayload = {
-      sub: user.id,
-      username: user.username,
-      roles: [],
-    };
+    const payload: JwtPayload = { sub: user.id, username: user.username, roles: [] };
     const accessToken = this.jwtService.sign(payload);
 
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1);
+    expiresAt.setDate(expiresAt.getDate() + 1); // Token sống 1 ngày
 
-    const session = new Session(
-      undefined,
-      user.id,
-      accessToken,
-      expiresAt,
-      credentials.ip,
-      credentials.userAgent,
-      new Date(),
-    );
-
+    // A. Lưu vào Database (PostgreSQL)
+    const session = new Session(undefined, user.id, accessToken, expiresAt, credentials.ip, credentials.userAgent, new Date());
     await this.sessionRepository.create(session);
 
-    return {
-      accessToken,
-      user: user.toJSON(),
-    };
+    // B. 👉 Lưu vào Redis (Tính TTL theo giây để Redis tự động xóa khi hết hạn)
+    const ttlInSeconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+    const redisKey = `auth:session:${accessToken}`;
+    // Lưu một object nhỏ (chứa userId) để tăng tốc độ truy xuất sau này
+    await this.cacheService.set(redisKey, { userId: user.id }, ttlInSeconds);
+
+    return { accessToken, user: user.toJSON() };
+  }
+
+  // =========================================================================
+  // 2. NÂNG CẤP LOGOUT (Xóa khỏi DB + Redis)
+  // =========================================================================
+  async logout(token: string): Promise<void> {
+    const redisKey = `auth:session:${token}`;
+
+    // Xóa song song trên cả 2 hệ thống để tối ưu tốc độ
+    await Promise.all([
+      this.cacheService.del(redisKey),             // Xóa Cache
+      this.sessionRepository.deleteByToken(token)  // Xóa DB
+    ]);
+  }
+
+  // =========================================================================
+  // 3. THÊM HÀM MỚI: KIỂM TRA TOKEN (Redis -> DB -> Restore Redis)
+  // =========================================================================
+  async validateTokenAndGetUserId(token: string): Promise<number | null> {
+    const redisKey = `auth:session:${token}`;
+
+    // LỚP 1: TÌM TRONG REDIS (Tốc độ mili-giây)
+    const cachedSession = await this.cacheService.get<{ userId: number }>(redisKey);
+    if (cachedSession) {
+      return cachedSession.userId; // Trả về luôn, kết thúc hành trình!
+    }
+
+    // LỚP 2: NẾU REDIS KHÔNG CÓ (Có thể do Redis bị restart/clear cache) -> MÒ XUỐNG DB
+    const session = await this.sessionRepository.findByToken(token);
+    if (!session || session.isExpired()) {
+      return null; // Token sai, đã bị xóa hoặc hết hạn
+    }
+
+    // LỚP 3: PHỤC HỒI LẠI CACHE (Warming Cache)
+    // Để các request mili-giây tiếp theo của user này không cần xuống DB nữa
+    const ttlInSeconds = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
+    if (ttlInSeconds > 0) {
+      await this.cacheService.set(redisKey, { userId: session.userId }, ttlInSeconds);
+    }
+
+    return session.userId;
   }
 
   // ✅ THÊM HÀM NÀY CHO CHATBOT
@@ -4374,6 +5412,7 @@ export class AuthenticationService {
       return { accessToken, user: savedUser.toJSON() };
     });
   }
+
 }
 
 ```
@@ -4493,7 +5532,7 @@ import type { Request } from 'express'; // Import Request
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthenticationService) {}
+  constructor(private authService: AuthenticationService) { }
 
   @Public()
   @Post('login')
@@ -4519,6 +5558,17 @@ export class AuthController {
   @Get('profile')
   getProfile(@CurrentUser() user: User) {
     return { user: user.toJSON() };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() request: Request) {
+    // Lấy token từ header gửi lên
+    const token = request.headers.authorization?.split(' ')[1];
+    if (token) {
+      await this.authService.logout(token);
+    }
+    return { success: true, message: 'Đăng xuất thành công' };
   }
 }
 
@@ -4611,30 +5661,52 @@ export const CurrentUser = createParamDecorator(
 
 ## File: src/modules/auth/infrastructure/strategies/jwt.strategy.ts
 ```
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-// FIX IMPORT
+import { Request } from 'express';
+
 import { IUserRepository } from '../../../user/domain/repositories/user.repository';
+import { AuthenticationService } from '../../application/services/authentication.service'; // 👉 Inject Service
 import { JwtPayload } from '@core/shared/types/common.types';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
-    @Inject(IUserRepository) private userRepository: IUserRepository, // FIX: Symbol
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+    private authService: AuthenticationService, // 👉 Sử dụng AuthService thay vì Repo
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: configService.get('JWT_SECRET') || 'super-secret-key',
+      passReqToCallback: true, // Lấy nguyên Request để tách Token
     });
   }
 
-  async validate(payload: JwtPayload) {
-    const user = await this.userRepository.findById(payload.sub);
-    if (!user || !user.isActive) return null;
+  async validate(req: Request, payload: JwtPayload) {
+    // 1. Trích xuất Raw Token từ Header (Bearer xxxxx)
+    const authHeader = req.headers.authorization;
+    if (!authHeader) throw new UnauthorizedException('Thiếu Token');
+    const token = authHeader.split(' ')[1];
+
+    // 2. 👉 KIỂM TRA BẢO MẬT XUYÊN THẤU (Redis -> Postgres)
+    const validUserId = await this.authService.validateTokenAndGetUserId(token);
+
+    // Nếu trả về null tức là token đã bị thu hồi/xóa ở mọi mặt trận
+    if (!validUserId) {
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn hoặc bị thu hồi (Revoked)');
+    }
+
+    // 3. Kiểm tra User tồn tại và đang Active (Bảo mật 2 lớp)
+    // Lưu ý: Có thể cân nhắc cache luôn thông tin User này ở Redis nếu muốn tối ưu tuyệt đối
+    const user = await this.userRepository.findById(validUserId);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Tài khoản đã bị khóa hoặc không tồn tại');
+    }
+
     return {
       id: user.id,
       username: user.username,
@@ -4662,8 +5734,7 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 @Injectable()
 export class DrizzleSessionRepository
   extends DrizzleBaseRepository
-  implements ISessionRepository
-{
+  implements ISessionRepository {
   async create(session: Session, tx?: Transaction): Promise<void> {
     const db = this.getDb(tx);
     const data = SessionMapper.toPersistence(session);
@@ -4688,6 +5759,21 @@ export class DrizzleSessionRepository
 
   async deleteByUserId(userId: number): Promise<void> {
     await this.db.delete(sessions).where(eq(sessions.userId, userId));
+  }
+
+  // 👉 THÊM HÀM TÌM SESSION THEO TOKEN
+  async findByToken(token: string): Promise<Session | null> {
+    const result = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.token, token))
+      .limit(1);
+    return SessionMapper.toDomain(result[0] || null);
+  }
+
+  // 👉 THÊM HÀM XOÁ SESSION (Dùng cho tính năng Đăng xuất)
+  async deleteByToken(token: string): Promise<void> {
+    await this.db.delete(sessions).where(eq(sessions.token, token));
   }
 }
 
@@ -4837,6 +5923,10 @@ export interface ISessionRepository {
   create(session: Session, tx?: Transaction): Promise<void>;
   findByUserId(userId: number): Promise<Session[]>;
   deleteByUserId(userId: number): Promise<void>;
+
+  // 👉 THÊM tinh nang thu hoi Token - MỚI
+  findByToken(token: string): Promise<Session | null>;
+  deleteByToken(token: string): Promise<void>;
 }
 
 ```
@@ -5260,7 +6350,7 @@ export class TestModule {}
 import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
 import { DRIZZLE } from '@database/drizzle.provider';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
+import * as schema from '@database/schema'; // Sẽ tự động lấy từ index.ts mới
 import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
 import {
@@ -5272,7 +6362,7 @@ import {
 export class DatabaseSeeder implements OnModuleInit {
   private readonly logger = new Logger(DatabaseSeeder.name);
 
-  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
 
   async onModuleInit() {
     // Chỉ chạy khi biến môi trường cho phép hoặc ở môi trường dev
@@ -5280,15 +6370,23 @@ export class DatabaseSeeder implements OnModuleInit {
       return;
     }
 
-    this.logger.log('🌱 Seeding database (Drizzle)...');
-    
+    this.logger.log('🌱 Bắt đầu Seeding database (New Schema: Identity & Profile)...');
+
     try {
+      // 1. Seed cấu hình hệ thống
       await this.seedPermissions();
       await this.seedRoles();
-      await this.seedUsers();
-      await this.assignPermissionsToRoles(); // Gán quyền cho Admin
-      await this.assignRolesToUsers();       // Gán role Admin cho user
-      
+
+      // 2. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
+      await this.seedHrmDictionaries();
+
+      // 3. Seed Users & Employee Profiles
+      await this.seedUsersAndProfiles();
+
+      // 4. Gán quyền
+      await this.assignPermissionsToRoles();
+      await this.assignRolesToUsers();
+
       this.logger.log('✅ Database seeded successfully!');
     } catch (error) {
       this.logger.error('❌ Seeding failed:', error);
@@ -5308,7 +6406,6 @@ export class DatabaseSeeder implements OnModuleInit {
     });
 
     if (values.length > 0) {
-      // Bulk Insert + Bỏ qua nếu trùng tên (yêu cầu cột 'name' phải là unique trong schema)
       await this.db
         .insert(schema.permissions)
         .values(values)
@@ -5334,57 +6431,79 @@ export class DatabaseSeeder implements OnModuleInit {
     this.logger.log(` - Checked/Inserted ${values.length} roles`);
   }
 
-  private async seedUsers() {
+  // ✅ BƯỚC MỚI: Tạo dữ liệu mồi cho Cơ cấu tổ chức
+  private async seedHrmDictionaries() {
+    // Tạo 1 phòng ban gốc (Công ty)
+    await this.db.insert(schema.orgUnits)
+      .values({ type: 'COMPANY', code: 'HQ', name: 'Trụ sở chính Công ty' })
+      .onConflictDoNothing({ target: schema.orgUnits.code });
+
+    // Tạo 1 vài chức danh cơ bản
+    const titles = [{ name: 'Tổng Giám Đốc' }, { name: 'Trưởng Phòng' }, { name: 'Nhân viên' }];
+    await this.db.insert(schema.jobTitles)
+      .values(titles)
+      .onConflictDoNothing({ target: schema.jobTitles.name });
+
+    this.logger.log(' - HRM Dictionaries checked/inserted');
+  }
+
+  // ✅ BƯỚC ĐÃ REFACTOR: Tách biệt việc tạo User và Employee Profile
+  private async seedUsersAndProfiles() {
     const hashedPassword = await bcrypt.hash('123456', 10);
-    const usersData = [
-      {
-        username: 'superadmin',
-        fullName: 'Super Admin',
-        email: 'admin@test.com',
-        hashedPassword,
-        isActive: true,
-      },
-      {
-        username: 'user1',
-        fullName: 'Normal User',
-        email: 'user@test.com',
-        hashedPassword,
-        isActive: true,
-      },
+
+    const usersToSeed = [
+      { username: 'superadmin', email: 'admin@test.com', employeeCode: 'ADMIN-001', fullName: 'Super Admin' },
+      { username: 'user1', email: 'user@test.com', employeeCode: 'NV-0001', fullName: 'Normal User' },
     ];
 
-    await this.db
-      .insert(schema.users)
-      .values(usersData)
-      .onConflictDoNothing({ target: schema.users.username }); // Yêu cầu username unique
+    for (const data of usersToSeed) {
+      // 1. Kiểm tra xem user Identity đã tồn tại chưa
+      const existingUser = await this.db.query.users.findFirst({
+        where: eq(schema.users.username, data.username),
+      });
 
-    this.logger.log(' - Users checked/inserted');
+      if (!existingUser) {
+        // 2. Insert Identity vào bảng `users`
+        const [newUser] = await this.db
+          .insert(schema.users)
+          .values({
+            username: data.username,
+            email: data.email,
+            hashedPassword: hashedPassword,
+            isActive: true,
+          })
+          .returning({ id: schema.users.id }); // Lấy ID vừa tạo
+
+        // 3. Insert Profile vào bảng `employees` sử dụng ID vừa lấy
+        await this.db
+          .insert(schema.employees)
+          .values({
+            userId: newUser.id,
+            employeeCode: data.employeeCode,
+            fullName: data.fullName,
+            // orgUnitId, jobTitleId có thể để null trong lúc seed ban đầu
+          });
+
+        this.logger.log(` - Created User Identity & Employee Profile for: ${data.username}`);
+      }
+    }
   }
 
   private async assignPermissionsToRoles() {
-    // 1. Lấy Admin Role
     const adminRole = await this.db.query.roles.findFirst({
       where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
     });
 
-    if (!adminRole) {
-      this.logger.warn('⚠️ Super Admin role not found, skipping permission assignment.');
-      return;
-    }
+    if (!adminRole) return;
 
-    // 2. Lấy tất cả permissions hiện có trong DB
     const allPerms = await this.db.select({ id: schema.permissions.id }).from(schema.permissions);
-
     if (allPerms.length === 0) return;
 
-    // 3. Chuẩn bị data mapping
     const rolePermissionsValues = allPerms.map((perm) => ({
       roleId: adminRole.id,
       permissionId: perm.id,
     }));
 
-    // 4. Bulk Insert vào bảng trung gian
-    // Lưu ý: onConflictDoNothing ở đây cần composite unique key (role_id + permission_id) trong schema
     await this.db
       .insert(schema.rolePermissions)
       .values(rolePermissionsValues)
@@ -5394,11 +6513,10 @@ export class DatabaseSeeder implements OnModuleInit {
   }
 
   private async assignRolesToUsers() {
-    // Cách query tối ưu: Lấy cả 2 ID cùng lúc nếu có thể, hoặc query song song
     const [adminUser, adminRole] = await Promise.all([
       this.db.query.users.findFirst({
         where: eq(schema.users.username, 'superadmin'),
-        columns: { id: true }, // Chỉ lấy ID cho nhẹ
+        columns: { id: true },
       }),
       this.db.query.roles.findFirst({
         where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
@@ -5413,8 +6531,8 @@ export class DatabaseSeeder implements OnModuleInit {
           userId: adminUser.id,
           roleId: adminRole.id,
         })
-        .onConflictDoNothing(); // Cần unique constraint (userId, roleId)
-      
+        .onConflictDoNothing();
+
       this.logger.log(' - Assigned Super Admin role to user: superadmin');
     }
   }
