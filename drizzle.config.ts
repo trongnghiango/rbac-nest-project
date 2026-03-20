@@ -15,7 +15,7 @@ const prodSchemaPath = './dist/src/database/schema/index.js';
 
 if (fs.existsSync(prodSchemaPath) && process.env.NODE_ENV === 'production') {
   console.log('✅ PRODUCTION MODE: Using Schema from dist/src/database/schema/index.js');
-  schemaPath = prodSchemaPath;
+  // schemaPath = prodSchemaPath;
 } else {
   console.log('⚠️ DEV MODE: Using Schema from src/database/schema/index.ts');
 }
@@ -31,8 +31,8 @@ export default defineConfig({
   dialect: 'postgresql',
   dbCredentials: {
     // Ưu tiên DATABASE_URL, nếu không có thì tự ghép chuỗi
-    url: process.env.DATABASE_URL || 
-         `postgres://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
+    url: process.env.DATABASE_URL ||
+      `postgres://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
   },
   verbose: true,
   strict: true,

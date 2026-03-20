@@ -27,4 +27,6 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080 9229
 
+# Thêm dumb-init để xử lý tiến trình Node.js gọn gàng khi Ctrl+C
+# ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
 CMD ["/entrypoint.sh"]

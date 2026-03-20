@@ -1,407 +1,7207 @@
-## File: infra/docker/Dockerfile.dev
+## File: src/config/app.config.ts
 ```
-FROM node:22.15-alpine
+import { registerAs } from '@nestjs/config';
 
-WORKDIR /app
-
-# 1. Cài đặt thư viện hệ thống (Giữ nguyên vì Alpine cần C++ compiler)
-RUN apk add --no-cache \
-    build-base gcc g++ autoconf automake zlib-dev libtool \
-    python3 make nasm vips-dev git linux-headers procps
-
-# 2. KÍCH HOẠT PNPM
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-# 3. Copy file config và lockfile của pnpm
-COPY package.json pnpm-lock.yaml* ./
-
-# 4. Cài đặt dependencies bằng pnpm
-RUN pnpm install --frozen-lockfile
-
-# 5. Copy toàn bộ source code
-COPY . .
-
-ENV NODE_ENV=development
-
-# Setup entrypoint
-COPY infra/scripts/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-EXPOSE 8080 9229
-
-CMD ["/entrypoint.sh"]
+export default registerAs('app', () => ({
+  env: process.env.NODE_ENV || 'development',
+  port: parseInt(process.env.PORT || '8080', 10),
+  apiPrefix: 'api',
+}));
 
 ```
 
-## File: infra/docker/Dockerfile
+## File: src/config/dental.config.ts
 ```
-# STAGE 1: BASE
-FROM node:22.15-alpine AS base
-RUN apk add --no-cache libc6-compat
-# Kích hoạt pnpm ở Base để các stage sau đều dùng được
-RUN corepack enable && corepack prepare pnpm@latest --activate
+// File: src/config/dental.config.ts
+import { registerAs } from '@nestjs/config';
+import * as path from 'path';
+import * as fs from 'fs';
 
-# STAGE 2: DEPS
-FROM base AS deps
-WORKDIR /app
-RUN apk add --no-cache build-base gcc g++ autoconf automake zlib-dev libtool python3 make nasm vips-dev git linux-headers
-COPY package.json pnpm-lock.yaml* ./
-# Dùng pnpm để cài deps (giống hệt npm ci nhưng cho pnpm)
-RUN pnpm install --frozen-lockfile
+/**
+ * 🛠️ RESOLVE BINARY THÔNG MINH (Dành cho Webpack + PNPM + Docker)
+ * Thay vì mò mẫm tìm file .js bên trong ruột package (rất dễ gãy do pnpm symlink),
+ * ta nhắm thẳng vào thư mục `.bin` do pnpm sinh ra lúc install.
+ */
+function getBinaryPath(binaryName: string): string {
+  // 1. Gốc dự án (Trên Docker luôn là /app)
+  const rootDir = process.cwd();
 
-# STAGE 3: BUILDER
-FROM base AS builder
-WORKDIR /app
-COPY package.json pnpm-lock.yaml* ./
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-# Dùng pnpm build
-RUN pnpm run build
+  // 2. Đường dẫn chuẩn tới thư mục Binaries của PNPM/NPM
+  // VD: /app/node_modules/.bin/obj2gltf
+  const localBinPath = path.join(rootDir, 'node_modules', '.bin', binaryName);
 
-# STAGE 4: RUNNER (Production)
-FROM base AS runner
-WORKDIR /app
+  if (fs.existsSync(localBinPath)) {
+    return localBinPath;
+  }
 
-ENV NODE_ENV=production \
-    TZ=Asia/Ho_Chi_Minh \
-    PORT=8080
-
-RUN apk add --no-cache dumb-init vips tzdata ca-certificates curl \
-    && update-ca-certificates
-
-RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs appuser
-RUN mkdir -p /app/uploads/dental/temp /app/uploads/dental/converted /app/logs \
-    && chown -R appuser:nodejs /app
-
-COPY --from=builder --chown=appuser:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=appuser:nodejs /app/dist ./dist
-COPY --from=builder --chown=appuser:nodejs /app/package.json ./
-
-COPY infra/scripts/entrypoint.sh /entrypoint.sh
-COPY infra/scripts/healthcheck.sh /healthcheck.sh
-RUN chmod +x /entrypoint.sh /healthcheck.sh && chown appuser:nodejs /entrypoint.sh /healthcheck.sh
-
-USER appuser
-EXPOSE 8080
-
-ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
-
-```
-
-## File: infra/docker-compose.prod.yml
-```
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: rbac_postgres_prod
-    restart: always
-    env_file:
-      - ../.env.production
-    environment:
-      POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-rbac_system}
-    volumes:
-      - pgdata_prod:/var/lib/postgresql/data
-    networks:
-      - rbac_prod_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-
-  redis:
-    image: redis:7-alpine
-    container_name: rbac_redis_prod
-    restart: always
-    networks:
-      - rbac_prod_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
-  # 👇 THÊM SERVICE TELEGRAM LOCAL VÀO ĐÂY
-  telegram-api:
-    image: aiogram/telegram-bot-api:latest
-    container_name: rbac_telegram_api_prod
-    restart: always
-    env_file:
-      - ../.env.production
-    environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
-      TELEGRAM_STAT: 1
-      TELEGRAM_LOCAL: 1
-    volumes:
-      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
-    networks:
-      - rbac_prod_net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-
-  api:
-    build:
-      context: ..
-      dockerfile: infra/docker/Dockerfile
-    container_name: rbac_api_prod
-    restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      telegram-api:
-        condition: service_started
-    env_file:
-      - ../.env.production
-    environment:
-      - RUN_MIGRATIONS=true
-      - NODE_OPTIONS=--max-old-space-size=1536
-      - TELEGRAM_API_ROOT=http://telegram-api:8081
-    volumes:
-      - dental_data_prod:/app/uploads
-      - api_logs_prod:/app/logs
-      # Map chung thư mục data Telegram
-      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
-    ports:
-      - "${PORT:-8080}:8080"
-    networks:
-      - rbac_prod_net
-    healthcheck:
-      test: ["CMD", "/healthcheck.sh"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-
-networks:
-  rbac_prod_net:
-    driver: bridge
-
-volumes:
-  pgdata_prod:
-  dental_data_prod:
-  api_logs_prod:
-
-```
-
-## File: infra/docker-compose.dev.yml
-```
-
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: rbac_postgres_dev
-    restart: unless-stopped
-    env_file:
-      - ../.env.development
-    environment:
-      POSTGRES_USER: ${DB_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-rbac_system}
-    volumes:
-      - pgdata_dev:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - rbac_dev_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: rbac_redis_dev
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    networks:
-      - rbac_dev_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # 👇 THÊM SERVICE TELEGRAM LOCAL VÀO ĐÂY
-  telegram-api:
-    image: aiogram/telegram-bot-api:latest
-    container_name: rbac_telegram_api_dev
-    restart: unless-stopped
-    env_file:
-      - ../.env.development
-    environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
-      TELEGRAM_STAT: 1
-      TELEGRAM_LOCAL: 1
-    volumes:
-      # Map thư mục data của Telegram ra ổ cứng thật của bạn
-      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
-    ports:
-      - "8081:8081"
-    networks:
-      - rbac_dev_net
-
-  api:
-    build:
-      context: ..
-      dockerfile: infra/docker/Dockerfile.dev
-    container_name: rbac_api_dev
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      # Đợi Telegram bật lên mới chạy API
-      telegram-api:
-        condition: service_started 
-    env_file:
-      - ../.env.development
-    environment:
-      - RUN_MIGRATIONS=true
-      # Ghi đè cấu hình để API gọi vào đúng Container Telegram
-      - TELEGRAM_API_ROOT=http://telegram-api:8081
-      - DB_HOST=postgres
-      - REDIS_HOST=redis
-    volumes:
-      - ..:/app
-      - /app/node_modules
-      - dental_data_dev:/app/uploads
-      # 💡 Trick siêu hay: Map chung thư mục data Telegram vào API 
-      # để NestJS lấy thẳng file do Telegram tải về mà không cần qua mạng HTTP
-      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
-    ports:
-      - "${PORT:-8080}:8080"
-      - "9229:9229"
-    networks:
-      - rbac_dev_net
-
-networks:
-  rbac_dev_net:
-    driver: bridge
-
-volumes:
-  pgdata_dev:
-  dental_data_dev:
-
-```
-
-## File: infra/scripts/entrypoint.sh
-```
-#!/bin/sh
-set -e
-
-echo "🚀 [Entrypoint] System is starting in $NODE_ENV mode..."
-
-# Hàm chờ Database
-wait_for_db() {
-  local host="$1"
-  local port="$2"
-  echo "🔍 Waiting for Database at $host:$port..."
-  # Đợi tối đa 30s để tránh loop vô hạn
-  local timeout=30
-  while ! nc -z "$host" "$port" 2>/dev/null; do
-    timeout=$((timeout - 1))
-    if [ "$timeout" -le 0 ]; then
-      echo "❌ Database unavailable after 30 seconds. Exiting!"
-      exit 1
-    fi
-    sleep 1
-  done
-  echo "✅ Database is UP!"
+  // 3. Fallback tối thượng: Trả về đúng tên lệnh.
+  // Lý do: Nếu trong Dockerfile bạn dùng `RUN npm install -g obj2gltf`, 
+  // hệ điều hành (Linux) đã tự động map lệnh này vào biến toàn cục $PATH.
+  // Khi gọi child_process.exec('obj2gltf'), Linux sẽ tự hiểu.
+  return binaryName;
 }
 
-# Đợi DB sẵn sàng
-wait_for_db "$DB_HOST" "$DB_PORT"
+export default registerAs('dental', () => {
+  // Lấy gốc dự án (process.cwd() thay vì __dirname để chống lỗi Webpack)
+  const baseDir = process.cwd();
 
-# Cấu hình Connection String cho Drizzle
-export DATABASE_URL="postgres://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}"
+  return {
+    // Upload & Storage Paths (An toàn tuyệt đối)
+    uploadDir: process.env.DENTAL_UPLOAD_DIR || path.join(baseDir, 'uploads', 'dental', 'temp'),
+    outputDir: process.env.DENTAL_OUTPUT_DIR || path.join(baseDir, 'uploads', 'dental', 'converted'),
 
-# Chạy Migration
-if [ "$RUN_MIGRATIONS" = "true" ]; then
-    echo "🔄 [Migration] Syncing database schema..."
-    
-    # Phân biệt đường dẫn schema giữa dev và prod
-    if [ "$NODE_ENV" = "production" ]; then
-        SCHEMA_FILE="./dist/src/database/schema/index.js"
-    else
-        SCHEMA_FILE="./src/database/schema/index.ts"
-    fi
+    // Encryption
+    encryptionKey: process.env.DENTAL_ENCRYPTION_KEY || 'qW9xZ2tL8mP4rN6vB3jF5hY7cT2kD9wE',
 
-    if [ ! -f "$SCHEMA_FILE" ]; then
-        echo "❌ CRITICAL: Schema file not found at $SCHEMA_FILE"
-        exit 1
-    fi
+    // Conversion Settings
+    simplificationRatio: 0.3,
+    errorThreshold: 0.0005,
+    timeout: 300000, // 5 mins
 
-    # CẢNH BÁO: Drizzle push có thể gây mất data nếu rename cột. 
-    # Về lâu dài hãy thay bằng lệnh migrate. Hiện tại tối ưu lệnh push:
-    if npx drizzle-kit push --dialect=postgresql --schema="$SCHEMA_FILE" --url="$DATABASE_URL"; then
-        echo "✅ Database schema synced!"
-    else
-        echo "❌ Migration FAILED!"
-        exit 1
-    fi
-fi
+    // Worker Pool
+    minThreads: parseInt(process.env.PISCINA_MIN_THREADS || '0', 10),
+    maxThreads: parseInt(process.env.PISCINA_MAX_THREADS || '0', 10),
 
-# Khởi chạy App theo môi trường
-if [ "$NODE_ENV" = "development" ]; then
-    echo "🛠️ [App] Starting NestJS in DEVELOPMENT mode..."
-    exec npm run start:dev
-else
-    echo "🚀 [App] Starting NestJS in PRODUCTION mode..."
-    if [ -f "dist/src/bootstrap/main.js" ]; then
-        exec node dist/src/bootstrap/main.js
-    elif [ -f "dist/bootstrap/main.js" ]; then
-        exec node dist/bootstrap/main.js
-    else
-        echo "❌ Error: Cannot find main.js"
-        exit 1
-    fi
-fi
+    // ✅ ĐƯỜNG DẪN BINARIES SIÊU CHUẨN: Ưu tiên ENV -> PNPM .bin -> Global Path
+    binaries: {
+      obj2gltf: process.env.BIN_OBJ2GLTF || getBinaryPath('obj2gltf'),
+
+      gltfPipeline: process.env.BIN_GLTF_PIPELINE || getBinaryPath('gltf-pipeline'),
+
+      // Lưu ý: Package name là @gltf-transform/cli, nhưng lệnh thực thi đăng ký trong package.json của nó tên là 'gltf-transform'
+      gltfTransform: process.env.BIN_GLTF_TRANSFORM || getBinaryPath('gltf-transform'),
+    },
+  };
+});
 
 ```
 
-## File: infra/scripts/healthcheck.sh
+## File: src/config/database.config.ts
 ```
-#!/bin/sh
-# Gọi thẳng vào API Healthcheck bạn đã viết trong TestController
-# Chấp nhận localhost hoặc tên container
-API_URL="http://localhost:${PORT:-8080}/api/test/health"
+import { registerAs } from '@nestjs/config';
 
-# curl lấy HTTP status code
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL")
+export default registerAs('database', () => {
+  // Ưu tiên Connection String (Cloud)
+  if (process.env.DATABASE_URL) {
+    return { url: process.env.DATABASE_URL };
+  }
 
-if [ "$STATUS" = "200" ]; then
-    exit 0
-else
-    echo "Healthcheck failed with status: $STATUS"
-    exit 1
-fi
+  // Fallback Local
+  return {
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+    username: process.env.DB_USERNAME || 'postgres',
+    password: process.env.DB_PASSWORD || 'postgres',
+    database: process.env.DB_NAME || 'rbac_system',
+  };
+});
+
+```
+
+## File: src/config/redis.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('redis', () => ({
+  // 1. Ưu tiên URI (Dành cho Redis Cloud)
+  uri: process.env.REDIS_URI,
+
+  // 2. Fallback Host/Port (Dành cho Docker Local)
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  
+  // Mật khẩu (Có thể dùng cho cả local nếu docker set pass)
+  password: process.env.REDIS_PASSWORD,
+
+  // Sử dụng biến RBAC_CACHE_TTL từ .env của bạn
+  ttl: parseInt(process.env.RBAC_CACHE_TTL || '300', 10),
+  max: parseInt(process.env.RBAC_CACHE_MAX || '1000', 10),
+}));
+
+```
+
+## File: src/config/event-bus.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('eventBus', () => ({
+  // 'memory' | 'rabbitmq' | 'kafka'
+  type: process.env.EVENT_BUS_TYPE || 'memory',
+}));
+
+```
+
+## File: src/config/logging.config.ts
+```
+import { registerAs } from '@nestjs/config';
+
+export default registerAs('logging', () => ({
+  level: process.env.LOG_LEVEL || 'info',
+}));
+
+```
+
+## File: src/database/drizzle.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { drizzleProvider } from './drizzle.provider';
+import { ConfigModule } from '@nestjs/config';
+
+@Global()
+@Module({
+  imports: [ConfigModule],
+  providers: [drizzleProvider],
+  exports: [drizzleProvider],
+})
+export class DrizzleModule {}
+
+```
+
+## File: src/database/schema/system/notifications.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  integer,
+  boolean,
+} from 'drizzle-orm/pg-core';
+
+export const notifications = pgTable('notifications', {
+  id: serial('id').primaryKey(),
+  userId: integer('userId').notNull(), // Liên kết lỏng với bảng Users
+  type: text('type').notNull(), // EMAIL, SMS
+  subject: text('subject').notNull(),
+  content: text('content').notNull(),
+  status: text('status').notNull(), // PENDING, SENT
+  sentAt: timestamp('sentAt'),
+  createdAt: timestamp('createdAt').defaultNow(),
+});
+
+```
+
+## File: src/database/schema/hrm/employees.schema.ts
+```
+import { pgTable, serial, text, integer, date, timestamp, bigint, numeric } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from '../core/users.schema';
+import { locations, positions } from './org-structure.schema';
+
+// 1. Hồ sơ Nhân viên
+export const employees = pgTable('employees', {
+    id: serial('id').primaryKey(),
+    userId: bigint('user_id', { mode: 'number' })
+        .unique() // Vẫn giữ unique để 1 User chỉ map 1 Employee
+        .references(() => users.id, { onDelete: 'set null' }), // Đổi cascade thành set null để khi xóa User, hồ sơ NV vẫn còn
+
+    employeeCode: text('employee_code').notNull().unique(), // VD: 001, 007
+    fullName: text('full_name').notNull(),
+    dateOfBirth: date('date_of_birth'),
+    phoneNumber: text('phone_number'),
+    avatarUrl: text('avatar_url'),
+
+    // 👉 THAY ĐỔI LỚN: NV liên kết trực tiếp với Vị trí (Position) và Địa điểm (Location)
+    locationId: integer('location_id').references(() => locations.id), // Nơi làm việc (HCM)
+    positionId: integer('position_id').references(() => positions.id), // Vị trí công việc (Bao hàm cả Phòng, Chức danh, Bậc)
+
+    managerId: integer('manager_id'), // Người quản lý trực tiếp
+
+    joinDate: date('join_date'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// 2. 🔥 BẢNG MỚI: KỲ ĐÁNH GIÁ (PERFORMANCE REVIEWS - Lộ trình thăng tiến)
+export const performanceReviews = pgTable('performance_reviews', {
+    id: serial('id').primaryKey(),
+    employeeId: integer('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    reviewerId: integer('reviewer_id').references(() => employees.id), // Người đánh giá (Manager)
+
+    reviewPeriod: text('review_period').notNull(), // VD: "Q1-2026"
+    score: numeric('score', { precision: 5, scale: 2 }), // Điểm đánh giá
+    comments: text('comments'),
+
+    // Đề xuất sau đánh giá
+    proposedPositionId: integer('proposed_position_id').references(() => positions.id), // Đề xuất lên vị trí/bậc mới
+    status: text('status').default('PENDING'), // PENDING, APPROVED, REJECTED
+
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
+// --- RELATIONS ---
+export const employeesRelations = relations(employees, ({ one, many }) => ({
+    user: one(users, { fields: [employees.userId], references: [users.id] }),
+    location: one(locations, { fields: [employees.locationId], references: [locations.id] }),
+
+    // Liên kết chặt chẽ với Ma trận Vị trí
+    position: one(positions, { fields: [employees.positionId], references: [positions.id] }),
+
+    manager: one(employees, { fields: [employees.managerId], references: [employees.id], relationName: 'managerRelation' }),
+    subordinates: many(employees, { relationName: 'managerRelation' }),
+    reviews: many(performanceReviews, { relationName: 'employeeReviews' }),
+}));
+
+export const performanceReviewsRelations = relations(performanceReviews, ({ one }) => ({
+    employee: one(employees, { fields: [performanceReviews.employeeId], references: [employees.id], relationName: 'employeeReviews' }),
+    reviewer: one(employees, { fields: [performanceReviews.reviewerId], references: [employees.id] }),
+    proposedPosition: one(positions, { fields: [performanceReviews.proposedPositionId], references: [positions.id] }),
+}));
+
+
+```
+
+## File: src/database/schema/hrm/org-structure.schema.ts
+```
+import { pgTable, serial, varchar, integer, boolean, timestamp, numeric, index } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { employees } from './employees.schema';
+
+// 1. Địa điểm làm việc (Chi nhánh, Tòa nhà)
+export const locations = pgTable('locations', {
+    id: serial('id').primaryKey(),
+    code: varchar('code', { length: 50 }).unique().notNull(), // VD: HCM, HN
+    name: varchar('name', { length: 255 }).notNull(),
+    isActive: boolean('is_active').default(true),
+});
+
+// 2. Cấp bậc lương / Rank (Từ Bậc 1 -> Bậc 10 như Hình 2)
+export const grades = pgTable('grades', {
+    id: serial('id').primaryKey(),
+    levelNumber: integer('level_number').notNull().unique(), // 1, 2... 10
+    code: varchar('code', { length: 50 }).unique().notNull(), // BAC_1, BAC_10
+    name: varchar('name', { length: 255 }).notNull(),
+});
+
+// 3. Thang bảng lương (Salary Scales) - Link với Bậc
+export const salaryScales = pgTable('salary_scales', {
+    id: serial('id').primaryKey(),
+    gradeId: integer('grade_id').notNull().references(() => grades.id, { onDelete: 'cascade' }),
+    baseSalary: numeric('base_salary', { precision: 15, scale: 2 }), // Lương cơ bản
+    coefficient: numeric('coefficient', { precision: 5, scale: 2 }), // Hệ số lương (VD: 2.34)
+    effectiveDate: timestamp('effective_date'), // Ngày áp dụng
+});
+
+// 4. Chức danh công việc chung (Generic Job Titles)
+export const jobTitles = pgTable('job_titles', {
+    id: serial('id').primaryKey(),
+    name: varchar('name', { length: 255 }).notNull().unique(), // Trưởng phòng, Chuyên viên, Trợ lý...
+});
+
+// 5. Cơ cấu tổ chức (Sơ đồ cây: Công ty -> Khối -> Phòng -> Nhóm)
+export const orgUnits = pgTable('org_units', {
+    id: serial('id').primaryKey(),
+    parentId: integer('parent_id'),
+    path: varchar('path', { length: 255 }), //Trường path lưu cấu trúc cây (VD: /1/3/4/)
+    type: varchar('type', { length: 50 }).notNull(), // COMPANY, BOD, DEPARTMENT, TEAM
+    code: varchar('code', { length: 50 }).unique().notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    isActive: boolean('is_active').default(true),
+    deletedAt: timestamp('deleted_at'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+}, (table) => ({
+    // 👉 Đánh Index B-Tree cho trường path để tăng tốc query LIKE
+    pathIdx: index('idx_org_units_path').on(table.path),
+}));
+
+// 6. 🔥 BẢNG MỚI: VỊ TRÍ ĐỊNH BIÊN (POSITIONS - MA TRẬN CHỨC DANH)
+// Đại diện cho các ô màu vàng/xanh trong Hình 3
+export const positions = pgTable('positions', {
+    id: serial('id').primaryKey(),
+    code: varchar('code', { length: 50 }).unique().notNull(), // VD: POS-IT-06
+    name: varchar('name', { length: 255 }).notNull(), // VD: "CV-IT" hoặc "Chuyên viên B2"
+
+    orgUnitId: integer('org_unit_id').notNull().references(() => orgUnits.id), // Thuộc phòng nào
+    jobTitleId: integer('job_title_id').notNull().references(() => jobTitles.id), // Mang chức danh gì
+    gradeId: integer('grade_id').notNull().references(() => grades.id), // Ở bậc mấy
+
+    headcountLimit: integer('headcount_limit').default(1), // Định biên nhân sự (Số lượng tối đa cho vị trí này)
+    isActive: boolean('is_active').default(true),
+});
+
+// --- RELATIONS ---
+export const orgUnitsRelations = relations(orgUnits, ({ one, many }) => ({
+    parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id] }),
+    children: many(orgUnits),
+    positions: many(positions), // 1 Phòng ban có nhiều Vị trí
+}));
+
+export const gradesRelations = relations(grades, ({ many }) => ({
+    salaryScales: many(salaryScales),
+    positions: many(positions),
+}));
+
+export const positionsRelations = relations(positions, ({ one, many }) => ({
+    orgUnit: one(orgUnits, { fields: [positions.orgUnitId], references: [orgUnits.id] }),
+    jobTitle: one(jobTitles, { fields: [positions.jobTitleId], references: [jobTitles.id] }),
+    grade: one(grades, { fields: [positions.gradeId], references: [grades.id] }),
+    employees: many(employees), // 1 Vị trí có thể có nhiều nhân viên (nếu headcount > 1)
+}));
+
+```
+
+## File: src/database/schema/crm/organizations.schema.ts
+```
+import { pgTable, serial, text, timestamp, bigint } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from '../core/users.schema';
+
+export const organizations = pgTable('organizations', {
+    id: serial('id').primaryKey(),
+
+    // FK trỏ về Users (One-to-One) để đăng nhập cổng Portal CRM
+    userId: bigint('user_id', { mode: 'number' })
+        .notNull()
+        .unique()
+        .references(() => users.id, { onDelete: 'cascade' }),
+
+    companyName: text('company_name').notNull(),
+    taxCode: text('tax_code').unique(), // Mã số thuế
+    industry: text('industry'), // IT, Y Tế, Sản Xuất...
+    website: text('website'),
+
+    contactPerson: text('contact_person'),
+    contactPhone: text('contact_phone'),
+
+    status: text('status').default('LEAD'), // LEAD, ACTIVE_CUSTOMER, CHURNED
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
+// --- RELATIONS ---
+export const organizationsRelations = relations(organizations, ({ one }) => ({
+    user: one(users, { fields: [organizations.userId], references: [users.id] }),
+}));
+
+```
+
+## File: src/database/schema/rbac/rbac.schema.ts
+```
+import {
+  pgTable,
+  serial,
+  text,
+  boolean,
+  timestamp,
+  primaryKey,
+  bigint,
+  integer,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+
+import { users } from '@database/schema';
+
+// --- 1. TABLES DEFINITIONS ---
+
+// Permissions Table
+export const permissions = pgTable('permissions', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  resourceType: text('resourceType'),
+  action: text('action'),
+  attributes: text('attributes').default('*'),
+  isActive: boolean('isActive').default(true),
+  createdAt: timestamp('createdAt').defaultNow(),
+});
+
+// Roles Table
+export const roles = pgTable('roles', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  isActive: boolean('isActive').default(true),
+  isSystem: boolean('isSystem').default(false),
+  createdAt: timestamp('createdAt').defaultNow(),
+  updatedAt: timestamp('updatedAt').defaultNow(),
+});
+
+// User Roles (Pivot Table: Users <-> Roles)
+// ✅ Cập nhật bảng nối userRoles: Thêm references cho userId
+export const userRoles = pgTable(
+  'user_roles',
+  {
+    userId: bigint('userId', { mode: 'number' })
+      .notNull()
+      .references(() => users.id), // Link tới bảng users
+    roleId: integer('roleId')
+      .notNull()
+      .references(() => roles.id), // Link tới bảng roles
+    assignedBy: bigint('assignedBy', { mode: 'number' }),
+    expiresAt: timestamp('expiresAt', { withTimezone: true }),
+    assignedAt: timestamp('assignedAt').defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.roleId] }),
+  }),
+);
+// export const userRoles = pgTable(
+//   'user_roles',
+//   {
+//     userId: bigint('userId', { mode: 'number' }).notNull(),
+//     roleId: integer('roleId') // Lưu ý: DB column name nên để 'role_id' nếu muốn chuẩn snake_case, ở đây giữ nguyên theo code cũ của bạn
+//       .notNull()
+//       .references(() => roles.id),
+//     assignedBy: bigint('assignedBy', { mode: 'number' }),
+//     expiresAt: timestamp('expiresAt', { withTimezone: true }),
+//     assignedAt: timestamp('assignedAt').defaultNow(),
+//   },
+//   (t) => ({
+//     pk: primaryKey({ columns: [t.userId, t.roleId] }),
+//   }),
+// );
+
+// Role Permissions (Pivot Table: Roles <-> Permissions)
+export const rolePermissions = pgTable(
+  'role_permissions',
+  {
+    roleId: integer('role_id')
+      .notNull()
+      .references(() => roles.id),
+    permissionId: integer('permission_id')
+      .notNull()
+      .references(() => permissions.id),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.roleId, t.permissionId] }),
+  }),
+);
+
+// --- 2. RELATIONS DEFINITIONS ---
+
+// Relations cho Permissions
+export const permissionsRelations = relations(permissions, ({ many }) => ({
+  roles: many(rolePermissions), // Permission có nhiều entry trong bảng nối rolePermissions
+}));
+
+// Relations cho Roles
+export const rolesRelations = relations(roles, ({ many }) => ({
+  permissions: many(rolePermissions), // Role có nhiều entry trong bảng nối rolePermissions
+  // Nếu bạn muốn query ngược từ Role ra User, cần relation này (Optional)
+  users: many(userRoles),
+}));
+
+// Relations cho RolePermissions (Bảng nối)
+export const rolePermissionsRelations = relations(
+  rolePermissions,
+  ({ one }) => ({
+    role: one(roles, {
+      fields: [rolePermissions.roleId],
+      references: [roles.id],
+    }),
+    permission: one(permissions, {
+      fields: [rolePermissions.permissionId],
+      references: [permissions.id],
+    }),
+  }),
+);
+
+// Relations cho UserRoles (Bảng nối) - PHẦN BỊ THIẾU GÂY LỖI
+// ✅ Cập nhật Relation cho bảng nối: Định nghĩa 2 chiều
+export const userRolesRelations = relations(userRoles, ({ one }) => ({
+  role: one(roles, {
+    fields: [userRoles.roleId],
+    references: [roles.id],
+  }),
+  user: one(users, {
+    fields: [userRoles.userId],
+    references: [users.id],
+  }),
+}));
+
+```
+
+## File: src/database/schema/index.ts
+```
+// src/database/schema/index.ts
+
+// Core
+export * from './core/users.schema';
+export * from './core/sessions.schema';
+
+// RBAC
+export * from './rbac/rbac.schema';
+
+// System
+export * from './system/notifications.schema';
+
+// HRM (Nhân sự)
+export * from './hrm/org-structure.schema';
+export * from './hrm/employees.schema';
+
+// ✅ BỔ SUNG DÒNG NÀY (CRM - Đối tác/Khách hàng)
+export * from './crm/organizations.schema';
+
+```
+
+## File: src/database/schema/core/users.schema.ts
+```
+import { relations } from 'drizzle-orm';
+import { pgTable, bigserial, text, boolean, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { userRoles } from '../rbac/rbac.schema';
+import { employees } from '../hrm/employees.schema';
+import { organizations } from '../crm/organizations.schema';
+
+// --- TABLE ---
+export const users = pgTable('users', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  username: text('username').notNull().unique(),
+  email: text('email').unique(),
+  hashedPassword: text('hashedPassword'),
+  telegramId: varchar('telegram_id', { length: 50 }).unique(), // Dùng cho Chatbot
+
+  isActive: boolean('is_active').default(true),
+
+  deletedAt: timestamp('deleted_at'),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// --- RELATIONS (Nhìn code như nhìn sơ đồ ERD) ---
+export const usersRelations = relations(users, ({ one, many }) => ({
+  // 1 User có nhiều Roles
+  userRoles: many(userRoles),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Nhân viên (HRM)
+  employeeProfile: one(employees, {
+    fields: [users.id],
+    references: [employees.userId],
+  }),
+
+  // Quan hệ 1-1: 1 User có thể là 1 Khách hàng Doanh nghiệp (CRM)
+  organizationProfile: one(organizations, {
+    fields: [users.id],
+    references: [organizations.userId],
+  }),
+}));
+
+```
+
+## File: src/database/schema/core/sessions.schema.ts
+```
+import { pgTable, uuid, bigint, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { users } from './users.schema';
+
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: bigint('user_id', { mode: 'number' }).notNull().references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index('idx_sessions_user_id').on(table.userId),
+  }),
+);
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, { fields: [sessions.userId], references: [users.id] }),
+}));
+
+```
+
+## File: src/database/schema/note.md
+```
+
+
+### 📂 Cấu trúc thư mục Database Schema
+```
+src/database/schema/
+├── index.ts                           # File gom (Export all) để cấu hình Drizzle
+├── core/
+│   ├── users.schema.ts                # Định danh, Đăng nhập (Identity)
+│   └── sessions.schema.ts             # Phiên làm việc (Tokens)
+├── rbac/
+│   └── rbac.schema.ts                 # Roles, Permissions, Phân quyền
+├── hrm/
+│   ├── org-structure.schema.ts        # Sơ đồ tổ chức, chức danh, cấp bậc
+│   └── employees.schema.ts            # Hồ sơ Nhân viên (Profile)
+├── crm/
+│   └── organizations.schema.ts        # Hồ sơ Doanh nghiệp/Đối tác B2B (Profile)
+└── system/
+    └── notifications.schema.ts        # Thông báo hệ thống
+```
+
+> Vì sao lại tổ chức cấu trúc thư mục `schema` như cấu trúc trên? Rõ ràng theo modules nên khi tách microservices sẽ dễ dàng theo modules và thấy rõ schema của module nào cần tách. Đồng thời cũng phù hợp vói cách tổ chức của Drizzle ORM.
+### 
+```
+
+## File: src/database/drizzle.provider.ts
+```
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { ConfigService } from '@nestjs/config';
+import * as schema from './schema';
+
+export const DRIZZLE = 'DRIZZLE_CONNECTION';
+
+export const drizzleProvider = {
+  provide: DRIZZLE,
+  inject: [ConfigService],
+  useFactory: async (configService: ConfigService) => {
+    const connectionString = configService.get<string>('database.url');
+
+    const host = configService.get<string>('database.host');
+    const port = configService.get<number>('database.port');
+    const user = configService.get<string>('database.username');
+    const password = configService.get<string>('database.password');
+    const database = configService.get<string>('database.database');
+
+    const poolConfig = connectionString
+      ? { connectionString }
+      : { host, port, user, password, database };
+
+    const pool = new Pool(poolConfig);
+    return drizzle(pool, { schema });
+  },
+};
+
+```
+
+## File: src/core/filters/http-exception.filter.ts
+```
+import {
+  ExceptionFilter,
+  Catch,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+
+@Catch()
+export class HttpExceptionFilter implements ExceptionFilter {
+  catch(exception: any, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    const status =
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR;
+
+    let message = 'Internal server error';
+    let errors = null;
+
+    // ✅ Kiểm tra môi trường
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (exception instanceof HttpException) {
+      const res: any = exception.getResponse();
+      message =
+        typeof res === 'string' ? res : res.message || res.error || message;
+      errors = res.message || null;
+    } else {
+      // 🚨 Đây là lỗi hệ thống (Database, Runtime Exception, v.v.)
+      console.error('🔥 System Error:', exception); // Ghi log ra Winston
+
+      // ✅ BẢO MẬT: Ẩn chi tiết lỗi nếu đang ở Production
+      if (isProduction) {
+        message = 'Internal server error. Please try again later.';
+      } else {
+        // Chỉ hiện lỗi thật lúc code (Development)
+        message = exception.message || 'Database Transaction Error';
+      }
+    }
+
+    response.status(status).json({
+      success: false,
+      statusCode: status,
+      message: message,
+      errors: errors,
+      path: request.url,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
+```
+
+## File: src/core/decorators/bypass-transform.decorator.ts
+```
+import { SetMetadata } from '@nestjs/common';
+
+export const BYPASS_TRANSFORM_KEY = 'bypass_transform';
+export const BypassTransform = () => SetMetadata(BYPASS_TRANSFORM_KEY, true);
+
+```
+
+## File: src/core/core.module.ts
+```
+import { Module } from '@nestjs/common';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+
+import { TransformResponseInterceptor } from './interceptors/transform-response.interceptor';
+import { HttpExceptionFilter } from './filters/http-exception.filter';
+import { RequestContextService } from './shared/infrastructure/context/request-context.service';
+
+@Module({
+  providers: [
+    RequestContextService, // Đăng ký Service này
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TransformResponseInterceptor,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: HttpExceptionFilter,
+    },
+  ],
+  exports: [RequestContextService],
+})
+export class CoreModule {}
+
+```
+
+## File: src/core/interceptors/transform-response.interceptor.ts
+```
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+  StreamableFile,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+import { Response } from 'express';
+import { BYPASS_TRANSFORM_KEY } from '../decorators/bypass-transform.decorator';
+
+export interface AppResponse<T> {
+  success: boolean;
+  statusCode: number;
+  message: string;
+  result: T;
+}
+
+@Injectable()
+export class TransformResponseInterceptor<T> implements NestInterceptor<
+  T,
+  AppResponse<T> | StreamableFile
+> {
+  constructor(private reflector: Reflector) { }
+
+  intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<AppResponse<T> | StreamableFile> {
+
+    // 🛑 FIX: Chỉ áp dụng Interceptor này cho HTTP Request
+    // Nếu là 'rpc' (Microservice) hoặc ngữ cảnh của Telegraf, thì bỏ qua (return luôn)
+    if (context.getType() !== 'http') {
+      return next.handle();
+    }
+
+    const bypass = this.reflector.get<boolean>(
+      BYPASS_TRANSFORM_KEY,
+      context.getHandler(),
+    );
+
+    if (bypass) {
+      return next.handle() as Observable<AppResponse<T> | StreamableFile>;
+    }
+
+    return next.handle().pipe(
+      map((data: T) => {
+        if (data instanceof StreamableFile) {
+          return data;
+        }
+
+        const response = context.switchToHttp().getResponse<Response>();
+        const status = response.statusCode;
+
+        return {
+          success: true,
+          statusCode: status,
+          message:
+            this.reflector.get<string>(
+              'response_message',
+              context.getHandler(),
+            ) || 'Success',
+          result: data,
+        };
+      }),
+    );
+  }
+}
+
+```
+
+## File: src/core/shared/shared.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { DrizzleModule } from '@database/drizzle.module';
+
+// Import các file nội bộ trong cùng thư mục core/shared
+import { DrizzleTransactionManager } from './infrastructure/persistence/drizzle-transaction.manager';
+import { ITransactionManager } from './application/ports/transaction-manager.port';
+import { EventBusModule } from './infrastructure/event-bus/event-bus.module';
+import { CsvParserAdapter } from './infrastructure/adapters/csv-parser.adapter';
+import { IFileParser } from './application/ports/file-parser.port';
+
+@Global()
+@Module({
+    imports: [
+        ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+        DrizzleModule,
+        EventBusModule,
+    ],
+    providers: [
+        {
+            provide: ITransactionManager,
+            useClass: DrizzleTransactionManager,
+        },
+        {
+            provide: IFileParser,
+            useClass: CsvParserAdapter,
+        },
+    ],
+    exports: [ConfigModule, ITransactionManager, EventBusModule, IFileParser],
+})
+export class SharedModule { }
+
+```
+
+## File: src/core/shared/types/common.types.ts
+```
+export type ApiResponse<T = any> = {
+  success: boolean;
+  data?: T;
+  message?: string;
+  error?: string;
+  timestamp: Date;
+};
+
+export type PaginatedResponse<T> = ApiResponse<{
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}>;
+
+export type JwtPayload = {
+  sub: number;
+  username: string;
+  roles: string[];
+  iat?: number;
+  exp?: number;
+};
+
+export type UserContext = {
+  id: number;
+  username: string;
+  roles: string[];
+  permissions: string[];
+};
+
+```
+
+## File: src/core/shared/utils/password.util.ts
+```
+import * as bcrypt from 'bcrypt';
+export class PasswordUtil {
+  static async hash(p: string) {
+    const salt = await bcrypt.genSalt(10);
+    return bcrypt.hash(p, salt);
+  }
+  static async compare(p: string, h: string) {
+    return bcrypt.compare(p, h);
+  }
+  static validateStrength(p: string) {
+    return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(p);
+  }
+}
+
+```
+
+## File: src/core/shared/application/ports/repository.port.ts
+```
+import { Transaction } from './transaction-manager.port';
+
+export interface IRepository<T, ID> {
+  findById(id: ID, tx?: Transaction): Promise<T | null>;
+  findAll(criteria?: Partial<T>, tx?: Transaction): Promise<T[]>;
+  // FIX: save trả về Promise<T> thay vì void để đồng bộ với User Repo
+  save(entity: T, tx?: Transaction): Promise<T>;
+  delete(id: ID, tx?: Transaction): Promise<void>;
+  exists(id: ID, tx?: Transaction): Promise<boolean>;
+}
+
+export interface IPaginatedRepository<T, ID> extends IRepository<T, ID> {
+  findPaginated(
+    page: number,
+    limit: number,
+    criteria?: Partial<T>,
+    sort?: { field: string; order: 'ASC' | 'DESC' },
+  ): Promise<{ data: T[]; total: number; page: number; totalPages: number }>;
+}
+
+```
+
+## File: src/core/shared/application/ports/event-bus.port.ts
+```
+import { IDomainEvent } from '../../domain/events/domain-event.interface';
+import { Type } from '@nestjs/common';
+
+export const IEventBus = Symbol('IEventBus');
+
+export interface IEventBus {
+  publish<T extends IDomainEvent>(event: T): Promise<void>;
+
+  // Hàm này dùng cho cơ chế Auto-Discovery đăng ký handler
+  subscribe<T extends IDomainEvent>(
+    eventCls: Type<T> | string,
+    handler: (event: T) => Promise<void>,
+  ): void;
+}
+
+```
+
+## File: src/core/shared/application/ports/logger.port.ts
+```
+export enum LogLevel {
+  DEBUG = 'debug',
+  INFO = 'info',
+  WARN = 'warn',
+  ERROR = 'error',
+}
+
+export interface LogContext {
+  requestId?: string;
+  userId?: number | string;
+  ipAddress?: string;
+  method?: string;
+  url?: string;
+  [key: string]: any;
+}
+
+// ✅ PRO WAY: Định nghĩa Token ở đây
+export const LOGGER_TOKEN = 'ILogger';
+
+export interface ILogger {
+  debug(message: string, context?: LogContext): void;
+  info(message: string, context?: LogContext): void;
+  warn(message: string, context?: LogContext): void;
+  error(message: string, error?: Error, context?: LogContext): void;
+
+  withContext(context: LogContext): ILogger;
+  createChildLogger(module: string): ILogger;
+}
+
+```
+
+## File: src/core/shared/application/ports/transaction-manager.port.ts
+```
+export type Transaction = unknown; // Opaque type
+
+// 1. Token (Runtime Identifier)
+export const ITransactionManager = Symbol('ITransactionManager');
+
+// 2. Interface (Type)
+export interface ITransactionManager {
+  runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
+}
+
+```
+
+## File: src/core/shared/application/ports/cache.port.ts
+```
+// Token để Inject
+export const ICacheService = Symbol('ICacheService');
+
+// Interface trừu tượng
+export interface ICacheService {
+  get<T>(key: string): Promise<T | undefined>;
+  set(key: string, value: unknown, ttl?: number): Promise<void>;
+  del(key: string): Promise<void>;
+  reset(): Promise<void>;
+}
+
+```
+
+## File: src/core/shared/application/ports/file-parser.port.ts
+```
+export const IFileParser = Symbol('IFileParser');
+
+export interface IFileParser {
+  // Thay đổi: Nhận vào raw Buffer và trả về Promise để không block Event Loop
+  parseCsvAsync<T>(buffer: Buffer): Promise<T[]>;
+}
+
+```
+
+## File: src/core/shared/application/ports/chatbot.port.ts
+```
+export const IChatbotService = Symbol('IChatbotService');
+
+export interface IChatbotService {
+    sendMessage(chatId: string, message: string): Promise<void>;
+    sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<void>;
+}
+
+```
+
+## File: src/core/shared/infrastructure/adapters/csv-parser.adapter.ts
+```
+import { Injectable } from '@nestjs/common';
+import { IFileParser } from '../../application/ports/file-parser.port';
+import { parse } from 'csv-parse'; // 👉 DÙNG MODULE BẤT ĐỒNG BỘ
+import { Readable } from 'stream'; // 👉 Core module của Node.js
+
+@Injectable()
+export class CsvParserAdapter implements IFileParser {
+  async parseCsvAsync<T>(buffer: Buffer): Promise<T[]> {
+    if (!buffer || buffer.length === 0) return [];
+
+    const records: T[] = [];
+
+    // 1. Biến Buffer (cục data trên RAM) thành một Stream (Luồng dữ liệu chảy từ từ)
+    const stream = Readable.from(buffer);
+
+    // 2. Cấu hình luồng Parse
+    const parser = stream.pipe(
+      parse({
+        columns: true, // Lấy dòng đầu làm Headers
+        skip_empty_lines: true,
+        trim: true,
+        bom: true, // ✅ QUAN TRỌNG: Thêm dòng này để loại bỏ ký tự ẩn \uFEFF của Windows
+        relax_quotes: true, // ✅ Cho phép parse thoáng hơn nếu file có dấu ngoặc kép thừa
+      })
+    );
+
+    try {
+      // 3. Sử dụng Async Iterator (Tính năng cực mạnh của Node.js)
+      // Vòng lặp này sẽ đọc từng chunk nhỏ. Nó sẽ NHƯỜNG Event Loop (non-blocking) 
+      // cho các API khác chạy xen kẽ, giúp Server không bao giờ bị treo!
+      for await (const record of parser) {
+        records.push(record as T);
+      }
+      return records;
+    } catch (error) {
+      throw new Error(`Failed to parse CSV file: ${error.message}`);
+    }
+  }
+}
+
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/event.explorer.ts
+```
+import { Injectable, OnModuleInit, Inject } from '@nestjs/common';
+import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { EVENT_HANDLER_METADATA } from './decorators/event-handler.decorator';
+
+@Injectable()
+export class EventExplorer implements OnModuleInit {
+  constructor(
+    private readonly discoveryService: DiscoveryService,
+    private readonly metadataScanner: MetadataScanner,
+    private readonly reflector: Reflector,
+    @Inject(IEventBus) private readonly eventBus: IEventBus,
+  ) {}
+
+  onModuleInit() {
+    this.explore();
+  }
+
+  private explore() {
+    const providers = this.discoveryService.getProviders();
+
+    providers
+      .filter((wrapper) => wrapper.instance && !wrapper.isAlias)
+      .forEach((wrapper) => {
+        const { instance } = wrapper;
+        const prototype = Object.getPrototypeOf(instance);
+        if (!prototype) return;
+
+        this.metadataScanner.scanFromPrototype(
+          instance,
+          prototype,
+          (methodName) => {
+            const method = instance[methodName];
+            const eventCls = this.reflector.get(EVENT_HANDLER_METADATA, method);
+
+            if (eventCls) {
+              this.eventBus.subscribe(eventCls, method.bind(instance));
+            }
+          },
+        );
+      });
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/adapters/in-memory-event-bus.adapter.ts
+```
+import { Injectable, Logger } from '@nestjs/common';
+import { Type } from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+@Injectable()
+export class InMemoryEventBusAdapter implements IEventBus {
+  private readonly logger = new Logger(InMemoryEventBusAdapter.name);
+  private handlers = new Map<
+    string,
+    Array<(event: IDomainEvent) => Promise<void>>
+  >();
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    // 👉 Lấy tên Event một cách an toàn từ instance: 
+    // Ưu tiên biến static EVENT_NAME, nếu không có thì lấy tên của Class (VD: "UserCreatedEvent")
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    const handlers = this.handlers.get(eventName) || [];
+
+    Promise.all(handlers.map((handler) => handler(event))).catch((err) =>
+      this.logger.error(`Error handling event ${eventName}`, err),
+    );
+  }
+
+  subscribe<T extends IDomainEvent>(
+    eventCls: Type<T> | string,
+    handler: (event: T) => Promise<void>,
+  ): void {
+    // 👉 ĐỌC TÊN EVENT TRỰC TIẾP TỪ CLASS (KHÔNG CẦN KHỞI TẠO OBJECT)
+    const eventName = typeof eventCls === 'string'
+      ? eventCls
+      : (eventCls as any).EVENT_NAME || eventCls.name;
+
+    if (!this.handlers.has(eventName)) {
+      this.handlers.set(eventName, []);
+    }
+    this.handlers.get(eventName)!.push(handler as any);
+    this.logger.log(`Subscribed to event: ${eventName}`);
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/adapters/kafka-event-bus.adapter.ts
+```
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+@Injectable()
+export class KafkaEventBusAdapter implements IEventBus, OnModuleInit {
+  private readonly logger = new Logger(KafkaEventBusAdapter.name);
+
+  async onModuleInit() {
+    this.logger.log('Connecting to Kafka...');
+  }
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
+  }
+
+  subscribe<T extends IDomainEvent>(
+    eventCls: any,
+    handler: (event: T) => Promise<void>,
+  ): void {
+    this.logger.log(`[Kafka] Subscribing to: ${eventCls}`);
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/adapters/rabbitmq-event-bus.adapter.ts
+```
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+@Injectable()
+export class RabbitMQEventBusAdapter
+  implements IEventBus, OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RabbitMQEventBusAdapter.name);
+
+  async onModuleInit() {
+    this.logger.log('Connecting to RabbitMQ...');
+  }
+
+  async onModuleDestroy() {
+    this.logger.log('Closing RabbitMQ connection...');
+  }
+
+  async publish<T extends IDomainEvent>(event: T): Promise<void> {
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
+
+  }
+
+  subscribe<T extends IDomainEvent>(
+    eventCls: any,
+    handler: (event: T) => Promise<void>,
+  ): void {
+    this.logger.log(`[RabbitMQ] Subscribing to: ${eventCls}`);
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/event-bus.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { DiscoveryModule } from '@nestjs/core';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { InMemoryEventBusAdapter } from './adapters/in-memory-event-bus.adapter';
+import { RabbitMQEventBusAdapter } from './adapters/rabbitmq-event-bus.adapter';
+import { KafkaEventBusAdapter } from './adapters/kafka-event-bus.adapter';
+import { EventExplorer } from './event.explorer';
+import eventBusConfig from '@config/event-bus.config';
+
+@Global()
+@Module({
+  imports: [ConfigModule.forFeature(eventBusConfig), DiscoveryModule],
+  providers: [
+    EventExplorer,
+    {
+      provide: IEventBus,
+      useFactory: (config: ConfigService) => {
+        const type = config.get('eventBus.type');
+        console.log(`🔌 EventBus initialized with type: ${type}`);
+
+        switch (type) {
+          case 'rabbitmq':
+            return new RabbitMQEventBusAdapter();
+          case 'kafka':
+            return new KafkaEventBusAdapter();
+          case 'memory':
+          default:
+            return new InMemoryEventBusAdapter();
+        }
+      },
+      inject: [ConfigService],
+    },
+  ],
+  exports: [IEventBus],
+})
+export class EventBusModule {}
+
+```
+
+## File: src/core/shared/infrastructure/event-bus/decorators/event-handler.decorator.ts
+```
+import { SetMetadata } from '@nestjs/common';
+import { Type } from '@nestjs/common';
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+export const EVENT_HANDLER_METADATA = 'EVENT_HANDLER_METADATA';
+
+export const EventHandler = (event: Type<IDomainEvent> | string) =>
+  SetMetadata(EVENT_HANDLER_METADATA, event);
+
+```
+
+## File: src/core/shared/infrastructure/cache/redis-cache.module.ts
+```
+import { Module, Global } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { ICacheService } from '../../application/ports/cache.port';
+import { RedisCacheAdapter } from './redis-cache.adapter';
+import redisConfig from '@config/redis.config';
+import { redisStore } from 'cache-manager-redis-yet';
+
+@Global()
+@Module({
+  imports: [ConfigModule.forFeature(redisConfig)],
+  providers: [
+    {
+      provide: CACHE_MANAGER,
+      useFactory: async (configService: ConfigService) => {
+        const uri = configService.get<string>('redis.uri');
+        const host = configService.get<string>('redis.host');
+        const port = configService.get<number>('redis.port');
+        const ttl = (configService.get<number>('redis.ttl') || 300) * 1000;
+        const password = configService.get<string>('redis.password');
+        // --- BẮT ĐẦU LOGIC CHUYỂN ĐỔI ---
+        
+        // Cấu hình chung (Reconnect strategy luôn cần thiết)
+        const baseSocketConfig = {
+          reconnectStrategy: (retries: number) => Math.min(retries * 50, 3000),
+        };
+
+        let storeConfig: any = {
+          ttl,
+        };
+
+        if (uri) {
+          // ☁️ CASE 1: Dùng URI (Redis Cloud / Production)
+          console.log(`🔌 [Redis] Connecting via URI...`);
+          storeConfig = {
+            ...storeConfig,
+            url: uri, // redis-yet (node-redis) sẽ tự parse user/pass/tls từ chuỗi này
+            socket: {
+              ...baseSocketConfig,
+              // Nếu URI là 'rediss://' (có 's'), node-redis tự bật TLS
+              // Nếu cần custom TLS (như bỏ check cert), thêm tls: { rejectUnauthorized: false } vào đây
+            },
+          };
+        } else {
+          // 🐳 CASE 2: Dùng Host/Port (Docker Local)
+          console.log(`🔌 [Redis] Connecting via Host: ${host}, Port: ${port}`);
+          storeConfig = {
+            ...storeConfig,
+            password: password, // Thêm password nếu có
+            socket: {
+              host,
+              port,
+              ...baseSocketConfig,
+            },
+          };
+        }
+
+        // Tạo Store
+        const store = await redisStore(storeConfig);
+        // --- KẾT THÚC LOGIC CHUYỂN ĐỔI ---
+
+
+        // 👇 TRUY CẬP VÀO CLIENT GỐC ĐỂ LẮNG NGHE SỰ KIỆN 👇
+        const client = (store as any).client;
+        if (client) {
+          // 1. Khi bị lỗi kết nối (để tránh crash app)
+          client.on('error', (err: any) => {
+            console.error(`❌ [Redis] Connection Error: ${err.message}`);
+          });
+
+          // 2. Khi đang cố gắng kết nối lại
+          client.on('reconnecting', () => {
+            console.warn('⏳ [Redis] Lost connection! Reconnecting...');
+          });
+
+          // 3. ✅ KHI ĐÃ KẾT NỐI LẠI THÀNH CÔNG VÀ SẴN SÀNG
+          client.on('ready', () => {
+            console.log('🚀 [Redis] Connection ESTABLISHED & READY!');
+          });
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const cm = require('cache-manager');
+        const createCache =
+          cm.createCache ||
+          (cm.default && cm.default.createCache) ||
+          cm.caching;
+        if (!createCache) throw new Error('Cannot find createCache function');
+
+        const cache = createCache(store);
+        if (!cache.store) cache.store = store;
+
+        return cache;
+      },
+      inject: [ConfigService],
+    },
+    {
+      provide: ICacheService,
+      useClass: RedisCacheAdapter,
+    },
+  ],
+  exports: [ICacheService, CACHE_MANAGER],
+})
+export class RedisCacheModule {}
+
+```
+
+## File: src/core/shared/infrastructure/cache/redis-cache.adapter.ts
+```
+import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+import { ICacheService } from '../../application/ports/cache.port';
+import { ILogger, LOGGER_TOKEN } from '../../application/ports/logger.port';
+
+@Injectable()
+export class RedisCacheAdapter implements ICacheService, OnModuleInit {
+  constructor(
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  onModuleInit() {
+    const store: any = (this.cacheManager as any).store;
+
+    // --- DEBUG BLOCK ---
+    const storeName = store?.name || store?.constructor?.name || 'Unknown';
+    this.logger.info(`🔍 DEBUG: Cache Store Name = [${storeName}]`);
+
+    // Kiểm tra xem có phải Redis không
+    const isRedis = storeName === 'RedisStore' || (store && store.client);
+
+    if (isRedis) {
+      this.logger.info('🚀 CACHE STATUS: REDIS IS ACTIVE (Confirmed)');
+    } else {
+      this.logger.warn(
+        '⚠️ CACHE STATUS: NOT REDIS! INSPECTING STORE OBJECT...',
+      );
+      console.log('Store Keys:', Object.keys(store || {}));
+    }
+    // -------------------
+  }
+
+  async get<T>(key: string): Promise<T | undefined> {
+    try {
+      const start = Date.now();
+      const value = await this.cacheManager.get<T>(key);
+
+      // Chỉ log debug
+      this.logger.debug(`Redis GET`, {
+        key,
+        hit: !!value,
+        duration: `${Date.now() - start}ms`,
+      });
+
+      return value;
+    } catch (error) {
+      this.logger.error(`Redis GET Error`, error as Error);
+      return undefined;
+    }
+  }
+
+  async set(key: string, value: unknown, ttl?: number): Promise<void> {
+    try {
+      const finalTtl = ttl ? ttl * 1000 : undefined;
+      await this.cacheManager.set(key, value, finalTtl as any);
+      this.logger.debug(`Redis SET`, { key });
+    } catch (error) {
+      this.logger.error(`Redis SET Error`, error as Error);
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    try {
+      await this.cacheManager.del(key);
+      this.logger.debug(`Redis DEL`, { key });
+    } catch (error) {
+      this.logger.error(`Redis DEL Error`, error as Error);
+    }
+  }
+
+  async reset(): Promise<void> {
+    try {
+      const client = this.cacheManager as any;
+      if (client.store && typeof client.store.clear === 'function') {
+        await client.store.clear();
+      } else if (typeof client.reset === 'function') {
+        await client.reset();
+      }
+      this.logger.warn(`Redis RESET ALL`);
+    } catch (error) {
+      this.logger.error(`Redis RESET Error`, error as Error);
+    }
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/persistence/drizzle-base.repository.ts
+```
+import { Inject, Injectable } from '@nestjs/common';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+
+@Injectable()
+export class DrizzleBaseRepository {
+  constructor(
+    @Inject(DRIZZLE) protected readonly db: NodePgDatabase<typeof schema>,
+    // @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  protected getDb(tx?: Transaction): NodePgDatabase<typeof schema> {
+    return tx ? (tx as NodePgDatabase<typeof schema>) : this.db;
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/persistence/drizzle-transaction.manager.ts
+```
+import { Inject, Injectable } from '@nestjs/common';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
+import {
+  ITransactionManager,
+  Transaction,
+} from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleTransactionManager implements ITransactionManager {
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
+
+  async runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      return work(tx as unknown as Transaction);
+    });
+  }
+}
+
+```
+
+## File: src/core/shared/infrastructure/context/request-context.service.ts
+```
+import { Injectable } from '@nestjs/common';
+import { AsyncLocalStorage } from 'async_hooks';
+
+export class RequestContext {
+  constructor(
+    public readonly requestId: string,
+    public readonly url: string,
+  ) {}
+}
+
+@Injectable()
+export class RequestContextService {
+  // Static để có thể gọi ở bất cứ đâu (kể cả nơi không inject được)
+  private static readonly als = new AsyncLocalStorage<RequestContext>();
+
+  static run(context: RequestContext, callback: () => void) {
+    this.als.run(context, callback);
+  }
+
+  static getRequestId(): string {
+    const store = this.als.getStore();
+    return store?.requestId || 'sys-' + process.pid; // Fallback nếu không có request (VD: Cronjob)
+  }
+
+  static getContext(): RequestContext | undefined {
+    return this.als.getStore();
+  }
+}
+
+```
+
+## File: src/core/shared/domain/exceptions/rbac.exceptions.ts
+```
+import { HttpException, HttpStatus } from '@nestjs/common';
+
+export class PermissionDeniedException extends HttpException {
+    constructor(permission?: string) {
+        const message = permission
+            ? `Permission denied: ${permission}`
+            : 'Insufficient permissions';
+        super(message, HttpStatus.FORBIDDEN);
+    }
+}
+
+export class RoleRequiredException extends HttpException {
+    constructor(role: string) {
+        super(`Role required: ${role}`, HttpStatus.FORBIDDEN);
+    }
+}
+
+export class UserNotFoundException extends HttpException {
+    constructor(userId?: number) {
+        const message = userId ? `User not found: ${userId}` : 'User not found';
+        super(message, HttpStatus.NOT_FOUND);
+    }
+}
+
+export class InvalidCredentialsException extends HttpException {
+    constructor() {
+        super('Invalid credentials', HttpStatus.UNAUTHORIZED);
+    }
+}
+
+```
+
+## File: src/core/shared/domain/events/domain-event.interface.ts
+```
+export interface IDomainEvent {
+  readonly aggregateId: string;
+  readonly occurredAt: Date;
+  readonly payload: Record<string, any>;
+}
+
+```
+
+## File: src/core/shared/domain/value-objects/money.vo.ts
+```
+export class InvalidMoneyException extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class Money {
+  constructor(
+    private readonly amount: number,
+    private readonly currency: string = 'VND',
+  ) {
+    if (amount < 0) {
+      throw new InvalidMoneyException('Amount cannot be negative');
+    }
+    if (!Number.isInteger(amount)) {
+      throw new InvalidMoneyException('Amount must be an integer');
+    }
+  }
+
+  add(other: Money): Money {
+    this.validateSameCurrency(other);
+    return new Money(this.amount + other.amount, this.currency);
+  }
+
+  subtract(other: Money): Money {
+    this.validateSameCurrency(other);
+    if (other.amount > this.amount) {
+      throw new InvalidMoneyException('Insufficient funds');
+    }
+    return new Money(this.amount - other.amount, this.currency);
+  }
+
+  multiply(factor: number): Money {
+    return new Money(Math.round(this.amount * factor), this.currency);
+  }
+
+  getAmount(): number {
+    return this.amount;
+  }
+
+  getCurrency(): string {
+    return this.currency;
+  }
+
+  equals(other: Money): boolean {
+    return this.amount === other.amount && this.currency === other.currency;
+  }
+
+  private validateSameCurrency(other: Money): void {
+    if (this.currency !== other.currency) {
+      throw new InvalidMoneyException('Currencies must match');
+    }
+  }
+}
+
+```
+
+## File: src/api/middleware/request-logging.middleware.ts
+```
+import { Injectable, NestMiddleware, Inject } from '@nestjs/common';
+import { Request, Response, NextFunction } from 'express';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import {
+  RequestContextService,
+  RequestContext,
+} from '@core/shared/infrastructure/context/request-context.service';
+
+@Injectable()
+export class RequestLoggingMiddleware implements NestMiddleware {
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) {}
+
+  use(req: Request, res: Response, next: NextFunction) {
+    const startTime = Date.now();
+
+    let rawRequestId = req.headers['x-request-id'];
+    if (Array.isArray(rawRequestId)) rawRequestId = rawRequestId[0];
+    const requestId = rawRequestId || `req-${Date.now()}`;
+
+    req.headers['x-request-id'] = requestId;
+    res.setHeader('x-request-id', requestId);
+
+    // QUAN TRỌNG: Bọc next() trong RequestContextService.run
+    const context = new RequestContext(requestId, req.originalUrl);
+
+    RequestContextService.run(context, () => {
+      // Log lúc bắt đầu (bên trong context)
+      this.logger.info(`Incoming Request: ${req.method} ${req.originalUrl}`, {
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
+      res.on('finish', () => {
+        const duration = Date.now() - startTime;
+        const statusCode = res.statusCode;
+        const message = `Request Completed: ${statusCode} (${duration}ms)`;
+        const logContext = { statusCode, duration };
+
+        if (statusCode >= 500) {
+          this.logger.error(message, undefined, logContext);
+        } else if (statusCode >= 400) {
+          this.logger.warn(message, logContext);
+        } else {
+          this.logger.info(message, logContext);
+        }
+      });
+
+      next();
+    });
+  }
+}
+
+```
+
+## File: src/bootstrap/app.module.ts
+```
+import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import * as path from 'path';
+
+import databaseConfig from '@config/database.config';
+import appConfig from '@config/app.config';
+import loggingConfig from '@config/logging.config';
+import redisConfig from '@config/redis.config';
+import eventBusConfig from '@config/event-bus.config';
+import dentalConfig from '@config/dental.config';
+
+import { CoreModule } from '@core/core.module';
+import { SharedModule } from '@core/shared/shared.module';
+import { DrizzleModule } from '@database/drizzle.module';
+import { LoggingModule } from '@modules/logging/logging.module';
+import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
+import { RequestLoggingMiddleware } from '@api/middleware/request-logging.middleware';
+
+import { UserModule } from '@modules/user/user.module';
+import { AuthModule } from '@modules/auth/auth.module';
+import { RbacModule } from '@modules/rbac/rbac.module';
+import { TestModule } from '@modules/test/test.module';
+import { NotificationModule } from '@modules/notification/notification.module';
+import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
+import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
+import { EmployeeModule } from '@modules/employee/employee.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: `.env.${process.env.NODE_ENV || 'development'}`,
+      load: [
+        databaseConfig,
+        appConfig,
+        loggingConfig,
+        redisConfig,
+        eventBusConfig,
+        dentalConfig,
+      ],
+    }),
+
+    ServeStaticModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => {
+        // path.resolve(config.get('dental.outputDir') || 'uploads/dental/converted',)
+        const outputDir = config.get<string>('dental.outputDir');
+        return [
+          {
+            rootPath: outputDir,
+            serveRoot: '/models',
+            // 👇 SỬA DÒNG NÀY:
+            // CŨ (Lỗi): exclude: ['/api/(.*)'],
+            // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
+            exclude: ['/api/{*path}'],
+            serveStaticOptions: {
+              setHeaders: (res) => {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+              },
+            },
+          },
+        ]
+      },
+      inject: [ConfigService],
+    }),
+
+    CoreModule,
+    SharedModule,
+    DrizzleModule,
+    LoggingModule.forRootAsync(),
+    RedisCacheModule,
+    ChatbotCoreModule,
+
+    UserModule,
+    AuthModule,
+    RbacModule,
+    NotificationModule,
+
+    TestModule,
+
+    //
+    OrgStructureModule,
+    EmployeeModule,
+  ],
+})
+export class AppModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(RequestLoggingMiddleware)
+      .forRoutes({ path: '{*path}', method: RequestMethod.ALL });
+  }
+}
+
+```
+
+## File: src/bootstrap/main.ts
+```
+import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import * as fs from 'fs';
+
+async function bootstrap() {
+  const uploadDir = 'uploads/dental/converted';
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const config = app.get(ConfigService);
+  const logger = app.get(LOGGER_TOKEN);
+  app.useLogger(logger);
+
+  const prefix: string = config.get('app.apiPrefix', 'api');
+  app.setGlobalPrefix(prefix);
+
+  app.enableCors({
+    origin: true,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+  });
+
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('ERP/HRM System API')
+    .setDescription('The ERP/HRM System API description')
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('docs', app, document, {
+    swaggerOptions: { persistAuthorization: true },
+  });
+
+  const port: number = config.get('app.port', 8080);
+  await app.listen(port);
+
+  logger.info(`🚀 API is running on: http://localhost:${port}/${prefix}`, {
+    context: 'Bootstrap',
+  });
+  logger.info(`📂 Static Files on:   http://localhost:${port}/models`, {
+    context: 'Bootstrap',
+  });
+}
+
+bootstrap().catch((err) => console.error('Err::', err['message']));
+
+```
+
+## File: src/modules/employee/employee.module.ts
+```
+import { Module } from '@nestjs/common';
+import { OrgStructureModule } from '../org-structure/org-structure.module'; // Import module hàng xóm
+
+import { EmployeeController } from './infrastructure/controllers/employee.controller';
+import { EmployeeService } from './application/services/employee.service';
+import { IEmployeeRepository } from './domain/repositories/employee.repository';
+import { DrizzleEmployeeRepository } from './infrastructure/persistence/drizzle-employee.repository';
+import { UserModule } from '@modules/user/user.module';
+
+@Module({
+    imports: [
+        UserModule,
+        OrgStructureModule, // Cần import để EmployeeService dùng được IOrgStructureRepository
+    ],
+    controllers: [
+        EmployeeController,
+    ],
+    providers: [
+        EmployeeService,
+        {
+            provide: IEmployeeRepository,
+            useClass: DrizzleEmployeeRepository, // Binding Interface với Implementation
+        },
+    ],
+    exports: [EmployeeService, IEmployeeRepository], // Export nếu sau này module Payroll cần mượn
+})
+export class EmployeeModule { }
+
+```
+
+## File: src/modules/employee/application/services/employee.service.ts
+```
+import { Injectable, Inject, BadRequestException, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { IOrgStructureRepository } from '@modules/org-structure/domain/repositories/org-structure.repository';
+import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
+import { CreateEmployeeDto } from '../dtos/create-employee.dto';
+import { UserService } from '@modules/user/application/services/user.service';
+import { ProvisionAccountDto } from '../dtos/provision-account.dto';
+
+@Injectable()
+export class EmployeeService {
+    constructor(
+        @Inject(IEmployeeRepository) private employeeRepo: IEmployeeRepository,
+        // Mượn hàng xóm OrgStructure
+        @Inject(IOrgStructureRepository) private orgRepo: IOrgStructureRepository,
+
+        private userService: UserService,
+    ) { }
+
+    // =========================================================================
+    // HÀM 1: DÀNH CHO NHÂN SỰ (HR) - CHỈ TẠO HỒ SƠ, CHƯA CÓ TÀI KHOẢN
+    // =========================================================================
+    async onboardNewEmployee(dto: CreateEmployeeDto) {
+        // 1. Check vị trí trong sơ đồ tổ chức
+        const position = await this.orgRepo.findPositionById(dto.positionId);
+
+        if (!position) {
+            throw new BadRequestException('Vị trí bổ nhiệm không tồn tại trong sơ đồ tổ chức.');
+        }
+        if (!position.isActive) {
+            throw new BadRequestException('Vị trí này hiện đang bị đóng băng tuyển dụng.');
+        }
+
+        // 2. Lưu dữ liệu hồ sơ nhân viên (Lúc này userId thường là null)
+        const newEmployee = await this.employeeRepo.save({
+            userId: dto.userId || null,
+            employeeCode: dto.employeeCode,
+            fullName: dto.fullName,
+            locationId: dto.locationId,
+            positionId: position.id,
+        });
+
+        // Chỉ trả về thông tin nhân viên vừa tạo
+        return newEmployee;
+    }
+
+
+    // =========================================================================
+    // HÀM 2: DÀNH CHO IT - CẤP TÀI KHOẢN CHO NHÂN VIÊN ĐÃ ĐƯỢC HR TẠO HỒ SƠ
+    // =========================================================================
+    async provisionUserAccount(employeeId: number, dto: ProvisionAccountDto) {
+
+        // 1. Tìm nhân viên xem có tồn tại không
+        const employee = await this.employeeRepo.findById(employeeId);
+        if (!employee) throw new NotFoundException('Không tìm thấy hồ sơ nhân viên');
+
+        // 2. Nếu đã có tài khoản rồi thì báo lỗi
+        if (employee.userId) throw new BadRequestException('Nhân viên này đã có tài khoản ERP');
+
+        // 3. Chuẩn hóa Username (Lấy từ input hoặc dùng mã nhân viên)
+        const rawUsername = dto.username || employee.employeeCode;
+        const finalUsername = rawUsername.trim().toLowerCase();
+
+        // 4. Sinh password ngẫu nhiên an toàn
+        const defaultPassword = 'Hrm@' + Math.floor(1000 + Math.random() * 9000);
+
+        try {
+            // 5. Gọi module User để tạo tài khoản đăng nhập (Identity)
+            const newUser = await this.userService.createUser({
+                id: undefined as any,
+                username: finalUsername,
+                password: defaultPassword,
+                email: dto.email,
+                fullName: employee.fullName,
+            });
+
+            // 6. Cập nhật lại hồ sơ nhân viên: Gắn ID của tài khoản vừa tạo vào hồ sơ
+            await this.employeeRepo.save({
+                id: employeeId,       // CÓ ID -> Repository sẽ hiểu đây là lệnh UPDATE
+                // userId: newUser.id,   // Gắn userId vàoo
+                userId: (newUser as { id: number }).id,
+            });
+
+            // 7. Trả về kết quả cho IT hoặc tự động gửi email cho nhân viên
+            return {
+                success: true,
+                message: 'Đã cấp tài khoản thành công',
+                credentials: {
+                    username: finalUsername,
+                    password: defaultPassword
+                }
+            };
+        } catch (error) {
+            if (error.message === 'User already exists') {
+                throw new BadRequestException(`Tên đăng nhập '${finalUsername}' đã được sử dụng. Vui lòng chọn tên khác.`);
+            }
+            throw new InternalServerErrorException('Lỗi hệ thống khi cấp tài khoản');
+        }
+    }
+
+
+    async getAllEmployees() {
+        return this.employeeRepo.findAll();
+    }
+}
+
+```
+
+## File: src/modules/employee/application/dtos/provision-account.dto.ts
+```
+import { IsString, IsEmail, IsOptional, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class ProvisionAccountDto {
+    @ApiProperty({ description: 'Email của nhân viên để nhận thông báo', example: 'vana.nguyen@company.com' })
+    @IsEmail()
+    email: string;
+
+    @ApiPropertyOptional({
+        description: 'Tên đăng nhập tự chọn (Tối thiểu 4 ký tự). Nếu để trống hệ thống sẽ dùng Mã nhân viên.',
+        example: 'vana.nguyen'
+    })
+    @IsOptional()
+    @IsString()
+    @MinLength(4, { message: 'Username phải có ít nhất 4 ký tự' })
+    username?: string;
+}
+
+```
+
+## File: src/modules/employee/application/dtos/create-employee.dto.ts
+```
+import { IsString, IsNotEmpty, IsNumber, IsOptional } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class CreateEmployeeDto {
+    @ApiProperty({ description: 'ID của tài khoản User (Định danh)', example: 1 })
+    @IsNumber()
+    @IsOptional()
+    @IsNotEmpty()
+    userId?: number;
+
+    @ApiProperty({ description: 'Mã nhân viên', example: 'EMP-001' })
+    @IsString()
+    @IsNotEmpty()
+    employeeCode: string;
+
+    @ApiProperty({ description: 'Họ và tên', example: 'Nguyễn Văn A' })
+    @IsString()
+    @IsNotEmpty()
+    fullName: string;
+
+    @ApiProperty({ description: 'Bổ nhiệm vào Vị trí định biên (ID bảng positions)', example: 5 })
+    @IsNumber()
+    @IsNotEmpty()
+    positionId: number;
+
+    @ApiPropertyOptional({ description: 'Nơi làm việc (ID bảng locations)', example: 1 })
+    @IsOptional()
+    @IsNumber()
+    locationId?: number;
+}
+
+```
+
+## File: src/modules/employee/infrastructure/controllers/employee.controller.ts
+```
+import { Controller, Post, Get, Body, UseGuards, Param, ParseIntPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+// import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard'; // (Uncomment nếu có auth)
+import { EmployeeService } from '../../application/services/employee.service';
+import { CreateEmployeeDto } from '../../application/dtos/create-employee.dto';
+import { ProvisionAccountDto } from '@modules/employee/application/dtos/provision-account.dto';
+
+@ApiTags('Employee Management (Hồ sơ Nhân sự)')
+@ApiBearerAuth()
+@Controller('employees')
+// @UseGuards(JwtAuthGuard)
+export class EmployeeController {
+    constructor(private readonly employeeService: EmployeeService) { }
+
+    @Post('onboard')
+    @ApiOperation({ summary: 'Tiếp nhận nhân viên mới (Onboarding)' })
+    @ApiResponse({ status: 201, description: 'Tiếp nhận thành công' })
+    @ApiResponse({ status: 400, description: 'Vị trí bổ nhiệm không hợp lệ' })
+    async onboardEmployee(@Body() dto: CreateEmployeeDto) {
+        return this.employeeService.onboardNewEmployee(dto);
+    }
+
+    @Post(':id/provision-account')
+    @ApiOperation({ summary: 'Cấp tài khoản ERP cho nhân viên đã onboard' })
+    @ApiResponse({ status: 201, description: 'Cấp tài khoản thành công. Trả về thông tin đăng nhập.' })
+    @ApiResponse({ status: 400, description: 'Trùng username hoặc nhân viên đã có tài khoản.' })
+    async provisionAccount(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ProvisionAccountDto // Sử dụng DTO ở đây
+    ) {
+        return this.employeeService.provisionUserAccount(id, dto);
+    }
+
+    @Get()
+    @ApiOperation({ summary: 'Lấy danh sách toàn bộ nhân viên' })
+    async getAllEmployees() {
+        return this.employeeService.getAllEmployees();
+    }
+}
+
+```
+
+## File: src/modules/employee/infrastructure/persistence/drizzle-employee.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
+import { employees } from '@database/schema/hrm/employees.schema'; // Import schema mới
+
+@Injectable()
+export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements IEmployeeRepository {
+
+    async save(employeeData: any): Promise<any> {
+        const db = this.getDb();
+
+        // NẾU CÓ TRUYỀN ID -> THỰC HIỆN LỆNH UPDATE
+        if (employeeData.id) {
+            const [result] = await db.update(employees)
+                .set({
+                    ...employeeData,
+                    updatedAt: new Date(), // Tự động cập nhật thời gian
+                })
+                .where(eq(employees.id, employeeData.id))
+                .returning();
+            return result;
+        }
+
+        // NẾU KHÔNG CÓ ID -> THỰC HIỆN LỆNH INSERT (THÊM MỚI)
+        const [result] = await db.insert(employees)
+            .values(employeeData)
+            .returning();
+
+        return result;
+    }
+
+    async findById(id: number): Promise<any> {
+        const db = this.getDb();
+        const result = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+        return result[0] || null;
+    }
+
+    async findAll(): Promise<any[]> {
+        const db = this.getDb();
+        // Dùng Relational Query để lấy luôn thông tin User và Position (Nếu cần)
+        return await db.query.employees.findMany({
+            with: {
+                user: { columns: { username: true, email: true } },
+                position: true,
+            }
+        });
+    }
+}
+
+```
+
+## File: src/modules/employee/domain/repositories/employee.repository.ts
+```
+export const IEmployeeRepository = Symbol('IEmployeeRepository');
+
+export interface IEmployeeRepository {
+    save(employeeData: any): Promise<any>;
+    findById(id: number): Promise<any>;
+    findAll(): Promise<any[]>;
+}
+```
+
+## File: src/modules/logging/logging.module.ts
+```
+import { Module, DynamicModule, Global } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { WinstonFactory } from './infrastructure/winston/winston.factory';
+import { WinstonLoggerAdapter } from './infrastructure/winston/winston-logger.adapter';
+// Import Token
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+
+@Global()
+@Module({})
+export class LoggingModule {
+  static forRootAsync(): DynamicModule {
+    return {
+      module: LoggingModule,
+      imports: [ConfigModule],
+      providers: [
+        WinstonFactory,
+        {
+          provide: 'WINSTON_LOGGER', // Cái này nội bộ module, để string cũng tạm được
+          useFactory: (factory: WinstonFactory) => factory.createLogger(),
+          inject: [WinstonFactory],
+        },
+        {
+          provide: LOGGER_TOKEN, // ✅ Dùng Token Constant
+          useClass: WinstonLoggerAdapter,
+        },
+      ],
+      exports: [LOGGER_TOKEN], // ✅ Export bằng Token
+    };
+  }
+}
+
+```
+
+## File: src/modules/logging/infrastructure/winston/winston-logger.adapter.ts
+```
+import { Injectable, Inject, LoggerService } from '@nestjs/common';
+import * as winston from 'winston';
+import {
+  ILogger,
+  LogContext,
+} from '@core/shared/application/ports/logger.port';
+import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
+
+@Injectable()
+export class WinstonLoggerAdapter implements ILogger, LoggerService {
+  private context: LogContext = {};
+
+  constructor(
+    @Inject('WINSTON_LOGGER') private readonly winstonLogger: winston.Logger,
+  ) {}
+
+  private getTraceInfo() {
+    return {
+      requestId: RequestContextService.getRequestId(),
+    };
+  }
+
+  // --- Helper để chuẩn hóa tham số từ NestJS Core ---
+  private normalizeParams(message: any, ...optionalParams: any[]) {
+    let contextObj: LogContext = {};
+
+    // Xử lý trường hợp NestJS gửi context là string ở tham số cuối
+    if (optionalParams.length > 0) {
+      const lastParam = optionalParams[optionalParams.length - 1];
+      if (typeof lastParam === 'string') {
+        contextObj.context = lastParam; // Gán vào field context
+        // Bỏ string context ra khỏi params để không bị trùng
+        // optionalParams.pop();
+      } else if (typeof lastParam === 'object') {
+        contextObj = { ...lastParam };
+      }
+    }
+
+    // Nếu message là object (NestJS hay log object), stringify nó hoặc gán vào meta
+    const msgStr =
+      typeof message === 'string' ? message : JSON.stringify(message);
+
+    return { msgStr, contextObj };
+  }
+
+  // --- Implementation cho LoggerService (NestJS Core gọi cái này) ---
+
+  log(message: any, ...optionalParams: any[]) {
+    // Map 'log' của Nest sang 'info' của Winston
+    this.info(message, ...optionalParams);
+  }
+
+  // --- Implementation cho ILogger (App của ta gọi cái này) ---
+
+  debug(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('debug', msgStr, contextObj);
+  }
+
+  info(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('info', msgStr, contextObj);
+  }
+
+  warn(message: any, ...optionalParams: any[]): void {
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+    this.callWinston('warn', msgStr, contextObj);
+  }
+
+  error(message: any, ...optionalParams: any[]): void {
+    // NestJS thường gửi stack trace ở tham số thứ 2 hoặc 3
+    const { msgStr, contextObj } = this.normalizeParams(
+      message,
+      ...optionalParams,
+    );
+
+    // Tìm Error object nếu có trong params
+    const errorObj = optionalParams.find((p) => p instanceof Error);
+    const meta = { ...contextObj };
+
+    if (errorObj) {
+      meta.stack = errorObj.stack;
+      meta.error = errorObj.message;
+    }
+
+    this.callWinston('error', msgStr, meta);
+  }
+
+  // --- Context Methods ---
+
+  withContext(context: LogContext): ILogger {
+    const child = new WinstonLoggerAdapter(this.winstonLogger);
+    child.context = { ...this.context, ...context };
+    return child;
+  }
+
+  createChildLogger(module: string): ILogger {
+    return this.withContext({ context: module }); // Map 'label' hoặc 'context' tùy config winston
+  }
+
+  private callWinston(
+    level: string,
+    message: string,
+    context?: LogContext,
+  ): void {
+    this.winstonLogger.log(level, message, {
+      ...this.context,
+      ...this.getTraceInfo(),
+      ...context,
+    });
+  }
+}
+
+```
+
+## File: src/modules/logging/infrastructure/winston/winston.factory.ts
+```
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as winston from 'winston';
+
+// FIX: Dùng require để tránh lỗi "is not a constructor" do xung đột ES Module/CommonJS
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const DailyRotateFile = require('winston-daily-rotate-file');
+
+@Injectable()
+export class WinstonFactory {
+  constructor(private configService: ConfigService) {}
+
+  createLogger(): winston.Logger {
+    const logLevel = this.configService.get('logging.level') || 'info';
+    const appName = this.configService.get('app.name') || 'SERVER';
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // 1. MASKER
+    const sensitiveKeys = [
+      'password',
+      'token',
+      'authorization',
+      'secret',
+      'creditCard',
+      'cvv',
+    ];
+    const masker = winston.format((info) => {
+      const maskDeep = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        Object.keys(obj).forEach((key) => {
+          if (sensitiveKeys.some((k) => key.toLowerCase().includes(k))) {
+            obj[key] = '***MASKED***';
+          } else if (typeof obj[key] === 'object') {
+            maskDeep(obj[key]);
+          }
+        });
+      };
+      const splat = (info as any)[Symbol.for('splat')];
+      if (splat) maskDeep(splat);
+      maskDeep(info);
+      return info;
+    });
+
+    // 2. CONSOLE FORMAT
+    const consoleFormat = winston.format.printf((info) => {
+      const tsVal = info.timestamp || new Date().toISOString();
+      const { level, message, context, requestId, label, timestamp, ...meta } =
+        info;
+
+      const cDim = '\x1b[2m';
+      const cReset = '\x1b[0m';
+      const cCyan = '\x1b[36m';
+      const cYellow = '\x1b[33m';
+
+      const splatSymbol = Symbol.for('splat');
+      const splat = (info as any)[splatSymbol];
+      let finalMeta = { ...meta };
+      if (Array.isArray(splat)) {
+        const splatObj = splat.find(
+          (item: any) => typeof item === 'object' && item !== null,
+        );
+        if (splatObj) Object.assign(finalMeta, splatObj);
+      }
+
+      delete (finalMeta as any).level;
+      delete (finalMeta as any).message;
+      delete (finalMeta as any).timestamp;
+      delete (finalMeta as any).service;
+
+      let metaStr = '';
+      if (Object.keys(finalMeta).length) {
+        const jsonStr = JSON.stringify(finalMeta);
+        if (jsonStr.length < 150) {
+          metaStr = ` ${cDim}${jsonStr}${cReset}`;
+        } else {
+          metaStr = `\n${cDim}${JSON.stringify(finalMeta, null, 2)}${cReset}`;
+        }
+      }
+
+      const timeDisplay = `${cDim}[${tsVal}]${cReset}`;
+      const levelDisplay = level;
+      const contextVal = context || label || appName;
+      const contextDisplay = `${cYellow}[${contextVal}]${cReset}`;
+      const requestDisplay = requestId ? `${cCyan}[${requestId}]${cReset}` : '';
+
+      return `${timeDisplay} ${levelDisplay} ${contextDisplay} ${requestDisplay} ${message}${metaStr}`;
+    });
+
+    // 3. TRANSPORTS
+    const transports: winston.transport[] = [
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.info.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '14d',
+        level: 'info',
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          masker(),
+          winston.format.json(),
+        ),
+      }),
+      new DailyRotateFile({
+        dirname: 'logs',
+        filename: 'app-%DATE%.error.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '30d',
+        level: 'error',
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          masker(),
+          winston.format.json(),
+        ),
+      }),
+    ];
+
+    if (isProduction) {
+      transports.push(
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.timestamp(),
+            masker(),
+            winston.format.json(),
+          ),
+        }),
+      );
+    } else {
+      transports.push(
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+            masker(),
+            winston.format.colorize({ all: true }),
+            consoleFormat,
+          ),
+        }),
+      );
+    }
+
+    return winston.createLogger({
+      level: logLevel,
+      defaultMeta: { service: appName },
+      transports,
+      exitOnError: false,
+    });
+  }
+}
+
+```
+
+## File: src/modules/user/application/services/user.service.ts
+```
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import { IUserRepository } from '../../domain/repositories/user.repository';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '../../domain/entities/user.entity';
+import { UserProfile } from '../../domain/types/user-profile.type';
+
+export interface CreateUserParams {
+  id: number | string;
+  username: string;
+  email?: string;
+  password?: string;
+  fullName: string;
+}
+
+@Injectable()
+export class UserService {
+  constructor(
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+  ) { }
+
+  async createUser(
+    data: CreateUserParams,
+  ): Promise<ReturnType<User['toJSON']>> {
+    const existing = await this.userRepository.findByUsername(data.username);
+    if (existing) throw new BadRequestException('User already exists');
+
+    let hashedPassword;
+    if (data.password) {
+      if (!PasswordUtil.validateStrength(data.password))
+        throw new BadRequestException('Weak password');
+      hashedPassword = await PasswordUtil.hash(data.password);
+    }
+
+    const newUser = new User({
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      fullName: data.fullName,
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const user = await this.userRepository.save(newUser);
+    return user.toJSON();
+  }
+
+  async validateCredentials(
+    username: string,
+    pass: string,
+  ): Promise<User | null> {
+    const user = await this.userRepository.findByUsername(username);
+    if (!user || !user.isActive || !user.hashedPassword) return null;
+    const isValid = await PasswordUtil.compare(pass, user.hashedPassword);
+    return isValid ? user : null;
+  }
+
+  async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
+    const user = await this.userRepository.findById(id);
+    if (!user) throw new NotFoundException('User not found');
+    return user.toJSON();
+  }
+
+  async updateUserProfile(
+    userId: number,
+    profileData: UserProfile,
+  ): Promise<ReturnType<User['toJSON']>> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    user.updateProfile(profileData);
+    const updated = await this.userRepository.save(user);
+    return updated.toJSON();
+  }
+
+  async deactivateUser(userId: number): Promise<void> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    user.deactivate();
+    await this.userRepository.save(user);
+  }
+}
+
+```
+
+## File: src/modules/user/application/services/user-import.service.ts
+```
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { IUserRepository } from '../../domain/repositories/user.repository';
+import { IRoleRepository, IUserRoleRepository } from '@modules/rbac/domain/repositories/rbac.repository';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '../../domain/entities/user.entity';
+import { UserRole } from '@modules/rbac/domain/entities/user-role.entity';
+
+export type UserCsvRow = {
+    username: string;
+    email: string;
+    fullName: string;
+    roles: string; // VD: "ADMIN,MANAGER"
+    password?: string;
+};
+
+@Injectable()
+export class UserImportService {
+    private readonly logger = new Logger(UserImportService.name);
+
+    constructor(
+        @Inject(IUserRepository) private userRepo: IUserRepository,
+        @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+        @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
+        @Inject(ITransactionManager) private txManager: ITransactionManager,
+        @Inject(IFileParser) private fileParser: IFileParser,
+    ) { }
+
+    async importFromCsv(csvBuffer: Buffer, adminId: number) {
+        // 1. Parse CSV
+        const records = await this.fileParser.parseCsvAsync<UserCsvRow>(csvBuffer);
+        if (!records.length) return { success: false, message: 'File rỗng' };
+
+        const errors: string[] = [];
+        const validRows: UserCsvRow[] = [];
+
+        // 2. Thu thập dữ liệu để check 1 lần duy nhất (O(1) thay vì O(N))
+        const usernamesToCheck = [...new Set(records.map(r => r.username).filter(Boolean))];
+        const emailsToCheck = [...new Set(records.map(r => r.email).filter(Boolean))];
+        const allRolesSet = new Set<string>();
+
+        records.forEach(r => {
+            if (r.roles) {
+                r.roles.split(',').forEach(role => allRolesSet.add(role.trim().toUpperCase()));
+            }
+        });
+
+        // 3. Query DB 1 lần lấy dữ liệu đối chiếu
+        const existingUsers = await this.userRepo.findExistingUsernamesOrEmails([...usernamesToCheck, ...emailsToCheck]);
+        const existingUsernames = new Set(existingUsers.map(u => u.username));
+        const existingEmails = new Set(existingUsers.map(u => u.email));
+
+        const validDbRoles = await this.roleRepo.findInNames(Array.from(allRolesSet));
+        const roleMap = new Map(validDbRoles.map(r => [r.name.toUpperCase(), r.id]));
+
+        // 4. Validate từng dòng trên RAM
+        records.forEach((row, index) => {
+            const line = index + 2; // Dòng 1 là header
+            if (!row.username || !row.fullName) {
+                errors.push(`Dòng ${line}: Thiếu username hoặc fullName.`);
+                return;
+            }
+            if (existingUsernames.has(row.username)) {
+                errors.push(`Dòng ${line}: Username '${row.username}' đã tồn tại.`);
+                return;
+            }
+            if (row.email && existingEmails.has(row.email)) {
+                errors.push(`Dòng ${line}: Email '${row.email}' đã tồn tại.`);
+                return;
+            }
+            validRows.push(row);
+        });
+
+        if (validRows.length === 0) {
+            return { success: false, message: 'Không có dữ liệu hợp lệ để import', errors, stats: { total: records.length, success: 0, failed: errors.length } };
+        }
+
+        // 5. Chunk Hashing Password (Chống treo Node.js)
+        const usersToInsert: User[] = [];
+        const chunkSize = 50;
+
+        for (let i = 0; i < validRows.length; i += chunkSize) {
+            const chunk = validRows.slice(i, i + chunkSize);
+
+            // Xử lý song song 50 passwords cùng lúc
+            const hashedPasswords = await Promise.all(
+                chunk.map(row => PasswordUtil.hash(row.password || 'Hrm@2026'))
+            );
+
+            chunk.forEach((row, j) => {
+                usersToInsert.push(new User({
+                    username: row.username,
+                    email: row.email || undefined,
+                    hashedPassword: hashedPasswords[j],
+                    fullName: row.fullName,
+                    isActive: true,
+                    roles: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                }));
+            });
+        }
+
+        // 6. Thực thi Transaction Bulk Insert
+        await this.txManager.runInTransaction(async (tx) => {
+            // 6.1 Insert toàn bộ User (Và lấy ID trả về)
+            const insertedUsers = await this.userRepo.saveMany(usersToInsert, tx);
+
+            // 6.2 Chuẩn bị data cho bảng UserRoles
+            const userRolesToInsert: UserRole[] = [];
+
+            insertedUsers.forEach((savedUser) => {
+                // Tìm lại dòng CSV gốc dựa vào username
+                const originalRow = validRows.find(r => r.username === savedUser.username);
+                if (originalRow && originalRow.roles && savedUser.id) {
+                    const roleNames = originalRow.roles.split(',').map(r => r.trim().toUpperCase());
+                    roleNames.forEach(rName => {
+                        const roleId = roleMap.get(rName);
+                        if (roleId) {
+                            userRolesToInsert.push(new UserRole(
+                                savedUser.id!,
+                                roleId!,
+                                adminId, // Người thực hiện import
+                                undefined,
+                                new Date()
+                            ));
+                        }
+                    });
+                }
+            });
+
+            // 6.3 Insert toàn bộ UserRoles
+            if (userRolesToInsert.length > 0) {
+                await this.userRoleRepo.saveMany(userRolesToInsert, tx);
+            }
+        });
+
+        return {
+            success: true,
+            message: 'Import Users hoàn tất',
+            stats: {
+                totalProcessed: records.length,
+                successCount: validRows.length,
+                failedCount: errors.length
+            },
+            errors
+        };
+    }
+}
+
+```
+
+## File: src/modules/user/infrastructure/controllers/user-import.controller.ts
+```
+import { Controller, Post, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '../../domain/entities/user.entity';
+import { UserImportService } from '../../application/services/user-import.service';
+
+@ApiTags('Users Management')
+@ApiBearerAuth()
+@Controller('users/data')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class UserImportController {
+    constructor(private userImportService: UserImportService) { }
+
+    @ApiOperation({ summary: 'Bulk Import Users từ file CSV' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @Post('import')
+    @Permissions('user:manage') // Yêu cầu quyền quản lý User
+    @UseInterceptors(FileInterceptor('file'))
+    async importUsers(
+        @UploadedFile() file: Express.Multer.File,
+        @CurrentUser() admin: User
+    ) {
+        if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
+        if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
+
+        // const content = file.buffer.toString('utf-8');
+        const result = await this.userImportService.importFromCsv(file.buffer, admin.id);
+
+        return result;
+    }
+}
+
+```
+
+## File: src/modules/user/infrastructure/controllers/user.controller.ts
+```
+import {
+  Controller,
+  Get,
+  Param,
+  Put,
+  Body,
+  UseGuards,
+  BadRequestException,
+} from '@nestjs/common';
+import { UserService } from '../../application/services/user.service';
+import { CurrentUser } from '../../../auth/infrastructure/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
+import { User } from '../../domain/entities/user.entity';
+import { UpdateProfileDto } from '../dtos/update-profile.dto';
+
+@Controller('users')
+@UseGuards(JwtAuthGuard)
+export class UserController {
+  constructor(private userService: UserService) {}
+
+  @Get('profile')
+  async getProfile(@CurrentUser() user: User) {
+    // FIX: User từ Token chắc chắn phải có ID
+    if (!user.id) throw new BadRequestException('Invalid User Context');
+    return this.userService.getUserById(user.id);
+  }
+
+  @Put('profile')
+  async updateProfile(
+    @CurrentUser() user: User,
+    @Body() profileData: UpdateProfileDto,
+  ) {
+    // FIX: User từ Token chắc chắn phải có ID
+    if (!user.id) throw new BadRequestException('Invalid User Context');
+    return this.userService.updateUserProfile(user.id, profileData);
+  }
+
+  @Get(':id')
+  async getUserById(@Param('id') id: number) {
+    return this.userService.getUserById(id);
+  }
+}
+
+```
+
+## File: src/modules/user/infrastructure/dtos/update-profile.dto.ts
+```
+import {
+  IsString,
+  IsOptional,
+  IsUrl,
+  IsEnum,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+
+class SocialLinksDto {
+  @ApiPropertyOptional() @IsOptional() @IsUrl() facebook?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl() telegram?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl() website?: string;
+}
+
+class SettingsDto {
+  @ApiPropertyOptional({ enum: ['dark', 'light'] })
+  @IsOptional()
+  @IsEnum(['dark', 'light'])
+  theme: 'dark' | 'light';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  notifications: boolean;
+}
+
+export class UpdateProfileDto {
+  @ApiPropertyOptional({ example: 'I love coding' })
+  @IsOptional()
+  @IsString()
+  bio?: string;
+
+  @ApiPropertyOptional({ example: '1990-01-01' })
+  @IsOptional()
+  @IsString()
+  birthday?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUrl()
+  avatarUrl?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female', 'other'] })
+  @IsOptional()
+  @IsEnum(['male', 'female', 'other'])
+  gender?: 'male' | 'female' | 'other';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SocialLinksDto)
+  socialLinks?: SocialLinksDto;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SettingsDto)
+  settings?: SettingsDto;
+}
+
+```
+
+## File: src/modules/user/infrastructure/persistence/mappers/user.mapper.ts
+```
+
+import { InferInsertModel } from 'drizzle-orm';
+import { AssociatedProfiles, User } from '../../../domain/entities/user.entity';
+import { users } from '@database/schema';
+
+// Type insert cho bảng users (flat)
+type UserInsert = InferInsertModel<typeof users>;
+
+export class UserMapper {
+  /**
+   * Map từ kết quả query Drizzle (có Relation) sang Domain Entity
+   * `raw` ở đây là `any` vì type của Drizzle Query Builder rất phức tạp để define tĩnh
+   */
+  static toDomain(raw: any): User | null {
+    if (!raw) return null;
+
+    // ✅ Logic Strict RBAC: Map từ bảng nối ra mảng string
+    const roles: string[] = raw.userRoles
+      ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
+      : [];
+
+    // ✅ LOGIC MỚI: Khởi tạo cái túi rỗng
+    const businessProfiles: AssociatedProfiles = {};
+
+    // 1. Nhặt dữ liệu HRM (Nếu User là Nhân viên)
+    if (raw.employeeProfile) {
+      businessProfiles.employee = {
+        employeeCode: raw.employeeProfile.employeeCode,
+        fullName: raw.employeeProfile.fullName,
+        position: raw.employeeProfile.position?.name || raw.employeeProfile.position?.jobTitle?.name,
+        departmentCode: raw.employeeProfile.position?.orgUnit?.code,
+        location: raw.employeeProfile.location?.name,
+      };
+    }
+
+    // 2. Nhặt dữ liệu CRM (Nếu User là Đối tác/Doanh nghiệp B2B)
+    if (raw.organizationProfile) {
+      businessProfiles.organization = {
+        companyName: raw.organizationProfile.companyName,
+        taxCode: raw.organizationProfile.taxCode,
+        industry: raw.organizationProfile.industry,
+        status: raw.organizationProfile.status,
+      };
+    }
+
+    // ✅ TRUYỀN DƯỚI DẠNG OBJECT
+    return new User({
+      id: raw.id,
+      username: raw.username,
+      email: raw.email || undefined,
+      hashedPassword: raw.hashedPassword || undefined,
+      fullName: raw.fullName || undefined,
+      isActive: raw.isActive ?? true,
+      roles: roles,
+      telegramId: raw.telegramId || undefined,
+      phoneNumber: raw.phoneNumber || undefined,
+      avatarUrl: raw.avatarUrl || undefined,
+      profile: (raw.profile as any) || undefined,
+      profiles: businessProfiles, // Truyền cái túi vào
+      createdAt: raw.createdAt || undefined,
+      updatedAt: raw.updatedAt || undefined,
+    });
+  }
+
+  /**
+   * Map từ Domain sang Persistence (Chỉ map các field thuộc bảng `users`)
+   * Không map `roles` vì roles nằm ở bảng `user_roles`
+   */
+  static toPersistence(domain: User): UserInsert {
+    return {
+      id: domain.id,
+      username: domain.username,
+      email: domain.email || null,
+      hashedPassword: domain.hashedPassword || null,
+      isActive: domain.isActive,
+      telegramId: domain.telegramId || null, // ✅ Map TelegramId
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
+  }
+}
+```
+
+## File: src/modules/user/infrastructure/persistence/drizzle-user.repository.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { eq, desc, inArray, or } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { IUserRepository } from '../../domain/repositories/user.repository';
+import { User } from '../../domain/entities/user.entity';
+import { DRIZZLE } from '@database/drizzle.provider';
+import * as schema from '@database/schema'; // Import toàn bộ schema cho query builder
+import { UserMapper } from './mappers/user.mapper';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleUserRepository implements IUserRepository {
+  constructor(
+    @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
+  ) { }
+
+  // --- Helper để lấy DB hoặc Transaction ---
+  private getDb(tx?: Transaction) {
+    return tx ? (tx as unknown as NodePgDatabase<typeof schema>) : this.db;
+  }
+
+  // --- READ METHODS (Dùng Query Builder để join bảng roles) ---
+
+  // 🚀 1. HÀM DÙNG CHO API /api/auth/profile (Cần xem đầy đủ dữ liệu)
+  async findById(id: number, tx?: Transaction): Promise<User | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.users.findFirst({
+      where: eq(schema.users.id, id),
+      with: {
+        userRoles: { with: { role: true } },
+        // ✅ Bật Join bảng HRM
+        employeeProfile: {
+          with: { location: true, position: { with: { orgUnit: true, jobTitle: true } } },
+        },
+        // ✅ Bật Join bảng CRM
+        organizationProfile: true,
+      },
+    });
+    return UserMapper.toDomain(result);
+  }
+
+  // ⚡ 2. HÀM DÙNG ĐỂ LOGIN / XÁC THỰC TOKEN (Phải chạy cực nhanh)
+  async findByUsername(username: string, tx?: Transaction): Promise<User | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.users.findFirst({
+      where: eq(schema.users.username, username),
+      with: {
+        userRoles: { with: { role: true } },
+        // ❌ KHÔNG JOIN bảng Employee hay Organization ở đây để tiết kiệm DB
+      },
+    });
+    return UserMapper.toDomain(result);
+  }
+
+  async findByEmail(email: string, tx?: Transaction): Promise<User | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.users.findFirst({
+      where: eq(schema.users.email, email),
+      with: {
+        userRoles: { with: { role: true } },
+      },
+    });
+    return UserMapper.toDomain(result);
+  }
+
+  async findByTelegramId(telegramId: string): Promise<User | null> {
+    const result = await this.db.query.users.findFirst({
+      where: eq(schema.users.telegramId, telegramId),
+      with: {
+        userRoles: { with: { role: true } },
+      },
+    });
+    return UserMapper.toDomain(result);
+  }
+
+  async findAll(): Promise<User[]> {
+    const results = await this.db.query.users.findMany({
+      orderBy: desc(schema.users.createdAt),
+      with: {
+        userRoles: { with: { role: true } },
+      },
+    });
+    return results
+      .map((u) => UserMapper.toDomain(u))
+      .filter((u): u is User => u !== null);
+  }
+
+  async findAllActive(): Promise<User[]> {
+    const results = await this.db.query.users.findMany({
+      where: eq(schema.users.isActive, true),
+      with: {
+        userRoles: { with: { role: true } },
+      },
+    });
+    return results
+      .map((u) => UserMapper.toDomain(u))
+      .filter((u): u is User => u !== null);
+  }
+
+  // --- WRITE METHODS (Chỉ tác động bảng users) ---
+
+  async save(user: User, tx?: Transaction): Promise<User> {
+    const db = this.getDb(tx);
+    const data = UserMapper.toPersistence(user);
+
+    // Lưu ý: Hàm này chỉ save thông tin User cơ bản.
+    // Việc gán Role (insert vào user_roles) nên được thực hiện bởi 
+    // một method khác hoặc service chuyên biệt (VD: AssignRoleService).
+
+    let result;
+    if (data.id) {
+      // Update
+      const res = await db
+        .update(schema.users)
+        .set(data)
+        .where(eq(schema.users.id, data.id))
+        .returning();
+      result = res[0];
+    } else {
+      // Insert
+      // Loại bỏ ID để DB tự sinh (nếu dùng serial)
+      // Nhưng nếu data.id được truyền vào (VD từ register logic), ta giữ lại
+      const res = await db
+        .insert(schema.users)
+        .values(data as typeof schema.users.$inferInsert)
+        .returning();
+      result = res[0];
+    }
+
+    // Return User domain (lúc này chưa có roles vì mới save xong, 
+    // trừ khi fetch lại, nhưng để tối ưu ta có thể return user vừa save với roles rỗng hoặc giữ nguyên từ input)
+    return UserMapper.toDomain({ ...result, userRoles: [] })!;
+  }
+
+  async updateTelegramId(userId: string | number, telegramId: string): Promise<void> {
+    await this.db.update(schema.users)
+      .set({ telegramId: telegramId })
+      .where(eq(schema.users.id, Number(userId)));
+  }
+
+  async removeTelegramId(telegramId: string): Promise<void> {
+    await this.db.update(schema.users)
+      .set({ telegramId: null })
+      .where(eq(schema.users.telegramId, telegramId));
+  }
+
+  async update(id: number, data: Partial<User>): Promise<User> {
+    // Map partial fields manually for update
+    const updatePayload: any = {};
+    if (data.fullName) updatePayload.fullName = data.fullName;
+    if (data.email) updatePayload.email = data.email;
+    if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
+    updatePayload.updatedAt = new Date();
+
+    const result = await this.db
+      .update(schema.users)
+      .set(updatePayload)
+      .where(eq(schema.users.id, id))
+      .returning();
+
+    if (!result[0]) throw new Error('User not found to update');
+    return UserMapper.toDomain(result[0])!;
+  }
+
+  // 👉 MỚI (SOFT DELETE):
+  async delete(id: number, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+
+    // Thay vì dùng db.delete(), ta dùng db.update()
+    await db.update(schema.users)
+      .set({
+        isActive: false,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(schema.users.id, id));
+  }
+
+  async exists(id: number, tx?: Transaction): Promise<boolean> {
+    const db = this.getDb(tx);
+    // Optimized exist check
+    const result = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.id, id))
+      .limit(1);
+    return result.length > 0;
+  }
+
+  async count(): Promise<number> {
+    const result = await this.db.execute('SELECT COUNT(*) as count FROM users');
+    return Number(result.rows[0].count);
+  }
+
+  // ✅ THÊM MỚI: Lấy danh sách user đã tồn tại (chỉ 1 query duy nhất)
+  async findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction) {
+    if (!identifiers || identifiers.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db
+      .select({ username: schema.users.username, email: schema.users.email })
+      .from(schema.users)
+      .where(
+        or(
+          inArray(schema.users.username, identifiers),
+          inArray(schema.users.email, identifiers)
+        )
+      );
+    return results;
+  }
+
+  // ✅ THÊM MỚI: Bulk Insert (Insert 1 phát 1000 records)
+  async saveMany(users: User[], tx?: Transaction): Promise<User[]> {
+    if (!users || users.length === 0) return [];
+    const db = this.getDb(tx);
+    const dataToInsert = users.map(user => {
+      const data = UserMapper.toPersistence(user);
+      delete (data as any).id; // Bỏ ID để DB tự gen
+      return data;
+    });
+
+    const results = await db
+      .insert(schema.users)
+      .values(dataToInsert as typeof schema.users.$inferInsert[])
+      .returning();
+
+    return results.map(r => UserMapper.toDomain({ ...r, userRoles: [] })!);
+  }
+}
+
+```
+
+## File: src/modules/user/domain/types/user-profile.type.ts
+```
+export interface UserProfile {
+  bio?: string;
+  birthday?: string;
+  avatarUrl?: string;
+  gender?: 'male' | 'female' | 'other';
+  socialLinks?: {
+    facebook?: string;
+    telegram?: string;
+    website?: string;
+  };
+  settings?: {
+    theme: 'dark' | 'light';
+    notifications: boolean;
+  };
+}
+
+```
+
+## File: src/modules/user/domain/constants/user.permissions.ts
+```
+export const USER_PERMISSIONS = {
+    MANAGE: 'user:manage',
+    READ: 'user:read',
+    CREATE: 'user:create',
+    UPDATE: 'user:update',
+    DELETE: 'user:delete',
+} as const;
+
+```
+
+## File: src/modules/user/domain/entities/user.entity.ts
+```
+import { UserProfile } from '../types/user-profile.type';
+
+export interface AssociatedProfiles {
+  employee?: Record<string, any>;
+  organization?: Record<string, any>;
+  customer?: Record<string, any>;
+}
+
+// ✅ 1. TẠO INTERFACE PROPS
+export interface UserProps {
+  id?: number; // Đổi thành Optional để khi Create mới không cần hack `undefined as any`
+  username: string;
+  email?: string;
+  hashedPassword?: string;
+  fullName?: string;
+  isActive?: boolean;
+  roles?: string[];
+  telegramId?: string;
+  phoneNumber?: string;
+  avatarUrl?: string;
+  profile?: UserProfile;
+  profiles?: AssociatedProfiles;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export class User {
+  private _id?: number;
+  private _username: string;
+  private _email?: string;
+  private _hashedPassword?: string;
+  private _fullName?: string;
+  private _isActive: boolean;
+  private _roles: string[];
+  private _telegramId?: string;
+  private _phoneNumber?: string;
+  private _avatarUrl?: string;
+  private _profile?: UserProfile;
+  private _profiles: AssociatedProfiles;
+  private _createdAt?: Date;
+  private _updatedAt?: Date;
+
+  // ✅ 2. CONSTRUCTOR NHẬN 1 OBJECT DUY NHẤT
+  constructor(props: UserProps) {
+    this._id = props.id;
+    this._username = props.username;
+    this._email = props.email;
+    this._hashedPassword = props.hashedPassword;
+    this._fullName = props.fullName;
+
+    // Xử lý các giá trị mặc định (Default values)
+    this._isActive = props.isActive ?? true;
+    this._roles = props.roles || [];
+    this._profiles = props.profiles || {};
+
+    this._telegramId = props.telegramId;
+    this._phoneNumber = props.phoneNumber;
+    this._avatarUrl = props.avatarUrl;
+    this._profile = props.profile;
+    this._createdAt = props.createdAt;
+    this._updatedAt = props.updatedAt;
+  }
+
+  // --- Getters ---
+  get id() { return this._id; }
+  get username() { return this._username; }
+  get email() { return this._email; }
+  get hashedPassword() { return this._hashedPassword; }
+  get fullName() { return this._fullName; }
+  get isActive() { return this._isActive; }
+  get roles() { return this._roles; } // Getter cho roles
+  get telegramId() { return this._telegramId; } // Getter cho telegramId
+  get phoneNumber() { return this._phoneNumber; }
+  get avatarUrl() { return this._avatarUrl; }
+  get profile() { return this._profile; }
+  // Getter mới
+  get profiles() { return this._profiles; }
+
+  get createdAt() { return this._createdAt; }
+  get updatedAt() { return this._updatedAt; }
+
+  // --- Domain Behaviors ---
+
+  // Lưu ý: ID thường được set bởi DB hoặc Service khi tạo mới, 
+  // nhưng trong Entity Constructor nên có để hydrate từ DB.
+
+  changePassword(hashedPassword: string): void {
+    this._hashedPassword = hashedPassword;
+    this._updatedAt = new Date();
+  }
+
+  updateProfile(profileData: UserProfile): void {
+    this._profile = { ...this._profile, ...profileData };
+    this._updatedAt = new Date();
+  }
+
+  deactivate(): void {
+    this._isActive = false;
+    this._updatedAt = new Date();
+  }
+
+  activate(): void {
+    this._isActive = true;
+    this._updatedAt = new Date();
+  }
+
+  // Phương thức này giúp Service/Chatbot kiểm tra nhanh quyền
+  hasRole(roleName: string): boolean {
+    return this._roles.includes(roleName);
+  }
+
+  toJSON() {
+    return {
+      id: this._id,
+      username: this._username,
+      email: this._email,
+      fullName: this._fullName,
+      isActive: this._isActive,
+      roles: this._roles, // ✅ Trả về mảng roles
+      telegramId: this._telegramId,
+      phoneNumber: this._phoneNumber,
+      avatarUrl: this._avatarUrl,
+      profile: this._profile,
+      profiles: this._profiles,
+      createdAt: this._createdAt,
+      updatedAt: this._updatedAt,
+    };
+  }
+}
+
+```
+
+## File: src/modules/user/domain/repositories/user.repository.ts
+```
+import { User } from '../entities/user.entity';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+// 1. Token (Runtime)
+export const IUserRepository = Symbol('IUserRepository');
+
+// 2. Interface (Compile-time)
+export interface IUserRepository {
+  findById(id: number, tx?: Transaction): Promise<User | null>;
+  findByUsername(username: string, tx?: Transaction): Promise<User | null>;
+  findByEmail(email: string, tx?: Transaction): Promise<User | null>;
+
+  findByTelegramId(telegramId: string): Promise<User | null>;
+  updateTelegramId(userId: string | number, telegramId: string): Promise<void>;
+  removeTelegramId(telegramId: string): Promise<void>;
+
+  findAllActive(): Promise<User[]>;
+  findAll(): Promise<User[]>;
+
+  save(user: User, tx?: Transaction): Promise<User>;
+  update(id: number, data: Partial<User>): Promise<User>;
+  delete(id: number, tx?: Transaction): Promise<void>;
+  exists(id: number, tx?: Transaction): Promise<boolean>;
+  count(): Promise<number>;
+
+  //
+  findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction): Promise<{ username: string; email: string | null }[]>;
+  saveMany(users: User[], tx?: Transaction): Promise<User[]>;
+}
+
+```
+
+## File: src/modules/user/domain/events/user-created.event.ts
+```
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+import { User } from '../entities/user.entity';
+
+export class UserCreatedEvent implements IDomainEvent {
+  static readonly EVENT_NAME = 'UserCreated';
+
+  readonly occurredAt = new Date();
+  constructor(
+    public readonly aggregateId: string,
+    public readonly payload: { user: User },
+  ) { }
+}
+
+```
+
+## File: src/modules/user/user.module.ts
+```
+import { Module } from '@nestjs/common';
+import { UserService } from './application/services/user.service';
+import { UserController } from './infrastructure/controllers/user.controller';
+import { DrizzleUserRepository } from './infrastructure/persistence/drizzle-user.repository';
+// FIX IMPORT
+import { IUserRepository } from './domain/repositories/user.repository';
+import { UserImportService } from './application/services/user-import.service';
+import { UserImportController } from './infrastructure/controllers/user-import.controller';
+import { RbacModule } from '@modules/rbac/rbac.module';
+
+@Module({
+  imports: [RbacModule],
+  controllers: [UserController, UserImportController],
+  providers: [
+    UserService,
+    UserImportService,
+    {
+      provide: IUserRepository, // FIX: Dùng Symbol
+      useClass: DrizzleUserRepository,
+    },
+  ],
+  exports: [UserService, IUserRepository], // FIX: Export Symbol
+})
+export class UserModule { }
+
+```
+
+## File: src/modules/rbac/application/services/rbac-manager.service.ts
+```
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import {
+  IRoleRepository,
+  IPermissionRepository,
+} from '../../domain/repositories/rbac.repository';
+import { Role } from '../../domain/entities/role.entity';
+import { Permission } from '../../domain/entities/permission.entity';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+
+// Helper type for CSV Row
+type RbacCsvRow = {
+  role: string;
+  resource: string;
+  action: string;
+  attributes: string;
+  description: string;
+};
+
+
+@Injectable()
+export class RbacManagerService {
+  private readonly logger = new Logger(RbacManagerService.name);
+
+  constructor(
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
+    @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
+  ) { }
+
+  async importFromCsv(csvBuffer: Buffer): Promise<any> {
+    // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
+    const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
+
+    // ✅ THÊM LOG ĐỂ DEBUG
+    this.logger.debug(`[CSV Import] Đã parse được: ${records.length} dòng.`);
+    if (records.length > 0) {
+      this.logger.debug(`[CSV Import] Dữ liệu mẫu dòng 1: ${JSON.stringify(records[0])}`);
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    for (const row of records) {
+      // 2. Lấy data từ Object (Rất an toàn, không sợ phẩy trong ngoặc kép nữa)
+      const { role: roleName, resource, action, attributes, description } = row;
+
+      // ✅ THÊM LOG ĐỂ XEM CÓ BỊ SKIP KHÔNG
+      if (!roleName || !resource) {
+        this.logger.warn(`[CSV Import] Bỏ qua dòng do thiếu role hoặc resource: ${JSON.stringify(row)}`);
+        continue;
+      }
+
+      const permName = resource === '*' ? 'manage:all' : `${resource}:${action}`;
+
+      // Xử lý Permission
+      let perm = await this.permRepo.findByName(permName);
+      if (!perm) {
+        perm = new Permission(
+          undefined,
+          permName,
+          description || '',
+          resource,
+          action,
+          true,
+          attributes || '*',
+        );
+        perm = await this.permRepo.save(perm);
+        createdCount++;
+      }
+
+      // Xử lý Role
+      let role = await this.roleRepo.findByName(roleName);
+      if (!role) {
+        role = new Role(
+          undefined,
+          roleName,
+          'Imported from CSV',
+          true,
+          false,
+          [],
+        );
+        role = await this.roleRepo.save(role);
+      }
+
+      // Gán quyền vào Role
+      if (!role.permissions) role.permissions = [];
+      const hasPerm = role.permissions.some((p) => p.name === perm!.name);
+
+      if (!hasPerm) {
+        role.permissions.push(perm!);
+        await this.roleRepo.save(role);
+        updatedCount++;
+      }
+    }
+    return { created: createdCount, updated: updatedCount };
+  }
+
+  async exportToCsv(): Promise<string> {
+    const roles = await this.roleRepo.findAll();
+    const header = 'role,resource,action,attributes,description';
+    const lines = [header];
+
+    for (const role of roles) {
+      if (!role.permissions || role.permissions.length === 0) {
+        lines.push(`${role.name},,,,`);
+        continue;
+      }
+      for (const perm of role.permissions) {
+        const resource = perm.resourceType || '*';
+        const action = perm.action || '*';
+        const attributes = perm.attributes || '*';
+        let desc = perm.description || '';
+        if (desc.includes(',')) desc = `"${desc}"`;
+        lines.push([role.name, resource, action, attributes, desc].join(','));
+      }
+    }
+    return lines.join('\n');
+  }
+}
+
+```
+
+## File: src/modules/rbac/application/services/permission.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import {
+  IUserRoleRepository,
+  IRoleRepository,
+} from '../../domain/repositories/rbac.repository';
+// IMPORT Interface
+import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { CORE_ROLES } from '@modules/rbac/domain/constants/rbac.constants';
+
+@Injectable()
+export class PermissionService {
+  private readonly CACHE_TTL = 300; // Fallback nếu không truyền vào set()
+  private readonly CACHE_PREFIX = 'rbac:permissions:';
+
+  constructor(
+    @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
+  ) { }
+
+  async userHasPermission_old(
+    userId: number,
+    permissionName: string,
+  ): Promise<boolean> {
+    const cacheKey = `${this.CACHE_PREFIX}${userId}`;
+
+    // Sử dụng abstraction layer
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
+    if (cached) return cached.includes(permissionName) || cached.includes('*');
+
+    const userRoles = await this.userRoleRepo.findByUserId(userId);
+    const activeRoles = userRoles.filter(
+      (ur) => ur.isActive() && ur.role?.isActive,
+    );
+    if (activeRoles.length === 0) return false;
+
+    const roleIds = activeRoles.map((ur) => ur.roleId);
+    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+
+    const permissions = new Set<string>();
+    roles.forEach((r) =>
+      r.permissions?.forEach((p) => {
+        if (p.isActive) permissions.add(p.name);
+      }),
+    );
+
+    const permArray = Array.from(permissions);
+
+    // Cache result
+    await this.cacheService.set(cacheKey, permArray);
+    // Mặc định adapter sẽ lấy TTL từ config nếu không truyền,
+    // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
+
+    return permArray.includes(permissionName);
+  }
+
+  async userHasPermission(userId: number, permissionName: string): Promise<boolean> {
+    const cacheKey = `${this.CACHE_PREFIX}${userId}`;
+
+    // 1. Lấy từ Cache
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
+    if (cached) {
+      // ✅ Bổ sung logic: Nếu trong cache có role SUPER_ADMIN hoặc quyền '*' -> Cho qua luôn
+      if (cached.includes(CORE_ROLES.SUPER_ADMIN) || cached.includes('*') || cached.includes('manage:all')) {
+        return true;
+      }
+      return cached.includes(permissionName);
+    }
+
+    // 2. Query DB nếu Cache Miss
+    const userRoles = await this.userRoleRepo.findByUserId(userId);
+    const activeRoles = userRoles.filter((ur) => ur.isActive() && ur.role?.isActive);
+
+    if (activeRoles.length === 0) return false;
+
+    // ✅ KIỂM TRA SUPER_ADMIN Bypass
+    const isSuperAdmin = activeRoles.some(ur => ur.role?.name === CORE_ROLES.SUPER_ADMIN);
+
+    const roleIds = activeRoles.map((ur) => ur.roleId);
+    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+
+    const permissions = new Set<string>();
+
+    // Nếu là Super Admin, cache lại keyword nhận diện để lần sau bỏ qua nhanh
+    if (isSuperAdmin) {
+      permissions.add(CORE_ROLES.SUPER_ADMIN);
+      permissions.add('*');
+    } else {
+      roles.forEach((r) =>
+        r.permissions?.forEach((p) => {
+          if (p.isActive) permissions.add(p.name); // Lưu string "module:action"
+        }),
+      );
+    }
+
+    const permArray = Array.from(permissions);
+
+    // Lưu vào cache Redis
+    await this.cacheService.set(cacheKey, permArray, this.CACHE_TTL);
+
+    // Trả về kết quả
+    if (isSuperAdmin) return true;
+    return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
+  }
+
+  async assignRole(
+    userId: number,
+    roleId: number,
+    assignedBy: number,
+  ): Promise<void> {
+    const existing = await this.userRoleRepo.findOne(userId, roleId);
+    if (!existing) {
+      const userRole: any = {
+        userId,
+        roleId,
+        assignedBy,
+        assignedAt: new Date(),
+      };
+      await this.userRoleRepo.save(userRole);
+
+      // Invalidate cache
+      await this.cacheService.del(`${this.CACHE_PREFIX}${userId}`);
+    }
+  }
+}
+
+```
+
+## File: src/modules/rbac/application/services/role.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import {
+  IRoleRepository,
+  IPermissionRepository,
+} from '../../domain/repositories/rbac.repository';
+import { Role } from '../../domain/entities/role.entity';
+
+//
+import { ICacheService } from '@core/shared/application/ports/cache.port';
+
+
+export interface CreateRoleParams {
+  name: string;
+  description?: string;
+  isSystem?: boolean;
+}
+
+export interface AccessControlItem {
+  role: string;
+  resource: string;
+  action: string;
+  attributes: string;
+}
+
+@Injectable()
+export class RoleService {
+  constructor(
+    @Inject(IRoleRepository) private roleRepo: IRoleRepository,
+    @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
+    @Inject(ICacheService) private cacheService: ICacheService,
+  ) { }
+
+  async createRole(data: CreateRoleParams): Promise<Role> {
+    const existing = await this.roleRepo.findByName(data.name);
+    if (existing) throw new Error('Role exists');
+    const role = new Role(
+      undefined,
+      data.name,
+      data.description,
+      true,
+      data.isSystem,
+    );
+    return this.roleRepo.save(role);
+    // ✅ SAU NÀY NẾU BẠN VIẾT HÀM UPDATE ROLE, HÃY NHỚ GỌI HÀM RESET CACHE
+    // await this.cacheService.reset(); // (Hoặc dùng pattern để xóa riêng rbac:permissions:*)
+  }
+
+  async findAllRoles(): Promise<Role[]> {
+    return this.roleRepo.findAll();
+  }
+
+  async getAccessControlList(): Promise<AccessControlItem[]> {
+    const roles = await this.roleRepo.findAll();
+    const acl: AccessControlItem[] = [];
+    roles.forEach((role) => {
+      if (role.permissions) {
+        role.permissions.forEach((p) => {
+          acl.push({
+            role: role.name.toLowerCase(),
+            resource: p.resourceType || '*',
+            action: p.action || '*',
+            attributes: p.attributes,
+          });
+        });
+      }
+    });
+    return acl;
+  }
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/controllers/rbac-manager.controller.ts
+```
+import {
+  Controller,
+  Post,
+  Get,
+  UseInterceptors,
+  UploadedFile,
+  UseGuards,
+  BadRequestException,
+  Res,
+  StreamableFile,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiBody,
+} from '@nestjs/swagger';
+import type { Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '../guards/permission.guard';
+import { Permissions } from '../decorators/permission.decorator';
+import { RbacManagerService } from '../../application/services/rbac-manager.service';
+import { BypassTransform } from '@core/decorators/bypass-transform.decorator';
+
+@ApiTags('RBAC - Import/Export')
+@ApiBearerAuth()
+@Controller('rbac/data')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class RbacManagerController {
+  constructor(private rbacManagerService: RbacManagerService) { }
+
+  @ApiOperation({ summary: 'Import RBAC Rules from CSV' })
+  @ApiConsumes('multipart/form-data') // Báo cho Swagger biết đây là upload file
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary', // Định dạng file
+        },
+      },
+    },
+  })
+  @Post('import')
+  @Permissions('system:config')
+  @UseInterceptors(FileInterceptor('file'))
+  async importRbac(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+
+    if (!file.originalname.endsWith('.csv')) {
+      throw new BadRequestException('Only .csv files are allowed');
+    }
+
+    const result = await this.rbacManagerService.importFromCsv(file.buffer);
+
+    return {
+      success: true,
+      message: 'RBAC data imported successfully',
+      stats: result,
+    };
+  }
+
+  @ApiOperation({ summary: 'Export RBAC Rules to CSV' })
+  @Get('export')
+  @Permissions('system:config')
+  @BypassTransform()
+  async exportRbac(@Res({ passthrough: true }) res: Response) {
+    const csvData = await this.rbacManagerService.exportToCsv();
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="rbac_rules.csv"',
+    });
+
+    return new StreamableFile(Buffer.from(csvData));
+  }
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/controllers/role.controller.ts
+```
+import { Controller, Get, Post, Body, UseGuards, Inject } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiResponse,
+} from '@nestjs/swagger';
+import { RoleService } from '../../application/services/role.service';
+import { PermissionService } from '../../application/services/permission.service';
+import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '../guards/permission.guard';
+import { Permissions } from '../decorators/permission.decorator';
+import { RoleResponseDto } from '../dtos/role.dto';
+import { AssignRoleDto } from '../dtos/assign-role.dto';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+
+@ApiTags('RBAC - Roles')
+@ApiBearerAuth()
+@Controller('rbac/roles')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class RoleController {
+  constructor(
+    private roleService: RoleService,
+    private permissionService: PermissionService,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  @ApiOperation({ summary: 'Get all roles with permissions' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of roles',
+    type: [RoleResponseDto],
+  })
+  @Get()
+  @Permissions('rbac:manage')
+  async getAllRoles(): Promise<RoleResponseDto[]> {
+    const roles = await this.roleService.findAllRoles();
+    return roles.map((role) => RoleResponseDto.fromDomain(role));
+  }
+
+  @ApiOperation({ summary: 'Assign role to user' })
+  @Post('assign')
+  @Permissions('rbac:manage')
+  async assignRole(@Body() dto: AssignRoleDto) {
+    await this.permissionService.assignRole(dto.userId, dto.roleId, 1);
+    return { success: true, message: 'Role assigned' };
+  }
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/dtos/role.dto.ts
+```
+import { ApiProperty } from '@nestjs/swagger';
+// FIX PATH: Chỉ cần 2 cấp ../
+import { Role } from '../../domain/entities/role.entity';
+import { Permission } from '../../domain/entities/permission.entity';
+
+export class PermissionDto {
+  @ApiProperty({ example: 1 })
+  id: number;
+
+  @ApiProperty({ example: 'user:create' })
+  name: string;
+
+  @ApiProperty({ example: 'Create new users' })
+  description: string;
+
+  @ApiProperty({ example: 'user' })
+  resourceType: string;
+
+  @ApiProperty({ example: 'create' })
+  action: string;
+}
+
+export class RoleResponseDto {
+  @ApiProperty({ example: 1 })
+  id: number;
+
+  @ApiProperty({ example: 'ADMIN' })
+  name: string;
+
+  @ApiProperty({ example: 'Administrator with full access' })
+  description: string;
+
+  @ApiProperty({ example: true })
+  isActive: boolean;
+
+  @ApiProperty({ example: false })
+  isSystem: boolean;
+
+  @ApiProperty({ type: [PermissionDto] })
+  permissions: PermissionDto[];
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  static fromDomain(role: Role): RoleResponseDto {
+    const dto = new RoleResponseDto();
+    dto.id = role.id!;
+    dto.name = role.name;
+    dto.description = role.description || '';
+    dto.isActive = role.isActive;
+    dto.isSystem = role.isSystem;
+    dto.createdAt = role.createdAt || new Date();
+    dto.updatedAt = role.updatedAt || new Date();
+
+    dto.permissions = role.permissions
+      ? role.permissions.map((p) => ({
+          id: p.id!,
+          name: p.name,
+          description: p.description || '',
+          resourceType: p.resourceType || '',
+          action: p.action || '',
+        }))
+      : [];
+
+    return dto;
+  }
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/dtos/assign-role.dto.ts
+```
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNumber } from 'class-validator';
+
+export class AssignRoleDto {
+  @ApiProperty({ example: 1005, description: 'User ID' })
+  @IsNumber()
+  userId: number;
+
+  @ApiProperty({ example: 2, description: 'Role ID' })
+  @IsNumber()
+  roleId: number;
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/decorators/permission.decorator.ts
+```
+// src/modules/rbac/infrastructure/decorators/permission.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+import { PermissionString } from '../../domain/constants/rbac.constants'; // ✅ Import type
+
+export const PERMISSIONS_KEY = 'permissions';
+
+// ✅ Ép kiểu ...permissions thành mảng PermissionString
+export const Permissions = (...permissions: PermissionString[]) =>
+  SetMetadata(PERMISSIONS_KEY, permissions);
+```
+
+## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
+```
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+import { Role } from '../../../domain/entities/role.entity';
+import { Permission } from '../../../domain/entities/permission.entity';
+import { UserRole } from '../../../domain/entities/user-role.entity';
+import { roles, permissions, userRoles } from '@database/schema'; // Alias
+
+type RoleSelect = InferSelectModel<typeof roles>;
+type PermissionSelect = InferSelectModel<typeof permissions>;
+type UserRoleSelect = InferSelectModel<typeof userRoles>;
+
+type RoleWithRelations = RoleSelect & {
+  permissions: { permission: PermissionSelect }[];
+};
+
+type UserRoleWithRole = UserRoleSelect & {
+  role: RoleSelect;
+};
+
+export class RbacMapper {
+  static toPermissionDomain(raw: PermissionSelect | null): Permission | null {
+    if (!raw) return null;
+    return new Permission(
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.resourceType || undefined,
+      raw.action || undefined,
+      raw.isActive ?? true,
+      raw.attributes || '*',
+      raw.createdAt || undefined,
+    );
+  }
+
+  static toPermissionPersistence(
+    domain: Permission,
+  ): InferInsertModel<typeof permissions> {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      resourceType: domain.resourceType || null,
+      action: domain.action || null,
+      isActive: domain.isActive,
+      attributes: domain.attributes,
+      createdAt: domain.createdAt || new Date(),
+    };
+  }
+
+  static toRoleDomain(raw: RoleWithRelations | RoleSelect | null): Role | null {
+    if (!raw) return null;
+    let perms: Permission[] = [];
+    if ('permissions' in raw && Array.isArray(raw.permissions)) {
+      perms = raw.permissions
+        .map((rp) => this.toPermissionDomain(rp.permission)!)
+        .filter(Boolean);
+    }
+
+    return new Role(
+      raw.id,
+      raw.name,
+      raw.description || undefined,
+      raw.isActive ?? true,
+      raw.isSystem ?? false,
+      perms,
+      raw.createdAt || undefined,
+      raw.updatedAt || undefined,
+    );
+  }
+
+  static toRolePersistence(domain: Role): InferInsertModel<typeof roles> {
+    return {
+      id: domain.id,
+      name: domain.name,
+      description: domain.description || null,
+      isActive: domain.isActive,
+      isSystem: domain.isSystem,
+      createdAt: domain.createdAt || new Date(),
+      updatedAt: domain.updatedAt || new Date(),
+    };
+  }
+
+  static toUserRoleDomain(
+    raw: UserRoleWithRole | UserRoleSelect | null,
+  ): UserRole | null {
+    if (!raw) return null;
+    let roleDomain;
+    if ('role' in raw && raw.role) {
+      roleDomain = new Role(
+        raw.role.id,
+        raw.role.name,
+        raw.role.description || undefined,
+      );
+    }
+    return new UserRole(
+      Number(raw.userId),
+      raw.roleId,
+      raw.assignedBy ? Number(raw.assignedBy) : undefined,
+      raw.expiresAt || undefined,
+      raw.assignedAt || undefined,
+      roleDomain,
+    );
+  }
+
+  static toUserRolePersistence(
+    domain: UserRole,
+  ): InferInsertModel<typeof userRoles> {
+    return {
+      userId: domain.userId,
+      roleId: domain.roleId,
+      assignedBy: domain.assignedBy || null,
+      expiresAt: domain.expiresAt || null,
+      assignedAt: domain.assignedAt || new Date(),
+    };
+  }
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/persistence/repositories/drizzle-rbac.repositories.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, inArray, and } from 'drizzle-orm';
+// FIX IMPORT
+import {
+  IRoleRepository,
+  IPermissionRepository,
+  IUserRoleRepository,
+} from '../../../domain/repositories/rbac.repository';
+import { Role } from '../../../domain/entities/role.entity';
+import { Permission } from '../../../domain/entities/permission.entity';
+import { UserRole } from '../../../domain/entities/user-role.entity';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import {
+  roles,
+  permissions,
+  userRoles,
+  rolePermissions,
+} from '@database/schema';
+import { RbacMapper } from '../mappers/rbac.mapper';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleRoleRepository
+  extends DrizzleBaseRepository
+  implements IRoleRepository {
+  async findByName(name: string, tx?: Transaction): Promise<Role | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.roles.findFirst({
+      where: eq(roles.name, name),
+      with: { permissions: { with: { permission: true } } },
+    });
+    return result ? RbacMapper.toRoleDomain(result as any) : null;
+  }
+
+  async save(role: Role, tx?: Transaction): Promise<Role> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toRolePersistence(role);
+
+    return await db.transaction(async (trx) => {
+      let savedRoleId: number;
+      if (data.id) {
+        await trx.update(roles).set(data).where(eq(roles.id, data.id));
+        savedRoleId = data.id;
+      } else {
+        const { id, ...insertData } = data;
+        const res = await trx
+          .insert(roles)
+          .values(insertData as typeof roles.$inferInsert)
+          .returning({ id: roles.id });
+        savedRoleId = res[0].id;
+      }
+
+      if (role.permissions && role.permissions.length > 0) {
+        await trx
+          .delete(rolePermissions)
+          .where(eq(rolePermissions.roleId, savedRoleId));
+        const permInserts = role.permissions.map((p) => ({
+          roleId: savedRoleId,
+          permissionId: p.id!,
+        }));
+        if (permInserts.length > 0)
+          await trx.insert(rolePermissions).values(permInserts);
+      }
+
+      const finalRole = await this.findByName(
+        role.name,
+        trx as unknown as Transaction,
+      );
+      return finalRole!;
+    });
+  }
+
+  async findAllWithPermissions(
+    roleIds: number[],
+    tx?: Transaction,
+  ): Promise<Role[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      where: inArray(roles.id, roleIds),
+      with: { permissions: { with: { permission: true } } },
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
+
+  async findAll(tx?: Transaction): Promise<Role[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      with: { permissions: { with: { permission: true } } },
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
+
+  async findInNames(names: string[], tx?: Transaction): Promise<Role[]> {
+    if (!names || names.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      where: inArray(roles.name, names),
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
+}
+
+@Injectable()
+export class DrizzlePermissionRepository
+  extends DrizzleBaseRepository
+  implements IPermissionRepository {
+  async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select()
+      .from(permissions)
+      .where(eq(permissions.name, name));
+    return result[0] ? RbacMapper.toPermissionDomain(result[0]) : null;
+  }
+
+  async save(permission: Permission, tx?: Transaction): Promise<Permission> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toPermissionPersistence(permission);
+    let result;
+    if (data.id) {
+      result = await db
+        .update(permissions)
+        .set(data)
+        .where(eq(permissions.id, data.id))
+        .returning();
+    } else {
+      const { id, ...insertData } = data;
+      result = await db
+        .insert(permissions)
+        .values(insertData as typeof permissions.$inferInsert)
+        .returning();
+    }
+    return RbacMapper.toPermissionDomain(result[0])!;
+  }
+
+  async findAll(tx?: Transaction): Promise<Permission[]> {
+    const db = this.getDb(tx);
+    const results = await db.select().from(permissions);
+    return results.map((r) => RbacMapper.toPermissionDomain(r)!);
+  }
+}
+
+@Injectable()
+export class DrizzleUserRoleRepository
+  extends DrizzleBaseRepository
+  implements IUserRoleRepository {
+  async findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]> {
+    const db = this.getDb(tx);
+    const results = await db.query.userRoles.findMany({
+      where: eq(userRoles.userId, userId),
+      with: { role: true },
+    });
+    return results.map((r) => RbacMapper.toUserRoleDomain(r as any)!);
+  }
+
+  async save(userRole: UserRole, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    const data = RbacMapper.toUserRolePersistence(userRole);
+    await db
+      .insert(userRoles)
+      .values(data as typeof userRoles.$inferInsert)
+      .onConflictDoUpdate({
+        target: [userRoles.userId, userRoles.roleId],
+        set: { expiresAt: data.expiresAt, assignedBy: data.assignedBy },
+      });
+  }
+
+  async findOne(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<UserRole | null> {
+    const db = this.getDb(tx);
+    const result = await db.query.userRoles.findFirst({
+      where: and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)),
+      with: { role: true },
+    });
+    return result ? RbacMapper.toUserRoleDomain(result as any) : null;
+  }
+
+  async delete(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<void> {
+    const db = this.getDb(tx);
+    await db
+      .delete(userRoles)
+      .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
+  }
+
+  async saveMany(usrRoles: UserRole[], tx?: Transaction): Promise<void> {
+    if (!usrRoles || usrRoles.length === 0) return;
+    const db = this.getDb(tx);
+    const data = usrRoles.map(ur => RbacMapper.toUserRolePersistence(ur));
+
+    await db
+      .insert(userRoles)
+      .values(data as typeof userRoles.$inferInsert[])
+      .onConflictDoNothing(); // Nếu đã có quyền thì bỏ qua
+  }
+
+}
+
+```
+
+## File: src/modules/rbac/infrastructure/guards/permission.guard.ts
+```
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { PermissionService } from '../../application/services/permission.service';
+
+@Injectable()
+export class PermissionGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private permissionService: PermissionService,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
+      'permissions',
+      [context.getHandler(), context.getClass()],
+    );
+
+    if (!requiredPermissions || requiredPermissions.length === 0) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
+
+    if (!user) {
+      throw new ForbiddenException('Authentication required');
+    }
+
+    // Check each required permission
+    for (const permission of requiredPermissions) {
+      const hasPermission = await this.permissionService.userHasPermission(
+        user.id,
+        permission,
+      );
+
+      if (!hasPermission) {
+        throw new ForbiddenException(`Permission denied: ${permission}`);
+      }
+    }
+
+    return true;
+  }
+}
+
+```
+
+## File: src/modules/rbac/domain/constants/rbac.constants.ts
+```
+import { ORG_PERMISSIONS } from "@modules/org-structure/domain/constants/org.permissions";
+import { USER_PERMISSIONS } from "@modules/user/domain/constants/user.permissions";
+
+/**
+ * 1. CORE ROLES
+ * Chỉ khai báo các Role mang tính hệ thống (Bypass quyền, Default User).
+ * Tuyệt đối không khai báo MANAGER, STAFF, HR... ở đây.
+ */
+export const CORE_ROLES = {
+  SUPER_ADMIN: 'SUPER_ADMIN', // Thượng phương bảo kiếm (Bypass mọi Guard)
+  DEFAULT_USER: 'USER',       // Vai trò mặc định khi có người đăng ký mới
+} as const;
+
+/**
+ * 2. CORE ACTIONS
+ * Các hành động CRUD chuẩn. Dùng để tham chiếu trong code nếu cần, 
+ * giúp đồng bộ với file rbac.csv
+ */
+export const ACTIONS = {
+  MANAGE: 'manage', // Toàn quyền (Tương đương *)
+  CREATE: 'create',
+  READ: 'read',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  EXPORT: 'export',
+} as const;
+
+/**
+ * 3. HIERARCHY
+ * So sánh cấp bậc (Giúp Admin không thể xóa/sửa Super Admin).
+ */
+export const ROLE_HIERARCHY: Record<string, number> = {
+  [CORE_ROLES.SUPER_ADMIN]: 100,
+  'ADMIN': 90,
+  'MANAGER': 80,
+  'STAFF': 70,
+  [CORE_ROLES.DEFAULT_USER]: 60,
+};
+
+/**
+ * 4. BỘ TỪ ĐIỂN QUYỀN (Dành cho Developer)
+ * - Đây KHÔNG PHẢI là giới hạn của hệ thống.
+ * - Đây chỉ là bộ hằng số để Developer gõ code có Auto-complete, tránh sai chính tả.
+ * - Nếu có module mới (VD: payroll), Dev có thể gõ thẳng string 'payroll:view' 
+ *   hoặc bổ sung vào đây cho team cùng dùng.
+ */
+// Nhờ Spread Operator (...), nếu bạn thêm module mới (VD: PAYROLL), 
+// bạn chỉ cần import PAYROLL_PERMISSIONS vào đây.
+export const PERMISSIONS = {
+  // 1. Module đã có file riêng
+  ...USER_PERMISSIONS, // user:manage, user:read...
+  ...ORG_PERMISSIONS,  // org:manage, org:read, org:update
+
+  // 2. Các quyền Hệ thống
+  SYSTEM_CONFIG: 'system:config',
+  RBAC_MANAGE: 'rbac:manage',
+  AUDIT_VIEW: 'audit:view',
+
+  // 3. Khai báo nhanh các module từ CSV (Sau này có module riêng thì tách ra sau)
+  EMPLOYEE_MANAGE: 'employee:manage',
+  EMPLOYEE_READ: 'employee:read',
+  EMPLOYEE_UPDATE: 'employee:update',
+
+  REPORT_MANAGE: 'report:manage',
+  REPORT_VIEW: 'report:view',
+  REPORT_EXPORT: 'report:export',
+
+  BOOKING_MANAGE: 'booking:manage',
+  BOOKING_CREATE: 'booking:create',
+  BOOKING_READ: 'booking:read',
+  BOOKING_UPDATE: 'booking:update',
+} as const;
+
+
+// Trích xuất các value thành 1 Type (VD: 'system:config' | 'rbac:manage' | ...)
+export type KnownPermission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
+
+// 🚀 MAGIC TRICK: Cho phép Auto-complete các quyền đã biết, 
+// nhưng VẪN CHO PHÉP Dev gõ string bất kỳ nếu hệ thống có Module mới!
+export type PermissionString = KnownPermission | (string & {});
+
+```
+
+## File: src/modules/rbac/domain/entities/permission.entity.ts
+```
+export class Permission {
+  constructor(
+    public id: number | undefined,
+    public name: string,
+    public description?: string,
+    public resourceType?: string,
+    public action?: string,
+    public isActive: boolean = true,
+    public attributes: string = '*',
+    public createdAt?: Date,
+  ) {}
+}
+
+```
+
+## File: src/modules/rbac/domain/entities/role.entity.ts
+```
+import { Permission } from './permission.entity';
+
+export class Role {
+  constructor(
+    public id: number | undefined,
+    public name: string,
+    public description?: string,
+    public isActive: boolean = true,
+    public isSystem: boolean = false,
+    public permissions: Permission[] = [],
+    public createdAt?: Date,
+    public updatedAt?: Date,
+  ) {}
+
+  hasPermission(permissionName: string): boolean {
+    return this.permissions.some((p) => p.name === permissionName);
+  }
+
+  addPermission(permission: Permission): void {
+    if (!this.hasPermission(permission.name)) {
+      this.permissions.push(permission);
+    }
+  }
+}
+
+```
+
+## File: src/modules/rbac/domain/entities/user-role.entity.ts
+```
+import { Role } from './role.entity';
+
+export class UserRole {
+  constructor(
+    public userId: number,
+    public roleId: number,
+    public assignedBy?: number,
+    public expiresAt?: Date,
+    public assignedAt?: Date,
+    public role?: Role, // Optional relation
+  ) {}
+
+  isActive(): boolean {
+    if (!this.expiresAt) return true;
+    return new Date() < this.expiresAt;
+  }
+}
+
+```
+
+## File: src/modules/rbac/domain/repositories/rbac.repository.ts
+```
+import { Role } from '../entities/role.entity';
+import { Permission } from '../entities/permission.entity';
+import { UserRole } from '../entities/user-role.entity';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+// 1. Role Repository
+export const IRoleRepository = Symbol('IRoleRepository');
+export interface IRoleRepository {
+  findByName(name: string, tx?: Transaction): Promise<Role | null>;
+  save(role: Role, tx?: Transaction): Promise<Role>;
+  findAllWithPermissions(roleIds: number[], tx?: Transaction): Promise<Role[]>;
+  findAll(tx?: Transaction): Promise<Role[]>;
+
+  // ✅ THÊM MỚI
+  findInNames(names: string[], tx?: Transaction): Promise<Role[]>;
+}
+
+// 2. Permission Repository
+export const IPermissionRepository = Symbol('IPermissionRepository');
+export interface IPermissionRepository {
+  findByName(name: string, tx?: Transaction): Promise<Permission | null>;
+  save(permission: Permission, tx?: Transaction): Promise<Permission>;
+  findAll(tx?: Transaction): Promise<Permission[]>;
+}
+
+// 3. User Role Repository
+export const IUserRoleRepository = Symbol('IUserRoleRepository');
+export interface IUserRoleRepository {
+  findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]>;
+  save(userRole: UserRole, tx?: Transaction): Promise<void>;
+  findOne(
+    userId: number,
+    roleId: number,
+    tx?: Transaction,
+  ): Promise<UserRole | null>;
+  delete(userId: number, roleId: number, tx?: Transaction): Promise<void>;
+
+  // ✅ THÊM MỚI
+  saveMany(userRoles: UserRole[], tx?: Transaction): Promise<void>;
+}
+
+```
+
+## File: src/modules/rbac/rbac.module.ts
+```
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { UserModule } from '../user/user.module';
+import { RoleController } from './infrastructure/controllers/role.controller';
+import { RbacManagerController } from './infrastructure/controllers/rbac-manager.controller';
+import { PermissionService } from './application/services/permission.service';
+import { RoleService } from './application/services/role.service';
+import { RbacManagerService } from './application/services/rbac-manager.service';
+import { PermissionGuard } from './infrastructure/guards/permission.guard';
+import {
+  DrizzleRoleRepository,
+  DrizzlePermissionRepository,
+  DrizzleUserRoleRepository,
+} from './infrastructure/persistence/repositories/drizzle-rbac.repositories';
+import {
+  IRoleRepository,
+  IPermissionRepository,
+  IUserRoleRepository,
+} from './domain/repositories/rbac.repository';
+
+@Module({
+  imports: [
+    // Không cần import CacheModule nữa vì RedisCacheModule là Global
+  ],
+  controllers: [RoleController, RbacManagerController],
+  providers: [
+    PermissionService,
+    RoleService,
+    PermissionGuard,
+    RbacManagerService,
+    { provide: IRoleRepository, useClass: DrizzleRoleRepository },
+    { provide: IPermissionRepository, useClass: DrizzlePermissionRepository },
+    { provide: IUserRoleRepository, useClass: DrizzleUserRoleRepository },
+  ],
+  exports: [
+    PermissionService,
+    PermissionGuard,
+    RoleService,
+    IRoleRepository,
+    IUserRoleRepository,
+  ],
+})
+export class RbacModule { }
+
+```
+
+## File: src/modules/org-structure/org-structure.module.ts
+```
+import { Module } from '@nestjs/common';
+import { OrgStructureController } from './infrastructure/controllers/org-structure.controller';
+import { OrgStructureService } from './application/services/org-structure.service';
+import { IOrgStructureRepository } from './domain/repositories/org-structure.repository';
+import { DrizzleOrgStructureRepository } from './infrastructure/persistence/drizzle-org-structure.repository';
+import { CompanyImportController } from './infrastructure/controllers/company-import.controller';
+import { CompanyImportService } from './application/services/company-import.service';
+import { RbacModule } from '@modules/rbac/rbac.module';
+
+@Module({
+    imports: [RbacModule],
+    controllers: [OrgStructureController, CompanyImportController],
+    providers: [
+        OrgStructureService,
+        CompanyImportService,
+        {
+            provide: IOrgStructureRepository,
+            useClass: DrizzleOrgStructureRepository,
+        },
+    ],
+    exports: [OrgStructureService, IOrgStructureRepository], // Export nếu các module khác (như Employee) cần gọi
+})
+export class OrgStructureModule { }
+
+```
+
+## File: src/modules/org-structure/application/services/org-structure.service.ts
+```
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { IOrgStructureRepository } from '../../domain/repositories/org-structure.repository';
+import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../dtos/org-unit.dto';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port'; // 👉 INJECT TRANSACTION
+
+@Injectable()
+export class OrgStructureService {
+    constructor(
+        @Inject(IOrgStructureRepository) private readonly repo: IOrgStructureRepository,
+        @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
+    ) { }
+
+    // 1. TẠO MỚI (Tự động tính toán Path)
+    async createUnit(dto: CreateOrgUnitDto) {
+        return this.txManager.runInTransaction(async (tx) => {
+            let parentPath = '';
+
+            if (dto.parentId) {
+                const parent = await this.repo.findById(dto.parentId, tx);
+                if (!parent) throw new NotFoundException('Phòng ban cha không tồn tại');
+                parentPath = parent.path || '';
+            }
+
+            // Bước 1: Insert data vào DB để DB cấp ID tự động (Lúc này path = null)
+            const newUnit = await this.repo.createOrgUnit(dto, tx);
+
+            // Bước 2: Nối chuỗi tạo Path (VD: parent = /1/3/ -> path mới = /1/3/4/)
+            const newPath = dto.parentId ? `${parentPath}${newUnit.id}/` : `/${newUnit.id}/`;
+
+            // Bước 3: Update lại Path cho Unit vừa tạo
+            return this.repo.updateOrgUnit(newUnit.id, { path: newPath }, tx);
+        });
+    }
+
+    // 2. CẬP NHẬT (Xử lý thuật toán Di chuyển cành cây - Move Node)
+    async updateUnit(id: number, dto: UpdateOrgUnitDto) {
+        const unit = await this.repo.findById(id);
+        if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
+
+        return this.txManager.runInTransaction(async (tx) => {
+            // NẾU CÓ SỰ THAY ĐỔI VỀ PHÒNG BAN CHA (Move Node)
+            if (dto.parentId !== undefined && dto.parentId !== unit.parentId) {
+
+                let newParentPath = '';
+                if (dto.parentId) {
+                    const newParent = await this.repo.findById(dto.parentId, tx);
+                    if (!newParent) throw new NotFoundException('Phòng ban cha mới không tồn tại');
+
+                    // 🚨 BẢO VỆ CHẶT CHẼ: Chống lỗi vòng lặp (Vác ông nội làm con của thằng cháu)
+                    // Nếu path của cha mới bắt đầu bằng path của node hiện tại -> BÁO LỖI!
+                    if (newParent.path?.startsWith(unit.path!)) {
+                        throw new BadRequestException('Không thể di chuyển phòng ban này vào bên trong phòng ban con của chính nó!');
+                    }
+                    newParentPath = newParent.path || '';
+                }
+
+                const oldPath = unit.path!;
+                const newPath = dto.parentId ? `${newParentPath}${unit.id}/` : `/${unit.id}/`;
+
+                // Bước 1: Cập nhật thông tin node hiện tại
+                await this.repo.updateOrgUnit(id, { ...dto, path: newPath }, tx);
+
+                // Bước 2: Cập nhật Path cho TOÀN BỘ nhánh con bên dưới (Descendants)
+                await this.repo.updateDescendantsPath(oldPath, newPath, tx);
+
+            } else {
+                // Cập nhật bình thường (Đổi tên, trạng thái) không ảnh hưởng tới cây
+                await this.repo.updateOrgUnit(id, dto, tx);
+            }
+
+            return this.repo.findById(id, tx);
+        });
+    }
+
+    // 3. XÓA (Check an toàn bằng Path)
+    async deleteUnit(id: number) {
+        const unit = await this.repo.findById(id);
+        if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
+
+        // Check xem có phòng ban con nào mang path của node này không
+        const descendants = await this.repo.findDescendantsByPath(unit.path!);
+        if (descendants.length > 1) { // Lớn hơn 1 vì nó đếm cả chính nó
+            throw new BadRequestException('Không thể xóa. Có phòng ban con đang trực thuộc đơn vị này.');
+        }
+
+        await this.repo.deleteOrgUnit(id);
+        return { message: 'Xóa thành công' };
+    }
+
+    // 4. BIỂU DIỄN SỨC MẠNH CỦA PATH (API Lấy phòng ban + toàn bộ cấp dưới)
+    async getDepartmentWithAllDescendants(id: number) {
+        const unit = await this.repo.findById(id);
+        if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
+
+        // Chỉ bằng 1 câu LIKE, ta lấy được toàn bộ Sơ đồ tổ chức từ Node này trở xuống
+        const flatList = await this.repo.findDescendantsByPath(unit.path!);
+        return flatList;
+    }
+
+    // 🚀 THUẬT TOÁN VẼ CÂY SƠ ĐỒ TỔ CHỨC SIÊU TỐC
+    async getOrganizationTree() {
+        // 1. Lấy toàn bộ data dạng phẳng (Flat List) từ DB -> Cực nhanh
+        const allUnits = await this.repo.findAllActiveUnits();
+
+        // 2. Chuyển đổi thành cấu trúc Cây (Tree) trên RAM (O(N) Complexity)
+        const tree: any[] = [];
+        const lookup = new Map<number, any>();
+
+        // Khởi tạo lookup map
+        allUnits.forEach(unit => {
+            lookup.set(unit.id, { ...unit, children: [] });
+        });
+
+        // Ráp nối cha con
+        allUnits.forEach(unit => {
+            const node = lookup.get(unit.id);
+            if (unit.parentId === null) {
+                tree.push(node); // Là node gốc (Company)
+            } else {
+                const parentNode = lookup.get(unit.parentId);
+                if (parentNode) {
+                    parentNode.children.push(node);
+                }
+            }
+        });
+
+        return tree;
+    }
+
+    // HÀM MIGRATION: Cập nhật Path cho dữ liệu cũ - cái này có thể sẽ không dùng nếu là mới
+    async migrateAllNullPaths() {
+        // 1. Lấy toàn bộ phòng ban lên RAM
+        const allUnits = await this.repo.findAllActiveUnits(); // Hoặc viết hàm lấy cả unit ko active
+
+        // 2. Chuyển thành Dictionary (Map) để tra cứu cực nhanh O(1)
+        const unitMap = new Map(allUnits.map(u => [u.id, u]));
+        const calculatedPaths = new Map<number, string>(); // Lưu path đã tính
+
+        // 3. Hàm đệ quy tính Path
+        const calculatePath = (id: number): string => {
+            // Nếu đã tính rồi thì lấy ra dùng luôn (Tránh tính lại)
+            if (calculatedPaths.has(id)) return calculatedPaths.get(id)!;
+
+            const unit = unitMap.get(id);
+            if (!unit) return ''; // Trường hợp data rác, parentId trỏ đi đâu không biết
+
+            // Nếu là Root Node
+            if (!unit.parentId) {
+                const newPath = `/${unit.id}/`;
+                calculatedPaths.set(id, newPath);
+                return newPath;
+            }
+
+            // Nếu là Child Node -> Gọi đệ quy lấy Path của Cha, rồi nối ID của mình vào
+            const parentPath = calculatePath(unit.parentId);
+            const newPath = `${parentPath}${unit.id}/`;
+
+            calculatedPaths.set(id, newPath);
+            return newPath;
+        };
+
+        // 4. Bắt đầu tính toán cho tất cả
+        for (const unit of allUnits) {
+            if (!unit.path) { // Chỉ tính những thằng đang bị null
+                calculatePath(unit.id);
+            }
+        }
+
+        // 5. Cập nhật hàng loạt xuống DB (Dùng Transaction để an toàn)
+        await this.txManager.runInTransaction(async (tx) => {
+            const promises: Promise<any>[] = [];
+
+            for (const [id, newPath] of calculatedPaths.entries()) {
+                promises.push(this.repo.updateOrgUnit(id, { path: newPath }, tx));
+            }
+
+            await Promise.all(promises);
+        });
+
+        return {
+            success: true,
+            message: `Đã Migrate thành công ${calculatedPaths.size} phòng ban!`,
+            data: Object.fromEntries(calculatedPaths) // Trả về xem chơi cho vui
+        };
+    }
+}
+
+```
+
+## File: src/modules/org-structure/application/services/company-import.service.ts
+```
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { eq, inArray, and } from 'drizzle-orm';
+
+// Cấu trúc map 100% với File CSV mới
+export type CoreEmployeeCsvRow = {
+    username: string;
+    email: string;
+    fullName: string;
+    employeeCode: string;
+    locationCode: string;   // HCM, HQ
+    departmentCode: string; // Mã phòng
+    departmentName: string; // Tên phòng
+    positionName: string;   // VD: "CV-IT", "Chuyên viên B2" (Tên hiển thị trong Hình 3)
+    jobTitle: string;       // Tên chức danh chung (Trợ lý, Chuyên viên, Trưởng phòng)
+    gradeLevel: number;     // 1, 2, ..., 10
+    role: string;           // SUPER_ADMIN, STAFF...
+};
+
+@Injectable()
+export class CompanyImportService {
+    private readonly logger = new Logger(CompanyImportService.name);
+
+    constructor(
+        @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>,
+        @Inject(ITransactionManager) private txManager: ITransactionManager,
+        @Inject(IFileParser) private fileParser: IFileParser,
+    ) { }
+
+    async importCoreCompany(csvBuffer: Buffer, adminId: number) {
+        const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
+        if (!records.length) return { success: false, message: 'File CSV rỗng' };
+
+        // 1. Bóc tách dữ liệu Unique (Set/Map)
+        const locations = new Set<string>();
+        const departments = new Map<string, string>();
+        const jobTitles = new Set<string>();
+        const grades = new Set<number>();
+
+        records.forEach((r) => {
+            if (r.locationCode) locations.add(r.locationCode);
+            if (r.departmentCode) departments.set(r.departmentCode, r.departmentName);
+            if (r.jobTitle) jobTitles.add(r.jobTitle);
+            if (r.gradeLevel) grades.add(Number(r.gradeLevel));
+        });
+
+        const defaultPassword = await PasswordUtil.hash('Company@2026');
+
+        return await this.txManager.runInTransaction(async (tx: any) => {
+            const dbTx = tx as NodePgDatabase<typeof schema>;
+
+            // ==========================================
+            // BƯỚC 1: UPSERT CÁC DANH MỤC CƠ SỞ (Từ điển)
+            // ==========================================
+
+            // 1.1 Locations
+            if (locations.size > 0) {
+                await dbTx.insert(schema.locations)
+                    .values(Array.from(locations).map(l => ({ code: l, name: l })))
+                    .onConflictDoNothing({ target: schema.locations.code });
+            }
+            const locsDb = await dbTx.select().from(schema.locations).where(inArray(schema.locations.code, Array.from(locations)));
+            const locMap = new Map(locsDb.map(l => [l.code, l.id]));
+
+            // 1.2 Grades (Bậc)
+            if (grades.size > 0) {
+                await dbTx.insert(schema.grades)
+                    .values(Array.from(grades).map(g => ({ levelNumber: g, code: `BAC_${g}`, name: `Bậc ${g}` })))
+                    .onConflictDoNothing({ target: schema.grades.code });
+            }
+            const gradesDb = await dbTx.select().from(schema.grades).where(inArray(schema.grades.levelNumber, Array.from(grades)));
+            const gradeMap = new Map(gradesDb.map(g => [g.levelNumber, g.id]));
+
+            // 1.3 Job Titles (Chức danh)
+            if (jobTitles.size > 0) {
+                await dbTx.insert(schema.jobTitles)
+                    .values(Array.from(jobTitles).map(name => ({ name })))
+                    .onConflictDoNothing({ target: schema.jobTitles.name });
+            }
+            const titlesDb = await dbTx.select().from(schema.jobTitles).where(inArray(schema.jobTitles.name, Array.from(jobTitles)));
+            const titleMap = new Map(titlesDb.map(t => [t.name, t.id]));
+
+            // 1.4 Org Units (Phòng ban)
+            const orgUnitInserts = Array.from(departments.entries()).map(([code, name]) => ({
+                code, name: name || code, type: code === 'HQ' ? 'COMPANY' : 'DEPARTMENT',
+            }));
+            if (orgUnitInserts.length > 0) {
+                await dbTx.insert(schema.orgUnits).values(orgUnitInserts).onConflictDoNothing({ target: schema.orgUnits.code });
+            }
+            const orgsDb = await dbTx.select().from(schema.orgUnits).where(inArray(schema.orgUnits.code, Array.from(departments.keys())));
+            const orgMap = new Map(orgsDb.map(o => [o.code, o.id]));
+
+            // ==========================================
+            // BƯỚC 2: TỰ ĐỘNG SINH MA TRẬN VỊ TRÍ (POSITIONS)
+            // ==========================================
+            let successCount = 0;
+
+            for (const row of records) {
+                const orgId = orgMap.get(row.departmentCode);
+                const titleId = titleMap.get(row.jobTitle);
+                const gradeId = gradeMap.get(Number(row.gradeLevel));
+
+                if (!orgId || !titleId || !gradeId) continue;
+
+                // Code duy nhất cho Vị trí (VD: POS-P_DICHVU-6)
+                const posCode = `POS-${row.departmentCode}-${row.gradeLevel}`;
+
+                // Kiểm tra Vị trí đã có chưa
+                let position = await dbTx.query.positions.findFirst({
+                    where: eq(schema.positions.code, posCode)
+                });
+
+                // Nếu chưa có, tạo Vị trí (Định biên) mới
+                if (!position) {
+                    const [newPos] = await dbTx.insert(schema.positions).values({
+                        code: posCode,
+                        name: row.positionName || row.jobTitle, // Tên riêng cho vị trí (VD: CV-IT)
+                        orgUnitId: orgId,
+                        jobTitleId: titleId,
+                        gradeId: gradeId,
+                        headcountLimit: 10, // Giả sử cho phép 10 người cùng vị trí này
+                    }).returning();
+                    position = newPos;
+                }
+
+                // ==========================================
+                // BƯỚC 3: XỬ LÝ NHÂN VIÊN (USERS + EMPLOYEES)
+                // ==========================================
+                const existingUser = await dbTx.query.users.findFirst({
+                    where: eq(schema.users.username, row.username),
+                });
+
+                let userId: number;
+
+                if (!existingUser) {
+                    // A. Tạo Identity
+                    const [newUser] = await dbTx.insert(schema.users).values({
+                        username: row.username,
+                        email: row.email,
+                        hashedPassword: defaultPassword,
+                        isActive: true,
+                    }).returning({ id: schema.users.id });
+                    userId = newUser.id;
+
+                    // B. Tạo Employee Profile (Liên kết vào ĐỊA ĐIỂM và VỊ TRÍ VỪA TẠO)
+                    await dbTx.insert(schema.employees).values({
+                        userId: userId,
+                        employeeCode: row.employeeCode,
+                        fullName: row.fullName,
+                        locationId: locMap.get(row.locationCode) || null,
+                        positionId: position.id, // Bổ nhiệm vào vị trí chuẩn
+                    });
+
+                    successCount++;
+                } else {
+                    userId = existingUser.id;
+                }
+
+                // ==========================================
+                // BƯỚC 4: CẤP QUYỀN (RBAC)
+                // ==========================================
+                if (row.role) {
+                    const roleDb = await dbTx.query.roles.findFirst({ where: eq(schema.roles.name, row.role) });
+                    if (roleDb) {
+                        await dbTx.insert(schema.userRoles)
+                            .values({ userId: userId, roleId: roleDb.id, assignedBy: adminId })
+                            .onConflictDoNothing();
+                    }
+                }
+            }
+
+            return {
+                success: true,
+                message: 'Khởi tạo cấu trúc nhân sự (Ma trận vị trí) thành công!',
+                stats: { employeesImported: successCount },
+            };
+        });
+    }
+}
+
+```
+
+## File: src/modules/org-structure/application/dtos/org-unit.dto.ts
+```
+
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsIn } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class CreateOrgUnitDto {
+    @ApiPropertyOptional({
+        description: 'ID của phòng ban/đơn vị cha. Nếu để trống, đơn vị này sẽ là Node gốc (VD: Hội đồng quản trị/Tổng công ty).',
+        example: 1
+    })
+    @IsOptional()
+    @IsNumber()
+    parentId?: number;
+
+    @ApiProperty({
+        description: 'Loại hình đơn vị tổ chức. Phải thuộc 1 trong 4 loại đã cho.',
+        enum: ['COMPANY', 'BRANCH', 'DEPARTMENT', 'TEAM'],
+        example: 'DEPARTMENT'
+    })
+    @IsNotEmpty()
+    @IsString()
+    @IsIn(['COMPANY', 'BRANCH', 'DEPARTMENT', 'TEAM'])
+    type: string;
+
+    @ApiProperty({
+        description: 'Mã định danh duy nhất của phòng ban (viết liền không dấu).',
+        example: 'PB-TECH'
+    })
+    @IsNotEmpty()
+    @IsString()
+    code: string;
+
+    @ApiProperty({
+        description: 'Tên hiển thị của phòng ban/đơn vị.',
+        example: 'Phòng Công Nghệ Thông Tin'
+    })
+    @IsNotEmpty()
+    @IsString()
+    name: string;
+}
+
+export class UpdateOrgUnitDto {
+    @ApiPropertyOptional({
+        description: 'Tên hiển thị mới của phòng ban.',
+        example: 'Phòng Phát triển Phần mềm'
+    })
+    @IsOptional()
+    @IsString()
+    name?: string;
+
+    @ApiPropertyOptional({
+        description: 'Trạng thái hoạt động. Gửi false để đánh dấu phòng ban đã bị giải thể (không xóa khỏi DB).',
+        example: false
+    })
+    @IsOptional()
+    @IsBoolean()
+    isActive?: boolean;
+
+    @ApiPropertyOptional({
+        description: 'Gán cho đơn vị hiện tại phụ thuộc vào đơn vị cha.',
+        example: 1
+    })
+    @IsOptional()
+    @IsNumber()
+    parentId?: number;
+}
+
+```
+
+## File: src/modules/org-structure/infrastructure/controllers/company-import.controller.ts
+```
+import { Controller, Post, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { CompanyImportService } from '../../application/services/company-import.service';
+
+@ApiTags('Company Setup (Khởi tạo hệ thống)')
+@ApiBearerAuth()
+@Controller('company/setup')
+@UseGuards(JwtAuthGuard, PermissionGuard)
+export class CompanyImportController {
+    constructor(private readonly importService: CompanyImportService) { }
+
+    @ApiOperation({ summary: 'Khởi tạo Nhân sự Chủ chốt từ file CSV (Production)' })
+    @ApiConsumes('multipart/form-data')
+    @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+    @Post('import-core-employees')
+    @Permissions('system:config') // Yêu cầu quyền cấu hình hệ thống cao nhất
+    @UseInterceptors(FileInterceptor('file'))
+    async importCoreCompany(
+        @UploadedFile() file: Express.Multer.File,
+        @CurrentUser() admin: User
+    ) {
+        if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
+        if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
+
+        // Gọi Service xử lý
+        const result = await this.importService.importCoreCompany(file.buffer, admin.id!);
+        return result;
+    }
+}
+
+```
+
+## File: src/modules/org-structure/infrastructure/controllers/org-structure.controller.ts
+```
+import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
+import { OrgStructureService } from '../../application/services/org-structure.service';
+import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../../application/dtos/org-unit.dto';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { ORG_PERMISSIONS } from '@modules/org-structure/domain/constants/org.permissions';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
+
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
+@ApiTags('Organization Structure (Cơ cấu tổ chức)') // Gom nhóm API trên Swagger
+@Controller('org-structure')
+export class OrgStructureController {
+    constructor(private readonly orgService: OrgStructureService) { }
+
+    @Get('tree')
+    @Permissions(ORG_PERMISSIONS.READ) //'org:read'
+    @ApiOperation({
+        summary: 'Lấy toàn bộ sơ đồ tổ chức (Organization Tree)',
+        description: 'Trả về dữ liệu cây phân cấp (Hierarchical Tree) của toàn bộ công ty. Các phòng ban con được chứa trong mảng `children`.'
+    })
+    @ApiResponse({
+        status: 200,
+        description: 'Cây sơ đồ tổ chức trả về thành công.',
+        // Optional: Bạn có thể viết hardcode 1 example response nếu muốn Swagger hiển thị cực đẹp
+        schema: {
+            example: {
+                data: [
+                    {
+                        "id": 1,
+                        "parentId": null,
+                        "type": "COMPANY",
+                        "code": "HQ",
+                        "name": "Trụ sở chính",
+                        "isActive": true,
+                        "children": [
+                            {
+                                "id": 2,
+                                "parentId": 1,
+                                "type": "DEPARTMENT",
+                                "code": "PB-TECH",
+                                "name": "Phòng Công Nghệ",
+                                "isActive": true,
+                                "children": []
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    })
+    async getOrgTree() {
+        return this.orgService.getOrganizationTree();
+    }
+
+    @Post('units')
+    @Permissions(ORG_PERMISSIONS.MANAGE)// @Permissions('org:create')
+    @ApiOperation({
+        summary: 'Tạo mới một Đơn vị/Phòng ban',
+        description: 'Thêm một phòng ban hoặc chi nhánh mới vào sơ đồ tổ chức. Truyền `parentId` nếu nó trực thuộc một phòng ban khác.'
+    })
+    @ApiBody({ type: CreateOrgUnitDto }) // Liên kết với DTO
+    @ApiResponse({ status: 201, description: 'Phòng ban được tạo thành công.' })
+    @ApiResponse({ status: 400, description: 'Dữ liệu đầu vào không hợp lệ (Validation Error).' })
+    @ApiResponse({ status: 404, description: 'Phòng ban cha (parentId) không tồn tại.' })
+    async createUnit(@Body() dto: CreateOrgUnitDto) {
+        return this.orgService.createUnit(dto);
+    }
+
+    @Patch('units/:id')
+    @Permissions(ORG_PERMISSIONS.UPDATE) // @Permissions('org:update')
+    @ApiOperation({ summary: 'Cập nhật thông tin Phòng ban' })
+    @ApiParam({ name: 'id', description: 'ID của phòng ban cần cập nhật', example: 2 })
+    @ApiBody({ type: UpdateOrgUnitDto })
+    @ApiResponse({ status: 200, description: 'Cập nhật thành công.' })
+    @ApiResponse({ status: 404, description: 'Không tìm thấy phòng ban với ID cung cấp.' })
+    async updateUnit(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateOrgUnitDto) {
+        return this.orgService.updateUnit(id, dto);
+    }
+
+    @Delete('units/:id')
+    // @Permissions('org:delete')
+    @ApiOperation({
+        summary: 'Xóa Phòng ban',
+        description: 'Lưu ý: Không thể xóa một phòng ban nếu nó đang chứa các phòng ban con (nhóm con) bên trong do ràng buộc khóa ngoại (Hard FK).'
+    })
+    @ApiParam({ name: 'id', description: 'ID của phòng ban cần xóa', example: 2 })
+    @ApiResponse({ status: 200, description: 'Xóa thành công.' })
+    @ApiResponse({ status: 400, description: 'Không thể xóa (Thường do đang chứa phòng ban con).' })
+    async deleteUnit(@Param('id', ParseIntPipe) id: number) {
+        return this.orgService.deleteUnit(id);
+    }
+
+    @Post('tools/migrate-paths')
+    @Permissions(PERMISSIONS.SYSTEM_CONFIG)
+    @ApiOperation({ summary: 'Tool chạy 1 lần: Tự động tính toán trường path cho data cũ' })
+    async runMigration() {
+        return this.orgService.migrateAllNullPaths();
+    }
+}
+
+```
+
+## File: src/modules/org-structure/infrastructure/persistence/drizzle-org-structure.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq, and, sql, like } from 'drizzle-orm';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { IOrgStructureRepository, OrgUnitEntity, PositionEntity } from '../../domain/repositories/org-structure.repository';
+import { orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
+
+    async createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity> {
+        const db = this.getDb(tx);
+        const [result] = await db.insert(orgUnits).values(data as any).returning();
+        return result as OrgUnitEntity;
+    }
+
+    async updateOrgUnit(id: number, data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity | null> {
+        const db = this.getDb(tx);
+        const [result] = await db
+            .update(orgUnits)
+            .set({ ...data, updatedAt: new Date() })
+            .where(eq(orgUnits.id, id))
+            .returning();
+        return result ? (result as OrgUnitEntity) : null;
+    }
+
+    // 🚀 MAGIC Ở ĐÂY: Update Path hàng loạt cho nhánh con bằng SQL REPLACE
+    async updateDescendantsPath(oldPath: string, newPath: string, tx?: Transaction): Promise<void> {
+        const db = this.getDb(tx);
+        await db.update(orgUnits)
+            .set({
+                // SQL: REPLACE(path, '/1/3/', '/1/5/3/')
+                path: sql`REPLACE(${orgUnits.path}, ${oldPath}, ${newPath})`,
+                updatedAt: new Date(),
+            })
+            // Chỉ tác động vào những node bắt đầu bằng oldPath (Cây con)
+            .where(like(orgUnits.path, `${oldPath}%`));
+    }
+
+    // 🚀 LẤY TOÀN BỘ CÂY CON CỰC NHANH VỚI MỆNH ĐỀ LIKE
+    async findDescendantsByPath(path: string): Promise<OrgUnitEntity[]> {
+        const db = this.getDb();
+        return await db.select()
+            .from(orgUnits)
+            .where(like(orgUnits.path, `${path}%`));
+    }
+
+    async deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean> {
+        const db = this.getDb(tx);
+        try {
+            // Sẽ báo lỗi nếu phòng này đang được làm parentId của phòng khác (do có FK)
+            await db.delete(orgUnits).where(eq(orgUnits.id, id));
+            return true;
+        } catch (error) {
+            return false; // Thường là lỗi vi phạm khóa ngoại
+        }
+    }
+
+    async findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null> {
+        const db = this.getDb(tx);
+        const result = await db.select().from(orgUnits).where(eq(orgUnits.id, id)).limit(1);
+        return result[0] ? (result[0] as OrgUnitEntity) : null;
+    }
+
+    async findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null> {
+        const db = this.getDb(tx);
+        const result = await db.select()
+            .from(positions)
+            .where(eq(positions.id, id))
+            .limit(1);
+
+        return result[0] ? (result[0] as PositionEntity) : null;
+    }
+
+    async findAllActiveUnits(): Promise<OrgUnitEntity[]> {
+        const db = this.getDb();
+        return await db.select().from(orgUnits).where(eq(orgUnits.isActive, true));
+
+    }
+}
+
+```
+
+## File: src/modules/org-structure/domain/constants/org.permissions.ts
+```
+export const ORG_PERMISSIONS = {
+    MANAGE: 'org:manage',
+    READ: 'org:read',
+    UPDATE: 'org:update',
+} as const;
+
+```
+
+## File: src/modules/org-structure/domain/repositories/org-structure.repository.ts
+```
+import { Transaction } from "@core/shared/application/ports/transaction-manager.port";
+
+export const IOrgStructureRepository = Symbol('IOrgStructureRepository');
+
+export interface OrgUnitEntity {
+    id: number;
+    parentId: number | null;
+    path: string | null;
+    type: string;
+    code: string;
+    name: string;
+    isActive: boolean | null;
+
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+
+// Bổ sung Type cho Vị trí định biên (Position)
+export interface PositionEntity {
+    id: number;
+    code: string;
+    name: string;
+    orgUnitId: number;
+    jobTitleId: number;
+    gradeId: number;
+    headcountLimit: number | null;
+    isActive: boolean | null;
+}
+
+export interface IOrgStructureRepository {
+    createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity>;
+    updateOrgUnit(id: number, data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity | null>;
+    deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean>;
+    findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null>;
+
+    findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null>;
+
+    // 1. Cập nhật Path cho toàn bộ cây con khi Phòng ban cha bị di chuyển
+    updateDescendantsPath(oldPath: string, newPath: string, tx?: Transaction): Promise<void>;
+
+    // 2. Lấy toàn bộ phòng ban con, cháu chắt (Flat list)
+    findDescendantsByPath(path: string): Promise<OrgUnitEntity[]>;
+
+    // Lấy toàn bộ danh sách phòng ban (phục vụ việc vẽ cây)
+    findAllActiveUnits(): Promise<OrgUnitEntity[]>;
+}
+
+```
+
+## File: src/modules/chatbot-core/chatbot-core.module.ts
+```
+import { Global, Module } from '@nestjs/common';
+import { TelegrafModule } from 'nestjs-telegraf';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+// ❌ XÓA IMPORT NÀY: import { session } from 'telegraf'; 
+// ✅ Bỏ import * as, dùng require để bypass lỗi TypeScript
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const RedisSession = require('telegraf-session-redis');
+
+import { AuthModule } from '../auth/auth.module';
+import { AuthChatbotHandler } from '@modules/auth/infrastructure/chatbot/auth.chatbot';
+import { IChatbotService } from '@core/shared/application/ports/chatbot.port';
+import { TelegrafChatbotAdapter } from './infrastructure/telegraf-chatbot.adapter';
+import { UserModule } from '@modules/user/user.module';
+
+@Global()
+@Module({
+    imports: [
+        TelegrafModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: (configService: ConfigService) => {
+
+                // 1. Lấy thông tin Redis từ config
+                const uri = configService.get<string>('redis.uri');
+                const host = configService.get<string>('redis.host');
+                const port = configService.get<number>('redis.port');
+                const password = configService.get<string>('redis.password');
+
+                // 2. Khởi tạo cấu hình kết nối cho Redis Session
+                let redisUrl = uri;
+                if (!redisUrl) {
+                    // Fallback tự build URL nếu dùng host/port (Local Docker)
+                    redisUrl = password
+                        ? `redis://:${password}@${host}:${port}`
+                        : `redis://${host}:${port}`;
+                }
+
+                // 3. Khởi tạo Store Redis cho Telegraf
+                const redisSession = new RedisSession({
+                    store: { url: redisUrl },
+                    property: 'session',
+                    ttl: 86400, // Session hết hạn sau 1 ngày (tùy chỉnh)
+                });
+
+                return {
+                    token: configService.get<string>('TELEGRAM_BOT_TOKEN'),
+                    // ✅ Thay session() bằng middleware của Redis
+                    middlewares: [redisSession.middleware()],
+                    options: {
+                        telegram: {
+                            apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'http://localhost:8081'
+                        }
+                    }
+                };
+            },
+            inject: [ConfigService],
+        }),
+        AuthModule,
+        UserModule,
+    ],
+    providers: [
+        AuthChatbotHandler,
+        TelegrafChatbotAdapter,
+        {
+            provide: IChatbotService,
+            useClass: TelegrafChatbotAdapter
+        }
+    ],
+    exports: [TelegrafModule, IChatbotService],
+})
+export class ChatbotCoreModule { }
+
+```
+
+## File: src/modules/chatbot-core/infrastructure/telegraf-chatbot.adapter.ts
+```
+import { Injectable } from '@nestjs/common';
+import { InjectBot } from 'nestjs-telegraf';
+import { Context, Telegraf } from 'telegraf';
+import { IChatbotService } from '@core/shared/application/ports/chatbot.port';
+
+@Injectable()
+export class TelegrafChatbotAdapter implements IChatbotService {
+    constructor(@InjectBot() private bot: Telegraf<Context>) { }
+
+    async sendMessage(chatId: string, message: string): Promise<void> {
+        await this.bot.telegram.sendMessage(chatId, message);
+    }
+
+    async sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<void> {
+        await this.bot.telegram.sendPhoto(chatId, photoUrl, { caption });
+    }
+}
+
+```
+
+## File: src/modules/auth/auth.module.ts
+```
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { UserModule } from '../user/user.module';
+import { AuthenticationService } from './application/services/authentication.service';
+import { JwtStrategy } from './infrastructure/strategies/jwt.strategy';
+import { JwtAuthGuard } from './infrastructure/guards/jwt-auth.guard';
+import { AuthController } from './infrastructure/controllers/auth.controller';
+import { DrizzleSessionRepository } from './infrastructure/persistence/drizzle-session.repository';
+import { ISessionRepository } from './domain/repositories/session.repository';
+
+@Module({
+  imports: [
+    UserModule,
+    PassportModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get('JWT_SECRET') || 'secret',
+        signOptions: { expiresIn: '1d' },
+      }),
+      inject: [ConfigService],
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [
+    AuthenticationService,
+    JwtStrategy,
+    JwtAuthGuard,
+    { provide: ISessionRepository, useClass: DrizzleSessionRepository },
+  ],
+  exports: [JwtAuthGuard, AuthenticationService, JwtModule],
+})
+export class AuthModule {}
+
+```
+
+## File: src/modules/auth/application/services/authentication.service.ts
+```
+import {
+  Injectable,
+  Inject,
+  UnauthorizedException,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
+import { ISessionRepository } from '../../domain/repositories/session.repository';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
+import { PasswordUtil } from '@core/shared/utils/password.util';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { Session } from '../../domain/entities/session.entity';
+import { JwtPayload } from '@core/shared/types/common.types';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { UserCreatedEvent } from '@modules/user/domain/events/user-created.event';
+import {
+  type ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
+import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
+
+export type AuthResponse = {
+  accessToken: string;
+  user: ReturnType<User['toJSON']>;
+};
+
+@Injectable()
+export class AuthenticationService {
+  constructor(
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+    @Inject(ISessionRepository) private sessionRepository: ISessionRepository,
+    @Inject(ITransactionManager) private txManager: ITransactionManager,
+    @Inject(IEventBus) private eventBus: IEventBus,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    @Inject(ICacheService) private readonly cacheService: ICacheService,
+    private jwtService: JwtService,
+  ) { }
+
+  // =========================================================================
+  // 1. NÂNG CẤP LOGIN (Lưu vào DB + Redis)
+  // =========================================================================
+  async login(credentials: { username: string; password: string; ip?: string; userAgent?: string; }): Promise<AuthResponse> {
+    const user = await this.userRepository.findByUsername(credentials.username);
+
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid credentials');
+    if (!user.hashedPassword) throw new UnauthorizedException('Password not set');
+
+    const isValid = await PasswordUtil.compare(credentials.password, user.hashedPassword);
+    if (!isValid) throw new UnauthorizedException('Invalid credentials');
+    if (!user.id) throw new InternalServerErrorException('User ID is missing');
+
+    const payload: JwtPayload = {
+      sub: user.id,
+      username: user.username,
+      roles: user.roles || []
+    };
+    const accessToken = this.jwtService.sign(payload);
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1); // Token sống 1 ngày
+
+    // A. Lưu vào Database (PostgreSQL)
+    const session = new Session(undefined, user.id, accessToken, expiresAt, credentials.ip, credentials.userAgent, new Date());
+    await this.sessionRepository.create(session);
+
+    // B. 👉 Lưu vào Redis (Tính TTL theo giây để Redis tự động xóa khi hết hạn)
+    const ttlInSeconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+    const redisKey = `auth:session:${accessToken}`;
+    // Lưu một object nhỏ (chứa userId) để tăng tốc độ truy xuất sau này
+    await this.cacheService.set(redisKey, { userId: user.id }, ttlInSeconds);
+
+    return { accessToken, user: user.toJSON() };
+  }
+
+  // =========================================================================
+  // 2. NÂNG CẤP LOGOUT (Xóa khỏi DB + Redis)
+  // =========================================================================
+  async logout(token: string): Promise<void> {
+    const redisKey = `auth:session:${token}`;
+
+    // Xóa song song trên cả 2 hệ thống để tối ưu tốc độ
+    await Promise.all([
+      this.cacheService.del(redisKey),             // Xóa Cache
+      this.sessionRepository.deleteByToken(token)  // Xóa DB
+    ]);
+  }
+
+  // =========================================================================
+  // 3. THÊM HÀM MỚI: KIỂM TRA TOKEN (Redis -> DB -> Restore Redis)
+  // =========================================================================
+  async validateTokenAndGetUserId(token: string): Promise<number | null> {
+    const redisKey = `auth:session:${token}`;
+
+    // LỚP 1: TÌM TRONG REDIS (Tốc độ mili-giây)
+    const cachedSession = await this.cacheService.get<{ userId: number }>(redisKey);
+    if (cachedSession) {
+      return cachedSession.userId; // Trả về luôn, kết thúc hành trình!
+    }
+
+    // LỚP 2: NẾU REDIS KHÔNG CÓ (Có thể do Redis bị restart/clear cache) -> MÒ XUỐNG DB
+    const session = await this.sessionRepository.findByToken(token);
+    if (!session || session.isExpired()) {
+      return null; // Token sai, đã bị xóa hoặc hết hạn
+    }
+
+    // LỚP 3: PHỤC HỒI LẠI CACHE (Warming Cache)
+    // Để các request mili-giây tiếp theo của user này không cần xuống DB nữa
+    const ttlInSeconds = Math.floor((session.expiresAt.getTime() - Date.now()) / 1000);
+    if (ttlInSeconds > 0) {
+      await this.cacheService.set(redisKey, { userId: session.userId }, ttlInSeconds);
+    }
+
+    return session.userId;
+  }
+
+  // ✅ THÊM HÀM NÀY CHO CHATBOT
+  async validateCredentials(username: string, password: string): Promise<User | null> {
+    // 1. Tìm user (Lưu ý: LoginDto của bạn dùng username, Chatbot đang nhập email -> Cần thống nhất)
+    // Ở đây mình giả định dùng username cho khớp hệ thống
+    const user = await this.userRepository.findByUsername(username);
+
+    if (!user || !user.isActive || !user.hashedPassword) return null;
+
+    // 2. Check pass
+    const isValid = await PasswordUtil.compare(password, user.hashedPassword);
+
+    return isValid ? user : null;
+  }
+
+  async validateUser(
+    payload: JwtPayload,
+  ): Promise<ReturnType<User['toJSON']> | null> {
+    const user = await this.userRepository.findById(payload.sub);
+    if (!user || !user.isActive) return null;
+    return user.toJSON();
+  }
+
+  async register(data: RegisterDto): Promise<AuthResponse> {
+    const existing = await this.userRepository.findByUsername(data.username);
+    if (existing) throw new BadRequestException('User already exists');
+
+    const hashedPassword = await PasswordUtil.hash(data.password);
+
+    const newUser = new User({
+      id: data.id,
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      fullName: data.fullName,
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    return this.txManager.runInTransaction(async (tx) => {
+      const savedUser = await this.userRepository.save(newUser, tx);
+      if (!savedUser.id)
+        throw new InternalServerErrorException('Failed to generate User ID');
+
+      this.logger.info('Register:::');
+
+      const payload: JwtPayload = {
+        sub: savedUser.id,
+        username: savedUser.username,
+        roles: [],
+      };
+      const accessToken = this.jwtService.sign(payload);
+
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 1);
+
+      const session = new Session(
+        undefined,
+        savedUser.id,
+        accessToken,
+        expiresAt,
+        undefined,
+        undefined,
+        new Date(),
+      );
+
+      await this.sessionRepository.create(session, tx);
+
+      // Publish Event inside transaction (or use Outbox pattern for better reliability)
+      await this.eventBus.publish(
+        new UserCreatedEvent(String(savedUser.id), { user: savedUser }),
+      );
+
+      return { accessToken, user: savedUser.toJSON() };
+    });
+  }
+
+  // =========================================================================
+  // 4. ĐỔI MẬT KHẨU (Dành cho User đang đăng nhập)
+  // =========================================================================
+  async changePassword(userId: number, dto: any): Promise<void> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || !user.hashedPassword) throw new BadRequestException('User không hợp lệ');
+
+    // Kiểm tra mật khẩu cũ
+    const isMatch = await PasswordUtil.compare(dto.oldPassword, user.hashedPassword);
+    if (!isMatch) throw new BadRequestException('Mật khẩu cũ không chính xác');
+
+    // Hash mật khẩu mới và gọi hàm của Rich Domain Entity
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew); // Logic đổi trạng thái nằm gọn trong Entity
+
+    await this.txManager.runInTransaction(async (tx) => {
+      // 1. Lưu user
+      await this.userRepository.save(user, tx);
+
+      // 2. Bảo mật: Xóa toàn bộ Session cũ trong DB để ép các thiết bị khác văng ra (Đăng xuất khỏi mọi nơi)
+      await this.sessionRepository.deleteByUserId(userId);
+    });
+  }
+
+  // =========================================================================
+  // 5. QUÊN MẬT KHẨU (Gửi OTP)
+  // =========================================================================
+  async forgotPassword(email: string): Promise<void> {
+    const user = await this.userRepository.findByEmail(email);
+
+    // Bảo mật: Không ném lỗi NotFound để tránh hacker dò quét email trong hệ thống
+    if (!user || !user.isActive) return;
+
+    // Sinh OTP 6 số ngẫu nhiên
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Lưu vào Redis (TTL 5 phút = 300 giây)
+    const redisKey = `auth:otp:${email}`;
+    await this.cacheService.set(redisKey, otpCode, 300);
+
+    // Bắn Event để NotificationModule lo việc gửi Email
+    await this.eventBus.publish(
+      new OtpRequestedEvent(email, {
+        email: user.email!,
+        fullName: user.fullName || 'Người dùng',
+        otpCode: otpCode,
+      })
+    );
+  }
+
+  // =========================================================================
+  // 6. ĐẶT LẠI MẬT KHẨU (Xác thực OTP)
+  // =========================================================================
+  async resetPassword(dto: any): Promise<void> {
+    const redisKey = `auth:otp:${dto.email}`;
+    const cachedOtp = await this.cacheService.get<string>(redisKey);
+
+    if (!cachedOtp || cachedOtp !== dto.otp) {
+      throw new BadRequestException('Mã OTP không hợp lệ hoặc đã hết hạn');
+    }
+
+    const user = await this.userRepository.findByEmail(dto.email);
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    // Cập nhật mật khẩu mới
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew);
+
+    await this.txManager.runInTransaction(async (tx) => {
+      await this.userRepository.save(user, tx);
+      await this.sessionRepository.deleteByUserId(user.id); // Xóa session cũ
+    });
+
+    // Hủy OTP trong Redis sau khi dùng thành công
+    await this.cacheService.del(redisKey);
+  }
+
+}
+
+```
+
+## File: src/modules/auth/infrastructure/chatbot/auth.chatbot.ts
+```
+
+import { Update, Ctx, Command } from 'nestjs-telegraf';
+import { Context } from 'telegraf';
+import { Injectable, Inject } from '@nestjs/common';
+import { AuthenticationService } from '../../application/services/authentication.service';
+// ✅ Import Symbol IUserRepository
+import { IUserRepository } from '../../../user/domain/repositories/user.repository';
+
+@Update()
+@Injectable()
+export class AuthChatbotHandler {
+    constructor(
+        private readonly authService: AuthenticationService,
+        // ✅ Sửa lại dùng Symbol thay vì String
+        @Inject(IUserRepository) private readonly userRepo: IUserRepository,
+    ) { }
+
+    @Command('login')
+    async onLogin(@Ctx() ctx: Context) {
+        // @ts-ignore
+        const text = ctx.message?.text || '';
+        const args = text.split(' ');
+
+        // Cú pháp: /login <username> <password>
+        if (args.length !== 3) {
+            ctx.reply('⚠️ Cú pháp sai! Vui lòng nhập: /login <username> <password>');
+            return;
+        }
+
+        const username = args[1];
+        const password = args[2];
+        const telegramId = String(ctx.from?.id);
+
+        try {
+            // ✅ Gọi hàm mới tạo ở Bước 1
+            const user = await this.authService.validateCredentials(username, password);
+
+            if (!user) {
+
+                ctx.reply('❌ Tên đăng nhập hoặc mật khẩu không đúng.');
+
+                return;
+            }
+
+            // ✅ Kiểm tra userRepo phải có hàm này
+            if (this.userRepo.updateTelegramId) {
+                await this.userRepo.updateTelegramId(String(user.id), telegramId);
+                ctx.reply(`✅ Đăng nhập thành công! Xin chào ${user.fullName}.\nUser ID của bạn đã liên kết với Telegram này.`);
+            } else {
+                ctx.reply('❌ Lỗi hệ thống: Repository chưa hỗ trợ update Telegram ID.');
+            }
+            return;
+
+        } catch (error) {
+            console.error(error);
+            ctx.reply('❌ Có lỗi xảy ra khi đăng nhập.');
+            return;
+        }
+    }
+
+    @Command('logout')
+    async onLogout(@Ctx() ctx: Context) {
+        const telegramId = String(ctx.from?.id);
+
+        if (this.userRepo.removeTelegramId) {
+            await this.userRepo.removeTelegramId(telegramId);
+            ctx.reply('👋 Đã hủy liên kết tài khoản thành công.');
+            return;
+        }
+        ctx.reply('❌ Lỗi hệ thống: Repository chưa hỗ trợ tính năng này.');
+        return;
+    }
+
+    @Command('me')
+    async onMe(@Ctx() ctx: Context) {
+        const telegramId = String(ctx.from?.id);
+
+        // ✅ Cần đảm bảo userRepo có hàm này
+        const user = await this.userRepo.findByTelegramId?.(telegramId);
+
+        if (!user) {
+            await ctx.reply('❓ Bạn chưa đăng nhập. Dùng /login để bắt đầu.');
+            return;
+        }
+
+        await ctx.reply(`👤 Thông tin:\n- Tên: ${user.fullName}\n- Username: ${user.username}\n- Role: ${user.roles || 'N/A'}`);
+        return;
+    }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/controllers/auth.controller.ts
+```
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Get,
+  Req,
+  Ip,
+  BadRequestException,
+} from '@nestjs/common';
+import { AuthenticationService } from '../../application/services/authentication.service';
+import { Public } from '../decorators/public.decorator';
+import { JwtAuthGuard } from '../guards/jwt-auth.guard';
+import { CurrentUser } from '../decorators/current-user.decorator';
+import { User } from '../../../user/domain/entities/user.entity';
+import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto } from '../dtos/auth.dto';
+import type { Request } from 'express'; // Import Request
+import { ApiBearerAuth } from '@nestjs/swagger';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private authService: AuthenticationService) { }
+
+  @Public()
+  @Post('login')
+  async login(
+    @Body() credentials: LoginDto,
+    @Ip() ip: string,
+    @Req() request: Request, // Lấy User Agent từ Request
+  ) {
+    return this.authService.login({
+      ...credentials,
+      ip: ip,
+      userAgent: request.headers['user-agent'],
+    });
+  }
+
+  @Public()
+  @Post('register')
+  async register(@Body() data: RegisterDto) {
+    return this.authService.register(data);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('profile')
+  async getProfile(@CurrentUser() user: User) {
+    //
+    const data = user.toString()
+    return user.toJSON()
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() request: Request) {
+    // Lấy token từ header gửi lên
+    const token = request.headers.authorization?.split(' ')[1];
+    if (token) {
+      await this.authService.logout(token);
+    }
+    return { success: true, message: 'Đăng xuất thành công' };
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  async changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {
+    if (!user.id) throw new BadRequestException('Lỗi định danh User');
+    await this.authService.changePassword(user.id, dto);
+    return { success: true, message: 'Đổi mật khẩu thành công. Vui lòng đăng nhập lại.' };
+  }
+
+  @Public() // Không cần đăng nhập
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+    // Luôn trả về thông báo chung chung để chống Hacker dò email
+    return { success: true, message: 'Nếu email tồn tại trong hệ thống, mã OTP đã được gửi đến bạn.' };
+  }
+
+  @Public() // Không cần đăng nhập
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto);
+    return { success: true, message: 'Đặt lại mật khẩu thành công. Bạn có thể đăng nhập ngay.' };
+  }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/dtos/auth.dto.ts
+```
+import {
+  IsString,
+  Length,
+  MinLength,
+  IsNumber,
+  IsOptional,
+  IsEmail,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export class LoginDto {
+  @ApiProperty({ example: 'superadmin', description: 'Username for login' })
+  @IsString()
+  username: string;
+
+  @ApiProperty({
+    example: 'SuperAdmin123!',
+    description: 'Password (min 6 chars)',
+  })
+  @IsString()
+  @MinLength(6)
+  password: string;
+}
+
+export class RegisterDto {
+  @ApiProperty({ example: 12345, description: 'User ID (BigInt)' })
+  @IsNumber()
+  id: number;
+
+  @ApiProperty({ example: 'newuser', description: 'Unique username' })
+  @IsString()
+  username: string;
+
+  @ApiProperty({ example: 'StrongP@ss1', description: 'Strong password' })
+  @IsString()
+  @MinLength(6)
+  password: string;
+
+  @ApiProperty({ example: 'Nguyen Van A', description: 'Full Name' })
+  @IsString()
+  fullName: string;
+
+  @ApiPropertyOptional({ example: 'user@example.com' })
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+}
+
+export class ChangePasswordDto {
+  @ApiProperty({ example: 'OldPass123!' })
+  @IsString()
+  oldPassword: string;
+
+  @ApiProperty({ example: 'NewPass123!', description: 'Mật khẩu mới (Tối thiểu 6 ký tự)' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'user@test.com', description: 'Email đã đăng ký tài khoản' })
+  @IsEmail()
+  email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ example: 'user@test.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ example: '123456', description: 'Mã OTP 6 số nhận từ Email' })
+  @IsString()
+  @Length(6, 6)
+  otp: string;
+
+  @ApiProperty({ example: 'NewPass123!' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+```
+
+## File: src/modules/auth/infrastructure/decorators/public.decorator.ts
+```
+import { SetMetadata } from '@nestjs/common';
+
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
+```
+
+## File: src/modules/auth/infrastructure/decorators/current-user.decorator.ts
+```
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+import { User } from '../../../user/domain/entities/user.entity';
+
+export const CurrentUser = createParamDecorator(
+  // 1. Thêm dấu _ trước data để báo cho TS biết biến này "cố tình" không dùng
+  (_data: unknown, ctx: ExecutionContext) => {
+    // 2. Ép kiểu Generic cho getRequest để TS biết request này là Object, không phải 'any'
+    // { user: any } nghĩa là: Tao cam kết request này có thuộc tính user
+    const request = ctx.switchToHttp().getRequest<{ user: User }>();
+
+    return request.user;
+  },
+);
+
+// export const CurrentUserOld = createParamDecorator(
+//   (data: unknown, ctx: ExecutionContext) => {
+//     const request = ctx.switchToHttp().getRequest();
+//     return request.user;
+//   },
+// );
+
+```
+
+## File: src/modules/auth/infrastructure/strategies/jwt.strategy.ts
+```
+import { Injectable, Inject, UnauthorizedException } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+import { Request } from 'express';
+
+import { IUserRepository } from '../../../user/domain/repositories/user.repository';
+import { AuthenticationService } from '../../application/services/authentication.service'; // 👉 Inject Service
+import { JwtPayload } from '@core/shared/types/common.types';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(
+    private configService: ConfigService,
+    @Inject(IUserRepository) private userRepository: IUserRepository,
+    private authService: AuthenticationService, // 👉 Sử dụng AuthService thay vì Repo
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: configService.get('JWT_SECRET') || 'secret',
+      passReqToCallback: true, // Lấy nguyên Request để tách Token
+    });
+  }
+
+  async validate(req: Request, payload: JwtPayload) {
+    // 1. Trích xuất Raw Token từ Header (Bearer xxxxx)
+    const authHeader = req.headers.authorization;
+    if (!authHeader) throw new UnauthorizedException('Thiếu Token');
+    const token = authHeader.split(' ')[1];
+
+    // 2. 👉 KIỂM TRA BẢO MẬT XUYÊN THẤU (Redis -> Postgres)
+    const validUserId = await this.authService.validateTokenAndGetUserId(token);
+
+    // Nếu trả về null tức là token đã bị thu hồi/xóa ở mọi mặt trận
+    if (!validUserId) {
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn hoặc bị thu hồi (Revoked)');
+    }
+
+    // 3. Kiểm tra User tồn tại và đang Active (Bảo mật 2 lớp)
+    // Lưu ý: Có thể cân nhắc cache luôn thông tin User này ở Redis nếu muốn tối ưu tuyệt đối
+    const user = await this.userRepository.findById(validUserId);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Tài khoản đã bị khóa hoặc không tồn tại');
+    }
+
+    return user
+  }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/persistence/drizzle-session.repository.ts
+```
+import { Injectable } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
+// FIX IMPORT
+import { ISessionRepository } from '../../domain/repositories/session.repository';
+import { Session } from '../../domain/entities/session.entity';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { sessions } from '@database/schema';
+import { SessionMapper } from './mappers/session.mapper';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+@Injectable()
+export class DrizzleSessionRepository
+  extends DrizzleBaseRepository
+  implements ISessionRepository {
+  async create(session: Session, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    const data = SessionMapper.toPersistence(session);
+
+    if (data.id) {
+      await db.insert(sessions).values(data as any);
+    } else {
+      const { id, ...insertData } = data;
+      await db
+        .insert(sessions)
+        .values(insertData as typeof sessions.$inferInsert);
+    }
+  }
+
+  async findByUserId(userId: number): Promise<Session[]> {
+    const results = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.userId, userId));
+    return results.map((r) => SessionMapper.toDomain(r)!);
+  }
+
+  async deleteByUserId(userId: number): Promise<void> {
+    await this.db.delete(sessions).where(eq(sessions.userId, userId));
+  }
+
+  // 👉 THÊM HÀM TÌM SESSION THEO TOKEN
+  async findByToken(token: string): Promise<Session | null> {
+    const result = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.token, token))
+      .limit(1);
+    return SessionMapper.toDomain(result[0] || null);
+  }
+
+  // 👉 THÊM HÀM XOÁ SESSION (Dùng cho tính năng Đăng xuất)
+  async deleteByToken(token: string): Promise<void> {
+    await this.db.delete(sessions).where(eq(sessions.token, token));
+  }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/persistence/mappers/session.mapper.ts
+```
+import { InferSelectModel } from 'drizzle-orm';
+import { Session } from '../../../domain/entities/session.entity';
+import { sessions } from '@database/schema';
+
+type SessionRecord = InferSelectModel<typeof sessions>;
+
+export class SessionMapper {
+  static toDomain(raw: SessionRecord | null): Session | null {
+    if (!raw) return null;
+    return new Session(
+      raw.id,
+      Number(raw.userId),
+      raw.token,
+      raw.expiresAt,
+      raw.ipAddress || undefined,
+      raw.userAgent || undefined,
+      raw.createdAt || undefined,
+    );
+  }
+
+  static toPersistence(domain: Session) {
+    return {
+      id: domain.id, // UUID thì có thể truyền vào hoặc để DB tự gen
+      userId: domain.userId,
+      token: domain.token,
+      expiresAt: domain.expiresAt,
+      ipAddress: domain.ipAddress || null,
+      userAgent: domain.userAgent || null,
+      createdAt: domain.createdAt || new Date(),
+    };
+  }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/guards/jwt-auth.guard.ts
+```
+import { Injectable, ExecutionContext } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { Reflector } from '@nestjs/core';
+import { Observable } from 'rxjs';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  constructor(private reflector: Reflector) {
+    super();
+  }
+
+  canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
+    // 1. Kiểm tra xem route hiện tại (hoặc class controller) có gắn cờ @Public không
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    // 2. Nếu là Public -> Cho qua luôn (return true)
+    if (isPublic) {
+      return true;
+    }
+
+    // 3. Nếu không -> Bắt buộc check Token (gọi logic mặc định của Passport)
+    return super.canActivate(context);
+  }
+}
+
+```
+
+## File: src/modules/auth/infrastructure/guards/telegram-auth.guard.ts
+```
+import { CanActivate, ExecutionContext, Injectable, Inject } from '@nestjs/common';
+import { TelegrafExecutionContext } from 'nestjs-telegraf';
+import { Context } from 'telegraf';
+// ✅ Import Symbol
+import { IUserRepository } from '../../../user/domain/repositories/user.repository';
+
+@Injectable()
+export class TelegramAuthGuard implements CanActivate {
+    constructor(
+        // ✅ Dùng Symbol
+        @Inject(IUserRepository) private readonly userRepo: IUserRepository,
+    ) { }
+
+    async canActivate(context: ExecutionContext): Promise<boolean> {
+        const ctx = TelegrafExecutionContext.create(context);
+        const telegramContext = ctx.getContext<Context>();
+        const telegramId = String(telegramContext.from?.id);
+
+        if (!telegramId || telegramId === 'undefined') return false;
+
+        // ✅ Optional chaining phòng trường hợp repo chưa có hàm này
+        const user = await this.userRepo.findByTelegramId?.(telegramId);
+
+        if (!user) {
+            await telegramContext.reply('⛔ Bạn chưa đăng nhập! Vui lòng dùng lệnh:\n/login <username> <password>');
+            return false;
+        }
+
+        // Gắn user vào state để Handler sử dụng
+        // Telegraf Context State
+        (telegramContext as any).state = (telegramContext as any).state || {};
+        (telegramContext as any).state.user = user;
+
+        return true;
+    }
+}
+
+```
+
+## File: src/modules/auth/domain/entities/session.entity.ts
+```
+export class Session {
+  constructor(
+    public id: string | undefined, // Cho phép undefined
+    public userId: number,
+    public token: string,
+    public expiresAt: Date,
+    public ipAddress?: string,
+    public userAgent?: string,
+    public createdAt?: Date,
+  ) {}
+
+  isExpired(): boolean {
+    return new Date() > this.expiresAt;
+  }
+}
+
+```
+
+## File: src/modules/auth/domain/repositories/session.repository.ts
+```
+import { Session } from '../entities/session.entity';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+export const ISessionRepository = Symbol('ISessionRepository');
+
+export interface ISessionRepository {
+  create(session: Session, tx?: Transaction): Promise<void>;
+  findByUserId(userId: number): Promise<Session[]>;
+  deleteByUserId(userId: number): Promise<void>;
+
+  // 👉 THÊM tinh nang thu hoi Token - MỚI
+  findByToken(token: string): Promise<Session | null>;
+  deleteByToken(token: string): Promise<void>;
+}
+
+```
+
+## File: src/modules/auth/domain/events/otp-requested.event.ts
+```
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+export class OtpRequestedEvent implements IDomainEvent {
+    static readonly EVENT_NAME = 'OtpRequested';
+    readonly occurredAt = new Date();
+
+    constructor(
+        public readonly aggregateId: string, // Email của user
+        public readonly payload: {
+            email: string;
+            fullName: string;
+            otpCode: string;
+        },
+    ) { }
+}
+
+```
+
+## File: src/modules/notification/notification.module.ts
+```
+import { Module } from '@nestjs/common';
+import { NotificationService } from './application/services/notification.service';
+import { UserRegisteredListener } from './application/listeners/user-registered.listener';
+import { NotificationController } from './infrastructure/controllers/notification.controller';
+import { DrizzleNotificationRepository } from './infrastructure/persistence/drizzle-notification.repository';
+import { INotificationRepository } from './domain/repositories/notification.repository';
+import { ConsoleEmailAdapter } from './infrastructure/adapters/console-email.adapter';
+import { IEmailSender } from './application/ports/email-sender.port';
+import { OtpRequestedListener } from './application/listeners/otp-requested.listener';
+
+@Module({
+  controllers: [NotificationController],
+  providers: [
+    NotificationService,
+    UserRegisteredListener, // Đăng ký Listener để EventBus Explorer quét được
+    OtpRequestedListener, // ✅ Đăng ký Listener tại đây để EventBus quét được
+    {
+      provide: INotificationRepository,
+      useClass: DrizzleNotificationRepository,
+    },
+    {
+      provide: IEmailSender,
+      useClass: ConsoleEmailAdapter, // Có thể đổi thành SES/SendGridAdapter sau này
+    },
+  ],
+  exports: [NotificationService],
+})
+export class NotificationModule { }
+
+```
+
+## File: src/modules/notification/application/services/notification.service.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { INotificationRepository } from '../../domain/repositories/notification.repository';
+import { IEmailSender } from '../ports/email-sender.port';
+import { Notification } from '../../domain/entities/notification.entity';
+import { NotificationType } from '../../domain/enums/notification.enum';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+
+@Injectable()
+export class NotificationService {
+  constructor(
+    @Inject(INotificationRepository)
+    private readonly repo: INotificationRepository,
+    @Inject(IEmailSender) private readonly emailSender: IEmailSender,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  async sendWelcomeEmail(
+    userId: number,
+    email: string,
+    username: string,
+  ): Promise<void> {
+    this.logger.info(`Processing welcome email for user: ${userId}`);
+
+    // 1. Tạo Entity (Pending)
+    const notification = new Notification(
+      undefined,
+      userId,
+      NotificationType.EMAIL,
+      'Welcome to RBAC System',
+      `Hello ${username}, welcome aboard!`,
+    );
+
+    // 2. Lưu vào DB
+    const savedNotif = await this.repo.save(notification);
+
+    // 3. Gửi Email thật (qua Adapter)
+    const sent = await this.emailSender.send(
+      email,
+      savedNotif.subject,
+      savedNotif.content,
+    );
+
+    // 4. Update trạng thái
+    if (sent) {
+      savedNotif.markAsSent();
+    } else {
+      savedNotif.markAsFailed();
+    }
+
+    await this.repo.save(savedNotif);
+    this.logger.info(`Notification processed. Status: ${savedNotif.status}`);
+  }
+
+  async getUserNotifications(userId: number) {
+    this.logger.info('user::', { userId });
+    return this.repo.findByUserId(userId);
+  }
+}
+
+```
+
+## File: src/modules/notification/application/ports/email-sender.port.ts
+```
+export const IEmailSender = Symbol('IEmailSender');
+
+export interface IEmailSender {
+  send(to: string, subject: string, body: string): Promise<boolean>;
+}
+
+```
+
+## File: src/modules/notification/application/listeners/user-registered.listener.ts
+```
+import { Injectable } from '@nestjs/common';
+import { EventHandler } from '@core/shared/infrastructure/event-bus/decorators/event-handler.decorator';
+import { UserCreatedEvent } from '@modules/user/domain/events/user-created.event';
+import { NotificationService } from '../services/notification.service';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+import { Inject } from '@nestjs/common';
+
+@Injectable()
+export class UserRegisteredListener {
+  constructor(
+    private readonly notificationService: NotificationService,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  @EventHandler(UserCreatedEvent)
+  async handleUserCreated(event: UserCreatedEvent) {
+    const { user } = event.payload;
+    this.logger.info(
+      `📢 [EVENT RECEIVED] UserCreated: ${user.username} (ID: ${user.id})`,
+    );
+
+    // Gọi Service để xử lý nghiệp vụ
+    if (user.email && user.id) {
+      await this.notificationService.sendWelcomeEmail(
+        user.id,
+        user.email,
+        user.username,
+      );
+    }
+  }
+}
+
+```
+
+## File: src/modules/notification/application/listeners/otp-requested.listener.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { EventHandler } from '@core/shared/infrastructure/event-bus/decorators/event-handler.decorator';
+import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
+import { IEmailSender } from '../ports/email-sender.port';
+import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+
+@Injectable()
+export class OtpRequestedListener {
+    constructor(
+        @Inject(IEmailSender) private readonly emailSender: IEmailSender,
+        @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    ) { }
+
+    @EventHandler(OtpRequestedEvent)
+    async handleOtpRequested(event: OtpRequestedEvent) {
+        const { email, fullName, otpCode } = event.payload;
+
+        this.logger.info(`📢 [EVENT RECEIVED] OtpRequested: Cấp mã OTP cho ${email}`);
+
+        const subject = 'Mã xác thực đặt lại mật khẩu (OTP)';
+        const body = `
+      Xin chào ${fullName},
+      
+      Mã OTP để đặt lại mật khẩu của bạn là: ${otpCode}
+      Mã này sẽ hết hạn trong 5 phút. Vui lòng không chia sẻ mã này cho bất kỳ ai.
+    `;
+
+        // Gửi email thông qua Port (ConsoleEmailAdapter sẽ in ra Terminal)
+        await this.emailSender.send(email, subject, body);
+    }
+}
+
+```
+
+## File: src/modules/notification/infrastructure/adapters/console-email.adapter.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { IEmailSender } from '../../application/ports/email-sender.port';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+
+@Injectable()
+export class ConsoleEmailAdapter implements IEmailSender {
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) {}
+
+  async send(to: string, subject: string, body: string): Promise<boolean> {
+    // Giả lập độ trễ mạng
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    this.logger.info(`📧 [MOCK EMAIL SENT] To: ${to} | Subject: ${subject}`);
+    this.logger.debug(`Body: ${body}`);
+
+    return true; // Luôn thành công
+  }
+}
+
+```
+
+## File: src/modules/notification/infrastructure/controllers/notification.controller.ts
+```
+import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { NotificationService } from '../../application/services/notification.service';
+import {
+  type ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+
+@ApiTags('Notifications')
+@ApiBearerAuth()
+@Controller('notifications')
+@UseGuards(JwtAuthGuard)
+export class NotificationController {
+  constructor(
+    private readonly service: NotificationService,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {}
+
+  @ApiOperation({ summary: 'Get my notifications' })
+  @Get()
+  async getMyNotifications(@CurrentUser() user: User) {
+    if (!user.id) return [];
+    return this.service.getUserNotifications(user.id);
+  }
+}
+
+```
+
+## File: src/modules/notification/infrastructure/persistence/mappers/notification.mapper.ts
+```
+import { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+import { Notification } from '../../../domain/entities/notification.entity';
+import {
+  NotificationType,
+  NotificationStatus,
+} from '../../../domain/enums/notification.enum';
+import { notifications } from '@database/schema';
+
+type NotificationSelect = InferSelectModel<typeof notifications>;
+type NotificationInsert = InferInsertModel<typeof notifications>;
+
+export class NotificationMapper {
+  static toDomain(raw: NotificationSelect | null): Notification | null {
+    if (!raw) return null;
+    return new Notification(
+      raw.id,
+      raw.userId,
+      raw.type as NotificationType,
+      raw.subject,
+      raw.content,
+      raw.status as NotificationStatus,
+      raw.sentAt || undefined,
+      raw.createdAt || undefined,
+    );
+  }
+
+  static toPersistence(domain: Notification): NotificationInsert {
+    return {
+      id: domain.id,
+      userId: domain.userId,
+      type: domain.type,
+      subject: domain.subject,
+      content: domain.content,
+      status: domain.status,
+      sentAt: domain.sentAt || null,
+      createdAt: domain.createdAt || new Date(),
+    };
+  }
+}
+
+```
+
+## File: src/modules/notification/infrastructure/persistence/drizzle-notification.repository.ts
+```
+import { Inject, Injectable } from '@nestjs/common';
+import { eq, desc, InferSelectModel } from 'drizzle-orm'; // 1. Import InferSelectModel
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { DRIZZLE } from '@database/drizzle.provider';
+import {
+  ILogger,
+  LOGGER_TOKEN,
+} from '@core/shared/application/ports/logger.port';
+import { INotificationRepository } from '../../domain/repositories/notification.repository';
+import { Notification } from '../../domain/entities/notification.entity';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
+import { notifications } from '@database/schema';
+import { NotificationMapper } from './mappers/notification.mapper';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+// 2. Định nghĩa kiểu trả về từ DB để tránh 'any'
+type NotificationRecord = InferSelectModel<typeof notifications>;
+
+@Injectable()
+export class DrizzleNotificationRepository
+  extends DrizzleBaseRepository
+  implements INotificationRepository
+{
+  constructor(
+    @Inject(DRIZZLE) db: NodePgDatabase<typeof schema>,
+    @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+  ) {
+    super(db);
+  }
+
+  async save(
+    notification: Notification,
+    tx?: Transaction,
+  ): Promise<Notification> {
+    const db = this.getDb(tx);
+    const data = NotificationMapper.toPersistence(notification);
+
+    // 3. Khai báo kiểu rõ ràng cho result -> Fix lỗi "Variable implicitly has an 'any' type"
+    let result: NotificationRecord[];
+
+    if (data.id) {
+      result = await db
+        .update(notifications)
+        .set(data)
+        .where(eq(notifications.id, data.id))
+        .returning();
+    } else {
+      // 4. Fix lỗi "'id' assigned but never used": Đổi tên thành '_id' (quy ước biến không dùng)
+      const { id: _id, ...insertData } = data;
+
+      // 5. Fix lỗi "Assertion is unnecessary": Bỏ đoạn 'as typeof ...'
+      result = await db.insert(notifications).values(insertData).returning();
+    }
+
+    // FIX: Kiểm tra kết quả trả về thay vì dùng '!'
+    const mapped = NotificationMapper.toDomain(result[0]);
+
+    // Nếu mapper trả về null (trường hợp hiếm), ném lỗi để crash sớm thay vì trả về null sai type
+    if (!mapped) {
+      throw new Error('Failed to map notification result from DB');
+    }
+
+    return mapped;
+  }
+
+  async findByUserId(userId: number): Promise<Notification[]> {
+    // 7. Đảm bảo biến userId được sử dụng trong câu query
+    const results = await this.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt));
+
+    // 8. Format code để fix lỗi Prettier
+    // return results.map((r) => NotificationMapper.toDomain(r)!);
+    // FIX: Map dữ liệu và lọc bỏ null một cách an toàn (Type Guard)
+    return results
+      .map((r) => NotificationMapper.toDomain(r))
+      .filter((n): n is Notification => n !== null);
+  }
+}
+
+```
+
+## File: src/modules/notification/domain/enums/notification.enum.ts
+```
+export enum NotificationType {
+  EMAIL = 'EMAIL',
+  SMS = 'SMS',
+  PUSH = 'PUSH',
+}
+
+export enum NotificationStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  FAILED = 'FAILED',
+}
+
+```
+
+## File: src/modules/notification/domain/entities/notification.entity.ts
+```
+import {
+  NotificationType,
+  NotificationStatus,
+} from '../enums/notification.enum';
+
+export class Notification {
+  constructor(
+    public id: number | undefined,
+    public userId: number,
+    public type: NotificationType,
+    public subject: string,
+    public content: string,
+    public status: NotificationStatus = NotificationStatus.PENDING,
+    public sentAt?: Date,
+    public createdAt?: Date,
+  ) {}
+
+  markAsSent() {
+    this.status = NotificationStatus.SENT;
+    this.sentAt = new Date();
+  }
+
+  markAsFailed() {
+    this.status = NotificationStatus.FAILED;
+  }
+}
+
+```
+
+## File: src/modules/notification/domain/repositories/notification.repository.ts
+```
+import { Notification } from '../entities/notification.entity';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+
+export const INotificationRepository = Symbol('INotificationRepository');
+
+export interface INotificationRepository {
+  save(notification: Notification, tx?: Transaction): Promise<Notification>;
+  findByUserId(userId: number): Promise<Notification[]>;
+}
+
+```
+
+## File: src/modules/test/test.module.ts
+```
+import { Module } from '@nestjs/common';
+import { UserModule } from '../user/user.module';
+import { RbacModule } from '../rbac/rbac.module'; 
+import { DatabaseSeeder } from './seeders/database.seeder';
+import { TestController } from './controllers/test.controller';
+
+@Module({
+  imports: [UserModule, RbacModule],
+  controllers: [TestController],
+  providers: [DatabaseSeeder],
+})
+export class TestModule {} 
+
+```
+
+## File: src/modules/test/seeders/database.seeder.ts
+```
+import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '@database/schema';
+import { eq } from 'drizzle-orm';
+import * as bcrypt from 'bcrypt';
+import { CORE_ROLES } from '../../rbac/domain/constants/rbac.constants'; // ✅ Import hằng số mới
+
+@Injectable()
+export class DatabaseSeeder implements OnModuleInit {
+  private readonly logger = new Logger(DatabaseSeeder.name);
+
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
+
+  async onModuleInit() {
+    if (process.env.RUN_SEEDS !== 'true'
+      // && process.env.NODE_ENV !== 'development'
+    ) {
+      return;
+    }
+
+    this.logger.log('🌱 Bắt đầu Seeding database (Dynamic RBAC)...');
+
+    try {
+      // 1. Chỉ tạo Role hệ thống (SUPER_ADMIN)
+      await this.seedCoreRoles();
+
+      // 2. Tạo Master Permission (manage:all)
+      await this.seedMasterPermission();
+
+      // 3. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
+      await this.seedHrmDictionaries();
+
+      // 4. Seed User Admin gốc
+      await this.seedUsersAndProfiles();
+
+      // 5. Gán quyền tối cao cho Admin gốc
+      await this.assignRolesToUsers();
+
+      this.logger.log('✅ Database seeded successfully!');
+    } catch (error) {
+      this.logger.error('❌ Seeding failed:', error);
+    }
+  }
+
+  private async seedCoreRoles() {
+    // Chỉ tạo đúng Role cốt lõi. Các Role khác (MANAGER, STAFF) sẽ do file rbac.csv sinh ra.
+    await this.db
+      .insert(schema.roles)
+      .values({
+        name: CORE_ROLES.SUPER_ADMIN,
+        description: 'System role: Root Administrator',
+        isSystem: true,
+        isActive: true,
+      })
+      .onConflictDoNothing({ target: schema.roles.name });
+    this.logger.log(' - Seeded CORE_ROLES');
+  }
+
+  private async seedMasterPermission() {
+    // Tạo 1 permission vạn năng để mồi
+    await this.db
+      .insert(schema.permissions)
+      .values({
+        name: 'manage:all',
+        resourceType: '*',
+        action: '*',
+        isActive: true,
+        description: 'Master Permission',
+      })
+      .onConflictDoNothing({ target: schema.permissions.name });
+  }
+
+  private async seedHrmDictionaries() {
+    await this.db.insert(schema.orgUnits)
+      .values({ type: 'COMPANY', code: 'HQ', name: 'Trụ sở chính Công ty' })
+      .onConflictDoNothing({ target: schema.orgUnits.code });
+
+    const titles = [{ name: 'Tổng Giám Đốc' }, { name: 'Trưởng Phòng' }, { name: 'Nhân viên' }];
+    await this.db.insert(schema.jobTitles)
+      .values(titles)
+      .onConflictDoNothing({ target: schema.jobTitles.name });
+
+    this.logger.log(' - HRM Dictionaries seeded');
+  }
+
+  private async seedUsersAndProfiles() {
+    const hashedPassword = await bcrypt.hash('123456', 10);
+    const existingUser = await this.db.query.users.findFirst({
+      where: eq(schema.users.username, 'superadmin'),
+    });
+
+    if (!existingUser) {
+      const [newUser] = await this.db
+        .insert(schema.users)
+        .values({
+          username: 'superadmin',
+          email: 'admin@test.com',
+          hashedPassword: hashedPassword,
+          isActive: true,
+        })
+        .returning({ id: schema.users.id });
+
+      await this.db
+        .insert(schema.employees)
+        .values({
+          userId: newUser.id,
+          employeeCode: 'ADMIN-001',
+          fullName: 'Super Admin',
+        });
+
+      this.logger.log(' - Created Master User: superadmin');
+    }
+  }
+
+  private async assignRolesToUsers() {
+    const [adminUser, adminRole] = await Promise.all([
+      this.db.query.users.findFirst({
+        where: eq(schema.users.username, 'superadmin'),
+        columns: { id: true },
+      }),
+      this.db.query.roles.findFirst({
+        where: eq(schema.roles.name, CORE_ROLES.SUPER_ADMIN),
+        columns: { id: true },
+      }),
+    ]);
+
+    if (adminUser && adminRole) {
+      await this.db
+        .insert(schema.userRoles)
+        .values({ userId: adminUser.id, roleId: adminRole.id })
+        .onConflictDoNothing();
+
+      this.logger.log(' - Assigned SUPER_ADMIN role to superadmin');
+    }
+  }
+}
+```
+
+## File: src/modules/test/controllers/test.controller.ts
+```
+import { Controller, Get, Inject, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../rbac/infrastructure/guards/permission.guard';
+import { Permissions } from '../../rbac/infrastructure/decorators/permission.decorator';
+import { Public } from '../../auth/infrastructure/decorators/public.decorator';
+import { CurrentUser } from '../../auth/infrastructure/decorators/current-user.decorator';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
+
+@Controller('test')
+@ApiBearerAuth()
+export class TestController {
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) { }
+
+  @Public()
+  @Get('health')
+  healthCheck() {
+    this.logger.info('ciquan');
+    return {
+      status: 'OK',
+      timestamp: new Date(),
+      service: 'RBAC System',
+      version: '1.0.0',
+    };
+  }
+
+  @Get('protected')
+  @UseGuards(JwtAuthGuard)
+  protectedRoute(@CurrentUser() user: any) {
+    return {
+      message: 'This is a protected route',
+      user: {
+        id: user.id,
+        username: user.username,
+        roles: user.roles,
+      },
+    };
+  }
+
+  @Get('admin-only')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @Permissions('rbac:manage')
+  adminOnly(@CurrentUser() user: any) {
+    return {
+      message: 'This is admin-only route',
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+    };
+  }
+
+  @Get('user-management')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @Permissions('user:manage')
+  userManagement(@CurrentUser() user: any) {
+    return {
+      message: 'You have user management permission',
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+    };
+  }
+
+  // =========================================================================
+  // 🚀 API SANDBOX: DÙNG ĐỂ BẬT/TẮT TEST TỪNG QUYỀN
+  // =========================================================================
+  @Get('sandbox-permissions')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @Permissions(
+    // 💡 HƯỚNG DẪN: 
+    // Hãy MỞ COMMENT (xóa dấu //) ở đúng 1 dòng mà bạn muốn test.
+    // Sau khi test xong, hãy comment lại và mở dòng khác để thử.
+
+    // --- 1. NHÓM QUYỀN HỆ THỐNG (SYSTEM & RBAC) ---
+    // PERMISSIONS.SYSTEM_CONFIG,      // Chỉ ADMIN hoặc SUPER_ADMIN mới qua được
+    // PERMISSIONS.RBAC_MANAGE,        // Chỉ IT_ADMIN hoặc SUPER_ADMIN
+    // PERMISSIONS.AUDIT_VIEW,         // Chỉ QA_AUDITOR hoặc ADMIN
+
+    // --- 2. NHÓM QUYỀN TÀI KHOẢN (USER) ---
+    // PERMISSIONS.USER_MANAGE,        // ADMIN, IT_ADMIN
+    // PERMISSIONS.USER_READ,          // STAFF, MANAGER (Xem danh bạ)
+
+    // --- 3. NHÓM QUYỀN NHÂN SỰ & TỔ CHỨC (HRM) ---
+    // PERMISSIONS.ORG_MANAGE,         // ADMIN
+    // PERMISSIONS.ORG_READ,           // STAFF, MANAGER (Xem sơ đồ công ty)
+    // PERMISSIONS.EMPLOYEE_MANAGE,    // ADMIN (HR)
+    // PERMISSIONS.EMPLOYEE_UPDATE,    // MANAGER (Cập nhật nhân sự cấp dưới)
+    // PERMISSIONS.EMPLOYEE_READ,      // MANAGER
+
+    // --- 4. NHÓM QUYỀN NGHIỆP VỤ (BOOKING/ĐƠN HÀNG) ---
+    // PERMISSIONS.BOOKING_MANAGE,     // MANAGER (Quản lý toàn bộ đơn của phòng)
+    // PERMISSIONS.BOOKING_CREATE,     // STAFF (Lên đơn mới)
+    // PERMISSIONS.BOOKING_READ,       // STAFF (Xem đơn của mình)
+    // PERMISSIONS.BOOKING_UPDATE,     // STAFF (Sửa đơn của mình)
+
+    // --- 5. TÍNH NĂNG MỚI (TEST MAGIC STRING) ---
+    // 'payroll:approve',              // Bạn có thể gõ string bất kỳ vào đây để test!
+  )
+  testSandbox(@CurrentUser() user: any) {
+    return {
+      success: true,
+      message: '🎉 CHÚC MỪNG! BẠN ĐÃ VƯỢT QUA GUARD BẢO VỆ.',
+      note: 'Nếu bạn thấy dòng này, nghĩa là tài khoản của bạn ĐÃ CÓ quyền vừa được mở comment.',
+      user_info: {
+        id: user.id,
+        username: user.username,
+        roles: user.roles, // Các role đang sở hữu
+      },
+    };
+  }
+
+}
 
 ```
 

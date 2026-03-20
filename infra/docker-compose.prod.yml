@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -13,6 +11,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-rbac_system}
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
       - rbac_prod_net
     healthcheck:
@@ -30,6 +30,8 @@ services:
     image: redis:7-alpine
     container_name: rbac_redis_prod
     restart: always
+    env_file:
+      - ../.env.production
     networks:
       - rbac_prod_net
     healthcheck:
@@ -42,7 +44,6 @@ services:
         limits:
           memory: 256M
 
-  # 👇 THÊM SERVICE TELEGRAM LOCAL VÀO ĐÂY
   telegram-api:
     image: aiogram/telegram-bot-api:latest
     container_name: rbac_telegram_api_prod
@@ -55,6 +56,7 @@ services:
       TELEGRAM_STAT: 1
       TELEGRAM_LOCAL: 1
     volumes:
+      # Map thư mục data của Telegram ra ổ cứng vật lý của host
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
     networks:
       - rbac_prod_net
@@ -63,6 +65,7 @@ services:
         limits:
           memory: 512M
 
+  # 👇 Đã sửa lỗi thụt lề, service api nằm ngang hàng với các service trên
   api:
     build:
       context: ..
@@ -79,13 +82,24 @@ services:
     env_file:
       - ../.env.production
     environment:
-      - RUN_MIGRATIONS=true
-      - NODE_OPTIONS=--max-old-space-size=1536
-      - TELEGRAM_API_ROOT=http://telegram-api:8081
+      # 1. Ghi đè cấu hình DB/Redis để API gọi vào đúng tên Container
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      # 2. Cấu hình Telegram Local Server
+      TELEGRAM_API_ROOT: http://telegram-api:8081
+      # 3. Kích hoạt tự động chạy Migration khi khởi động
+      RUN_MIGRATIONS: "true"
+      # 4. 
+      RUN_SEEDS: ${RUN_SEEDS}
+      # 5. Tăng bộ nhớ RAM cho Node.js (Vận hành xử lý file 3D cần nhiều RAM)
+      NODE_OPTIONS: --max-old-space-size=1536
     volumes:
+      # Map thư mục Uploads chung (Data 3D, CSV, v.v...) vào /app/uploads
       - dental_data_prod:/app/uploads
+      # Map thư mục Logs vào /app/logs
       - api_logs_prod:/app/logs
-      # Map chung thư mục data Telegram
+      # 💡 Trick siêu hay: Map CHUNG thư mục data Telegram vào API
+      # NestJS (/app/telegram-data) sẽ nhìn thấy cùng file ảnh với Telegram Bot API (/var/lib/telegram-bot-api)
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
     ports:
       - "${PORT:-8080}:8080"
@@ -103,6 +117,9 @@ services:
           cpus: '2.0'
           memory: 2G
 
+# ==========================================
+# KHAI BÁO MẠNG VÀ Ổ ĐĨA ẢO (VOLUMES)
+# ==========================================
 networks:
   rbac_prod_net:
     driver: bridge

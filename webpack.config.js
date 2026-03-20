@@ -5,6 +5,10 @@ module.exports = function (options, webpackInstance) {
     return {
         ...options,
         // 1. CHỈ ĐỊNH CÁC THƯ VIỆN KHÔNG ĐƯỢC BUNDLE (Native C++ & CLI Tools)
+        node: {
+            __dirname: false,
+            __filename: false,
+        },
         externals: [
             // Giữ lại các thư viện Core của NestJS & Node.js
             nodeExternals({

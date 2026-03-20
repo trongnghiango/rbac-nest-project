@@ -13,7 +13,9 @@ export class DatabaseSeeder implements OnModuleInit {
   constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
 
   async onModuleInit() {
-    if (process.env.RUN_SEEDS !== 'true' && process.env.NODE_ENV !== 'development') {
+    if (process.env.RUN_SEEDS !== 'true'
+      // && process.env.NODE_ENV !== 'development'
+    ) {
       return;
     }
 
