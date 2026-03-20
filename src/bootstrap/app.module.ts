@@ -43,24 +43,26 @@ import { EmployeeModule } from '@modules/employee/employee.module';
 
     ServeStaticModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => [
-        {
-          rootPath: path.resolve(
-            config.get('dental.outputDir') || 'uploads/dental/converted',
-          ),
-          serveRoot: '/models',
-          // 👇 SỬA DÒNG NÀY:
-          // CŨ (Lỗi): exclude: ['/api/(.*)'],
-          // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
-          exclude: ['/api/{*path}'],
-          serveStaticOptions: {
-            setHeaders: (res) => {
-              res.setHeader('Access-Control-Allow-Origin', '*');
-              res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      useFactory: (config: ConfigService) => {
+        // path.resolve(config.get('dental.outputDir') || 'uploads/dental/converted',)
+        const outputDir = config.get<string>('dental.outputDir');
+        return [
+          {
+            rootPath: outputDir,
+            serveRoot: '/models',
+            // 👇 SỬA DÒNG NÀY:
+            // CŨ (Lỗi): exclude: ['/api/(.*)'],
+            // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
+            exclude: ['/api/{*path}'],
+            serveStaticOptions: {
+              setHeaders: (res) => {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+              },
             },
           },
-        },
-      ],
+        ]
+      },
       inject: [ConfigService],
     }),
 
