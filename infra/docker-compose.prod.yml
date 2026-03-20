@@ -101,6 +101,8 @@ services:
       # 💡 Trick siêu hay: Map CHUNG thư mục data Telegram vào API
       # NestJS (/app/telegram-data) sẽ nhìn thấy cùng file ảnh với Telegram Bot API (/var/lib/telegram-bot-api)
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
+      # Map thư mục chứa file CSV Seed
+      - ../database/seeds:/app/database/seeds
     ports:
       - "${PORT:-8080}:8080"
     networks:

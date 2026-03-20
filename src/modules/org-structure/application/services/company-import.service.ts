@@ -34,7 +34,7 @@ export class CompanyImportService {
 
     async importCoreCompany(csvBuffer: Buffer, adminId: number) {
         const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
-        if (!records.length) return { success: false, message: 'File CSV rỗng' };
+        if (!records.length) return { success: false as const, message: 'File CSV rỗng' };
 
         // 1. Bóc tách dữ liệu Unique (Set/Map)
         const locations = new Set<string>();
@@ -175,7 +175,7 @@ export class CompanyImportService {
             }
 
             return {
-                success: true,
+                success: true as const,
                 message: 'Khởi tạo cấu trúc nhân sự (Ma trận vị trí) thành công!',
                 stats: { employeesImported: successCount },
             };

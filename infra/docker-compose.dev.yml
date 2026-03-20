@@ -85,6 +85,8 @@ services:
       # 💡 Trick siêu hay: Map chung thư mục data Telegram vào API 
       # để NestJS lấy thẳng file do Telegram tải về mà không cần qua mạng HTTP
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
+      # Map thư mục chứa file CSV Seed
+      - ../database/seeds:/app/database/seeds
     ports:
       - "${PORT:-8080}:8080"
       - "9229:9229"

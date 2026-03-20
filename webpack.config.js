@@ -64,7 +64,7 @@ module.exports = function (options, webpackInstance) {
         // 3. TỐI ƯU HÓA CHO PRODUCTION
         optimization: {
             ...options.optimization,
-            minimize: process.env.NODE_ENV === 'production', // Chỉ làm rối code (Minify) khi build Prod
+            minimize: true, //process.env.NODE_ENV === 'production', // Chỉ làm rối code (Minify) khi build Prod
         },
     };
 };

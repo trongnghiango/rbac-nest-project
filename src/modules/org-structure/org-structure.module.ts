@@ -18,6 +18,6 @@ import { RbacModule } from '@modules/rbac/rbac.module';
             useClass: DrizzleOrgStructureRepository,
         },
     ],
-    exports: [OrgStructureService, IOrgStructureRepository], // Export nếu các module khác (như Employee) cần gọi
+    exports: [OrgStructureService, IOrgStructureRepository, CompanyImportService], // Export nếu các module khác (như Employee) cần gọi
 })
 export class OrgStructureModule { }

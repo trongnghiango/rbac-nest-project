@@ -10,6 +10,11 @@ export class OrgStructureService {
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
     ) { }
 
+    // 0. LẤY TẤT CẢ (Dùng cho Seeder hoặc các tác vụ map dữ liệu)
+    async findAllUnits() {
+        return this.repo.findAllActiveUnits();
+    }
+
     // 1. TẠO MỚI (Tự động tính toán Path)
     async createUnit(dto: CreateOrgUnitDto) {
         return this.txManager.runInTransaction(async (tx) => {

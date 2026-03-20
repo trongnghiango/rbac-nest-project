@@ -38,6 +38,7 @@ import {
     RoleService,
     IRoleRepository,
     IUserRoleRepository,
+    RbacManagerService,
   ],
 })
 export class RbacModule { }

@@ -1,0 +1,8 @@
+type,code,name,parentCode
+COMPANY,HQ,Tập đoàn Công nghệ ABC,
+DEPARTMENT,BOD,Ban Giám Đốc,HQ
+DEPARTMENT,P_DICHVU,Phòng Dịch Vụ,HQ
+DEPARTMENT,P_HT,Phòng Hệ Thống,HQ
+DEPARTMENT,P_QLCL,Phòng Quản lý chất lượng,HQ
+TEAM,TEAM_DEV,Nhóm Lập trình Backend,P_HT
+TEAM,TEAM_TEST,Nhóm Kiểm thử,P_QLCL

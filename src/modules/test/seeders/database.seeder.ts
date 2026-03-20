@@ -1,137 +1,116 @@
 import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
-import { DRIZZLE } from '@database/drizzle.provider';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
-import { eq } from 'drizzle-orm';
-import * as bcrypt from 'bcrypt';
-import { CORE_ROLES } from '../../rbac/domain/constants/rbac.constants'; // ✅ Import hằng số mới
+import * as fs from 'fs';
+import * as path from 'path';
+
+import { RbacManagerService } from '../../rbac/application/services/rbac-manager.service';
+import { CompanyImportService } from '../../org-structure/application/services/company-import.service';
+// 👉 Import thêm OrgStructureService
+import { OrgStructureService } from '../../org-structure/application/services/org-structure.service';
+// 👉 Import FileParser để đọc file org_units.csv
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
   private readonly logger = new Logger(DatabaseSeeder.name);
+  private readonly seedDir = path.join(process.cwd(), 'database', 'seeds');
 
-  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
+  constructor(
+    private readonly rbacManagerService: RbacManagerService,
+    private readonly companyImportService: CompanyImportService,
+    private readonly orgStructureService: OrgStructureService, // 👉 Inject Service
+    @Inject(IFileParser) private readonly fileParser: IFileParser, // 👉 Inject Parser
+  ) { }
 
   async onModuleInit() {
-    if (process.env.RUN_SEEDS !== 'true'
-      // && process.env.NODE_ENV !== 'development'
-    ) {
-      return;
-    }
+    if (process.env.RUN_SEEDS !== 'true') return;
 
-    this.logger.log('🌱 Bắt đầu Seeding database (Dynamic RBAC)...');
+    this.logger.log('🌱 Bắt đầu Seeding database từ file CSV...');
 
     try {
-      // 1. Chỉ tạo Role hệ thống (SUPER_ADMIN)
-      await this.seedCoreRoles();
+      // THỨ TỰ THỰC THI BẮT BUỘC:
+      await this.seedRbacRules();       // 1. Tạo Role
+      await this.seedOrgUnits();        // 2. Vẽ Sơ đồ Tổ chức (Cây)
+      await this.seedCoreEmployees();   // 3. Đổ nhân sự vào sơ đồ & Gán Role
 
-      // 2. Tạo Master Permission (manage:all)
-      await this.seedMasterPermission();
-
-      // 3. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
-      await this.seedHrmDictionaries();
-
-      // 4. Seed User Admin gốc
-      await this.seedUsersAndProfiles();
-
-      // 5. Gán quyền tối cao cho Admin gốc
-      await this.assignRolesToUsers();
-
-      this.logger.log('✅ Database seeded successfully!');
+      this.logger.log('✅ Database seeded successfully từ CSV!');
     } catch (error) {
       this.logger.error('❌ Seeding failed:', error);
     }
   }
 
-  private async seedCoreRoles() {
-    // Chỉ tạo đúng Role cốt lõi. Các Role khác (MANAGER, STAFF) sẽ do file rbac.csv sinh ra.
-    await this.db
-      .insert(schema.roles)
-      .values({
-        name: CORE_ROLES.SUPER_ADMIN,
-        description: 'System role: Root Administrator',
-        isSystem: true,
-        isActive: true,
-      })
-      .onConflictDoNothing({ target: schema.roles.name });
-    this.logger.log(' - Seeded CORE_ROLES');
+  // 1. ĐỌC FILE RBAC
+  private async seedRbacRules() {
+    const filePath = path.join(this.seedDir, '01_rbac_rules.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 01_rbac_rules.csv');
+
+    const buffer = fs.readFileSync(filePath);
+    const result = await this.rbacManagerService.importFromCsv(buffer);
+    this.logger.log(` - 🛡️ RBAC: Tạo mới ${result.created}, cập nhật ${result.updated} quyền.`);
   }
 
-  private async seedMasterPermission() {
-    // Tạo 1 permission vạn năng để mồi
-    await this.db
-      .insert(schema.permissions)
-      .values({
-        name: 'manage:all',
-        resourceType: '*',
-        action: '*',
-        isActive: true,
-        description: 'Master Permission',
-      })
-      .onConflictDoNothing({ target: schema.permissions.name });
-  }
+  // 2. ĐỌC FILE SƠ ĐỒ TỔ CHỨC VÀ DỰNG CÂY
+  private async seedOrgUnits() {
+    const filePath = path.join(this.seedDir, '02_org_units.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 02_org_units.csv');
 
-  private async seedHrmDictionaries() {
-    await this.db.insert(schema.orgUnits)
-      .values({ type: 'COMPANY', code: 'HQ', name: 'Trụ sở chính Công ty' })
-      .onConflictDoNothing({ target: schema.orgUnits.code });
+    const buffer = fs.readFileSync(filePath);
+    const records = await this.fileParser.parseCsvAsync<any>(buffer);
 
-    const titles = [{ name: 'Tổng Giám Đốc' }, { name: 'Trưởng Phòng' }, { name: 'Nhân viên' }];
-    await this.db.insert(schema.jobTitles)
-      .values(titles)
-      .onConflictDoNothing({ target: schema.jobTitles.name });
+    // 1. Đồng bộ Map với dữ liệu đã có trong DB
+    const existingUnits = await this.orgStructureService.findAllUnits();
+    const codeToIdMap = new Map<string, number>();
+    existingUnits.forEach(u => codeToIdMap.set(u.code, u.id));
 
-    this.logger.log(' - HRM Dictionaries seeded');
-  }
+    let successCount = 0;
 
-  private async seedUsersAndProfiles() {
-    const hashedPassword = await bcrypt.hash('123456', 10);
-    const existingUser = await this.db.query.users.findFirst({
-      where: eq(schema.users.username, 'superadmin'),
-    });
+    for (const row of records) {
+      if (codeToIdMap.has(row.code)) {
+        successCount++;
+        continue;
+      }
 
-    if (!existingUser) {
-      const [newUser] = await this.db
-        .insert(schema.users)
-        .values({
-          username: 'superadmin',
-          email: 'admin@test.com',
-          hashedPassword: hashedPassword,
-          isActive: true,
-        })
-        .returning({ id: schema.users.id });
+      // Tìm parentId nếu có parentCode
+      let parentId: number | undefined = undefined;
+      if (row.parentCode) {
+        parentId = codeToIdMap.get(row.parentCode);
+        if (!parentId) {
+          this.logger.warn(`Lỗi OrgUnit: Không tìm thấy Parent Code '${row.parentCode}' cho '${row.code}'. Hãy xếp thằng Cha lên trên thằng Con trong file CSV!`);
+          continue;
+        }
+      }
 
-      await this.db
-        .insert(schema.employees)
-        .values({
-          userId: newUser.id,
-          employeeCode: 'ADMIN-001',
-          fullName: 'Super Admin',
+      try {
+        // 👉 Gọi Service xịn của bạn để nó tự tạo DB và tính Path (/1/3/4/)
+        const newUnit = await this.orgStructureService.createUnit({
+          code: row.code,
+          name: row.name,
+          type: row.type,
+          parentId: parentId,
         });
 
-      this.logger.log(' - Created Master User: superadmin');
+        // Lưu ID lại để lát nữa mấy thằng con tìm thấy
+        codeToIdMap.set(row.code, newUnit.id);
+        successCount++;
+      } catch (error) {
+        // Bỏ qua lỗi trùng mã (đã tồn tại) để lần khởi động sau không bị lỗi
+        if (error.code !== '23505') {
+          this.logger.error(`❌ Lỗi tạo OrgUnit ${row.code} (${row.name}): ${error.message}`, error.stack);
+        }
+      }
     }
+    this.logger.log(` - 🌳 Org Units: Đã dựng thành công sơ đồ tổ chức (${successCount} đơn vị).`);
   }
 
-  private async assignRolesToUsers() {
-    const [adminUser, adminRole] = await Promise.all([
-      this.db.query.users.findFirst({
-        where: eq(schema.users.username, 'superadmin'),
-        columns: { id: true },
-      }),
-      this.db.query.roles.findFirst({
-        where: eq(schema.roles.name, CORE_ROLES.SUPER_ADMIN),
-        columns: { id: true },
-      }),
-    ]);
+  // 3. ĐỌC FILE NHÂN SỰ
+  private async seedCoreEmployees() {
+    const filePath = path.join(this.seedDir, '03_core_employees.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 03_core_employees.csv');
 
-    if (adminUser && adminRole) {
-      await this.db
-        .insert(schema.userRoles)
-        .values({ userId: adminUser.id, roleId: adminRole.id })
-        .onConflictDoNothing();
+    const buffer = fs.readFileSync(filePath);
+    const result = await this.companyImportService.importCoreCompany(buffer, 1);
 
-      this.logger.log(' - Assigned SUPER_ADMIN role to superadmin');
+    if (result.success) {
+      this.logger.log(` - 🏢 Nhân sự: Import thành công ${result.stats.employeesImported} nhân sự chủ chốt.`);
     }
   }
 }
