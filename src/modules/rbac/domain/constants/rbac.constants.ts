@@ -47,13 +47,28 @@ export const ROLE_HIERARCHY: Record<string, number> = {
 // Nhờ Spread Operator (...), nếu bạn thêm module mới (VD: PAYROLL), 
 // bạn chỉ cần import PAYROLL_PERMISSIONS vào đây.
 export const PERMISSIONS = {
-  ...USER_PERMISSIONS,
-  ...ORG_PERMISSIONS,
-  // Thêm các module khác vào đây...
+  // 1. Module đã có file riêng
+  ...USER_PERMISSIONS, // user:manage, user:read...
+  ...ORG_PERMISSIONS,  // org:manage, org:read, org:update
 
-  // Các quyền gốc của hệ thống (System)
+  // 2. Các quyền Hệ thống
   SYSTEM_CONFIG: 'system:config',
   RBAC_MANAGE: 'rbac:manage',
+  AUDIT_VIEW: 'audit:view',
+
+  // 3. Khai báo nhanh các module từ CSV (Sau này có module riêng thì tách ra sau)
+  EMPLOYEE_MANAGE: 'employee:manage',
+  EMPLOYEE_READ: 'employee:read',
+  EMPLOYEE_UPDATE: 'employee:update',
+
+  REPORT_MANAGE: 'report:manage',
+  REPORT_VIEW: 'report:view',
+  REPORT_EXPORT: 'report:export',
+
+  BOOKING_MANAGE: 'booking:manage',
+  BOOKING_CREATE: 'booking:create',
+  BOOKING_READ: 'booking:read',
+  BOOKING_UPDATE: 'booking:update',
 } as const;
 
 

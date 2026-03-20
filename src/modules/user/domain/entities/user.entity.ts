@@ -110,7 +110,6 @@ export class User {
   }
 
   toJSON() {
-    return this._email;
     return {
       id: this._id,
       username: this._username,

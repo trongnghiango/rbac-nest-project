@@ -47,10 +47,7 @@ export class AuthController {
   async getProfile(@CurrentUser() user: User) {
     //
     const data = user.toString()
-    return {
-      cc: "CC",
-      user: data,
-    };
+    return user.toJSON()
   }
 
   @ApiBearerAuth()
@@ -65,6 +62,7 @@ export class AuthController {
     return { success: true, message: 'Đăng xuất thành công' };
   }
 
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post('change-password')
   async changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {

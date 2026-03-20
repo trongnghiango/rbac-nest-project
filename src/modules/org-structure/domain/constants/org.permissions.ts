@@ -1,5 +1,5 @@
 export const ORG_PERMISSIONS = {
-    MANAGE: 'org-unit:manage',
-    READ: 'org-unit:read',
-    UPDATE: 'org-unit:update',
+    MANAGE: 'org:manage',
+    READ: 'org:read',
+    UPDATE: 'org:update',
 } as const;

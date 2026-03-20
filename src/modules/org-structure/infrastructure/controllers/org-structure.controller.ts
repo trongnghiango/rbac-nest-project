@@ -1,16 +1,22 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { OrgStructureService } from '../../application/services/org-structure.service';
 import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../../application/dtos/org-unit.dto';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { ORG_PERMISSIONS } from '@modules/org-structure/domain/constants/org.permissions';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 
-// @UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
 @ApiTags('Organization Structure (Cơ cấu tổ chức)') // Gom nhóm API trên Swagger
 @Controller('org-structure')
 export class OrgStructureController {
     constructor(private readonly orgService: OrgStructureService) { }
 
     @Get('tree')
-    // @Permissions('org:read')
+    @Permissions(ORG_PERMISSIONS.READ) //'org:read'
     @ApiOperation({
         summary: 'Lấy toàn bộ sơ đồ tổ chức (Organization Tree)',
         description: 'Trả về dữ liệu cây phân cấp (Hierarchical Tree) của toàn bộ công ty. Các phòng ban con được chứa trong mảng `children`.'
@@ -50,7 +56,7 @@ export class OrgStructureController {
     }
 
     @Post('units')
-    // @Permissions('org:create')
+    @Permissions(ORG_PERMISSIONS.MANAGE)// @Permissions('org:create')
     @ApiOperation({
         summary: 'Tạo mới một Đơn vị/Phòng ban',
         description: 'Thêm một phòng ban hoặc chi nhánh mới vào sơ đồ tổ chức. Truyền `parentId` nếu nó trực thuộc một phòng ban khác.'
@@ -64,7 +70,7 @@ export class OrgStructureController {
     }
 
     @Patch('units/:id')
-    // @Permissions('org:update')
+    @Permissions(ORG_PERMISSIONS.UPDATE) // @Permissions('org:update')
     @ApiOperation({ summary: 'Cập nhật thông tin Phòng ban' })
     @ApiParam({ name: 'id', description: 'ID của phòng ban cần cập nhật', example: 2 })
     @ApiBody({ type: UpdateOrgUnitDto })
@@ -85,5 +91,12 @@ export class OrgStructureController {
     @ApiResponse({ status: 400, description: 'Không thể xóa (Thường do đang chứa phòng ban con).' })
     async deleteUnit(@Param('id', ParseIntPipe) id: number) {
         return this.orgService.deleteUnit(id);
+    }
+
+    @Post('tools/migrate-paths')
+    @Permissions(PERMISSIONS.SYSTEM_CONFIG)
+    @ApiOperation({ summary: 'Tool chạy 1 lần: Tự động tính toán trường path cho data cũ' })
+    async runMigration() {
+        return this.orgService.migrateAllNullPaths();
     }
 }

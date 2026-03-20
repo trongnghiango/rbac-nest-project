@@ -54,4 +54,12 @@ export class UpdateOrgUnitDto {
     @IsOptional()
     @IsBoolean()
     isActive?: boolean;
+
+    @ApiPropertyOptional({
+        description: 'Gán cho đơn vị hiện tại phụ thuộc vào đơn vị cha.',
+        example: 1
+    })
+    @IsOptional()
+    @IsNumber()
+    parentId?: number;
 }

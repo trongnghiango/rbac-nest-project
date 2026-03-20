@@ -236,7 +236,7 @@ export const performanceReviewsRelations = relations(performanceReviews, ({ one 
 
 ## File: src/database/schema/hrm/org-structure.schema.ts
 ```
-import { pgTable, serial, varchar, integer, boolean, timestamp, numeric } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, integer, boolean, timestamp, numeric, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { employees } from './employees.schema';
 
@@ -275,6 +275,7 @@ export const jobTitles = pgTable('job_titles', {
 export const orgUnits = pgTable('org_units', {
     id: serial('id').primaryKey(),
     parentId: integer('parent_id'),
+    path: varchar('path', { length: 255 }), //Trường path lưu cấu trúc cây (VD: /1/3/4/)
     type: varchar('type', { length: 50 }).notNull(), // COMPANY, BOD, DEPARTMENT, TEAM
     code: varchar('code', { length: 50 }).unique().notNull(),
     name: varchar('name', { length: 255 }).notNull(),
@@ -282,7 +283,10 @@ export const orgUnits = pgTable('org_units', {
     deletedAt: timestamp('deleted_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (table) => ({
+    // 👉 Đánh Index B-Tree cho trường path để tăng tốc query LIKE
+    pathIdx: index('idx_org_units_path').on(table.path),
+}));
 
 // 6. 🔥 BẢNG MỚI: VỊ TRÍ ĐỊNH BIÊN (POSITIONS - MA TRẬN CHỨC DANH)
 // Đại diện cho các ô màu vàng/xanh trong Hình 3
@@ -492,16 +496,25 @@ export const userRolesRelations = relations(userRoles, ({ one }) => ({
 
 ## File: src/database/schema/index.ts
 ```
+// src/database/schema/index.ts
+
 // Core
 export * from './core/users.schema';
 export * from './core/sessions.schema';
 
-
+// RBAC
 export * from './rbac/rbac.schema';
+
+// System
 export * from './system/notifications.schema';
 
+// HRM (Nhân sự)
 export * from './hrm/org-structure.schema';
 export * from './hrm/employees.schema';
+
+// ✅ BỔ SUNG DÒNG NÀY (CRM - Đối tác/Khách hàng)
+export * from './crm/organizations.schema';
+
 ```
 
 ## File: src/database/schema/core/users.schema.ts
@@ -1053,6 +1066,8 @@ export class CsvParserAdapter implements IFileParser {
         columns: true, // Lấy dòng đầu làm Headers
         skip_empty_lines: true,
         trim: true,
+        bom: true, // ✅ QUAN TRỌNG: Thêm dòng này để loại bỏ ký tự ẩn \uFEFF của Windows
+        relax_quotes: true, // ✅ Cho phép parse thoáng hơn nếu file có dấu ngoặc kép thừa
       })
     );
 
@@ -1997,7 +2012,8 @@ export class EmployeeService {
             // 6. Cập nhật lại hồ sơ nhân viên: Gắn ID của tài khoản vừa tạo vào hồ sơ
             await this.employeeRepo.save({
                 id: employeeId,       // CÓ ID -> Repository sẽ hiểu đây là lệnh UPDATE
-                userId: newUser.id,   // Gắn userId vào
+                // userId: newUser.id,   // Gắn userId vàoo
+                userId: (newUser as { id: number }).id,
             });
 
             // 7. Trả về kết quả cho IT hoặc tự động gửi email cho nhân viên
@@ -2522,7 +2538,7 @@ import { User } from '../../domain/entities/user.entity';
 import { UserProfile } from '../../domain/types/user-profile.type';
 
 export interface CreateUserParams {
-  id: number;
+  id: number | string;
   username: string;
   email?: string;
   password?: string;
@@ -2548,21 +2564,16 @@ export class UserService {
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    const newUser = new User(
-      data.id,
-      data.username,
-      data.email,
-      hashedPassword,
-      data.fullName,
-      true,       // isActive
-      [],         // roles (Mặc định rỗng, gán role sau)
-      undefined,  // telegramId
-      undefined,  // phoneNumber
-      undefined,  // avatarUrl
-      undefined,  // profile
-      new Date(), // createdAt
-      new Date(), // updatedAt 
-    );
+    const newUser = new User({
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      fullName: data.fullName,
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const user = await this.userRepository.save(newUser);
     return user.toJSON();
@@ -2699,15 +2710,16 @@ export class UserImportService {
             );
 
             chunk.forEach((row, j) => {
-                usersToInsert.push(new User(
-                    undefined as any,
-                    row.username,
-                    row.email || undefined,
-                    hashedPasswords[j],
-                    row.fullName,
-                    true,
-                    [], undefined, undefined, undefined, undefined, new Date(), new Date()
-                ));
+                usersToInsert.push(new User({
+                    username: row.username,
+                    email: row.email || undefined,
+                    hashedPassword: hashedPasswords[j],
+                    fullName: row.fullName,
+                    isActive: true,
+                    roles: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                }));
             });
         }
 
@@ -2917,7 +2929,7 @@ export class UpdateProfileDto {
 ```
 
 import { InferInsertModel } from 'drizzle-orm';
-import { User } from '../../../domain/entities/user.entity';
+import { AssociatedProfiles, User } from '../../../domain/entities/user.entity';
 import { users } from '@database/schema';
 
 // Type insert cho bảng users (flat)
@@ -2936,21 +2948,47 @@ export class UserMapper {
       ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
       : [];
 
-    return new User(
-      raw.id,
-      raw.username,
-      raw.email || undefined,
-      raw.hashedPassword || undefined,
-      raw.fullName || undefined,
-      raw.isActive ?? true,
-      roles, // ✅ Inject Roles
-      raw.telegramId || undefined, // ✅ Inject TelegramId
-      raw.phoneNumber || undefined,
-      raw.avatarUrl || undefined,
-      (raw.profile as any) || undefined,
-      raw.createdAt || undefined,
-      raw.updatedAt || undefined,
-    );
+    // ✅ LOGIC MỚI: Khởi tạo cái túi rỗng
+    const businessProfiles: AssociatedProfiles = {};
+
+    // 1. Nhặt dữ liệu HRM (Nếu User là Nhân viên)
+    if (raw.employeeProfile) {
+      businessProfiles.employee = {
+        employeeCode: raw.employeeProfile.employeeCode,
+        fullName: raw.employeeProfile.fullName,
+        position: raw.employeeProfile.position?.name || raw.employeeProfile.position?.jobTitle?.name,
+        departmentCode: raw.employeeProfile.position?.orgUnit?.code,
+        location: raw.employeeProfile.location?.name,
+      };
+    }
+
+    // 2. Nhặt dữ liệu CRM (Nếu User là Đối tác/Doanh nghiệp B2B)
+    if (raw.organizationProfile) {
+      businessProfiles.organization = {
+        companyName: raw.organizationProfile.companyName,
+        taxCode: raw.organizationProfile.taxCode,
+        industry: raw.organizationProfile.industry,
+        status: raw.organizationProfile.status,
+      };
+    }
+
+    // ✅ TRUYỀN DƯỚI DẠNG OBJECT
+    return new User({
+      id: raw.id,
+      username: raw.username,
+      email: raw.email || undefined,
+      hashedPassword: raw.hashedPassword || undefined,
+      fullName: raw.fullName || undefined,
+      isActive: raw.isActive ?? true,
+      roles: roles,
+      telegramId: raw.telegramId || undefined,
+      phoneNumber: raw.phoneNumber || undefined,
+      avatarUrl: raw.avatarUrl || undefined,
+      profile: (raw.profile as any) || undefined,
+      profiles: businessProfiles, // Truyền cái túi vào
+      createdAt: raw.createdAt || undefined,
+      updatedAt: raw.updatedAt || undefined,
+    });
   }
 
   /**
@@ -2997,26 +3035,32 @@ export class DrizzleUserRepository implements IUserRepository {
 
   // --- READ METHODS (Dùng Query Builder để join bảng roles) ---
 
+  // 🚀 1. HÀM DÙNG CHO API /api/auth/profile (Cần xem đầy đủ dữ liệu)
   async findById(id: number, tx?: Transaction): Promise<User | null> {
     const db = this.getDb(tx);
-    // ✅ Dùng query API để fetch relations (user -> userRoles -> role)
     const result = await db.query.users.findFirst({
       where: eq(schema.users.id, id),
       with: {
-        userRoles: {
-          with: { role: true },
+        userRoles: { with: { role: true } },
+        // ✅ Bật Join bảng HRM
+        employeeProfile: {
+          with: { location: true, position: { with: { orgUnit: true, jobTitle: true } } },
         },
+        // ✅ Bật Join bảng CRM
+        organizationProfile: true,
       },
     });
     return UserMapper.toDomain(result);
   }
 
+  // ⚡ 2. HÀM DÙNG ĐỂ LOGIN / XÁC THỰC TOKEN (Phải chạy cực nhanh)
   async findByUsername(username: string, tx?: Transaction): Promise<User | null> {
     const db = this.getDb(tx);
     const result = await db.query.users.findFirst({
       where: eq(schema.users.username, username),
       with: {
         userRoles: { with: { role: true } },
+        // ❌ KHÔNG JOIN bảng Employee hay Organization ở đây để tiết kiệm DB
       },
     });
     return UserMapper.toDomain(result);
@@ -3219,28 +3263,82 @@ export interface UserProfile {
 
 ```
 
+## File: src/modules/user/domain/constants/user.permissions.ts
+```
+export const USER_PERMISSIONS = {
+    MANAGE: 'user:manage',
+    READ: 'user:read',
+    CREATE: 'user:create',
+    UPDATE: 'user:update',
+    DELETE: 'user:delete',
+} as const;
+
+```
+
 ## File: src/modules/user/domain/entities/user.entity.ts
 ```
 import { UserProfile } from '../types/user-profile.type';
 
+export interface AssociatedProfiles {
+  employee?: Record<string, any>;
+  organization?: Record<string, any>;
+  customer?: Record<string, any>;
+}
+
+// ✅ 1. TẠO INTERFACE PROPS
+export interface UserProps {
+  id?: number; // Đổi thành Optional để khi Create mới không cần hack `undefined as any`
+  username: string;
+  email?: string;
+  hashedPassword?: string;
+  fullName?: string;
+  isActive?: boolean;
+  roles?: string[];
+  telegramId?: string;
+  phoneNumber?: string;
+  avatarUrl?: string;
+  profile?: UserProfile;
+  profiles?: AssociatedProfiles;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export class User {
-  constructor(
-    private _id: number,
-    private _username: string,
-    private _email?: string,
-    private _hashedPassword?: string,
-    private _fullName?: string,
-    private _isActive: boolean = true,
-    // ✅ Strict RBAC: Role là danh sách mảng string
-    private _roles: string[] = [],
-    // ✅ Chatbot Integration
-    private _telegramId?: string,
-    private _phoneNumber?: string,
-    private _avatarUrl?: string,
-    private _profile?: UserProfile,
-    private _createdAt?: Date,
-    private _updatedAt?: Date,
-  ) { }
+  private _id?: number;
+  private _username: string;
+  private _email?: string;
+  private _hashedPassword?: string;
+  private _fullName?: string;
+  private _isActive: boolean;
+  private _roles: string[];
+  private _telegramId?: string;
+  private _phoneNumber?: string;
+  private _avatarUrl?: string;
+  private _profile?: UserProfile;
+  private _profiles: AssociatedProfiles;
+  private _createdAt?: Date;
+  private _updatedAt?: Date;
+
+  // ✅ 2. CONSTRUCTOR NHẬN 1 OBJECT DUY NHẤT
+  constructor(props: UserProps) {
+    this._id = props.id;
+    this._username = props.username;
+    this._email = props.email;
+    this._hashedPassword = props.hashedPassword;
+    this._fullName = props.fullName;
+
+    // Xử lý các giá trị mặc định (Default values)
+    this._isActive = props.isActive ?? true;
+    this._roles = props.roles || [];
+    this._profiles = props.profiles || {};
+
+    this._telegramId = props.telegramId;
+    this._phoneNumber = props.phoneNumber;
+    this._avatarUrl = props.avatarUrl;
+    this._profile = props.profile;
+    this._createdAt = props.createdAt;
+    this._updatedAt = props.updatedAt;
+  }
 
   // --- Getters ---
   get id() { return this._id; }
@@ -3254,6 +3352,9 @@ export class User {
   get phoneNumber() { return this._phoneNumber; }
   get avatarUrl() { return this._avatarUrl; }
   get profile() { return this._profile; }
+  // Getter mới
+  get profiles() { return this._profiles; }
+
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
 
@@ -3299,6 +3400,7 @@ export class User {
       phoneNumber: this._phoneNumber,
       avatarUrl: this._avatarUrl,
       profile: this._profile,
+      profiles: this._profiles,
       createdAt: this._createdAt,
       updatedAt: this._updatedAt,
     };
@@ -3422,6 +3524,12 @@ export class RbacManagerService {
     // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
     const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
 
+    // ✅ THÊM LOG ĐỂ DEBUG
+    this.logger.debug(`[CSV Import] Đã parse được: ${records.length} dòng.`);
+    if (records.length > 0) {
+      this.logger.debug(`[CSV Import] Dữ liệu mẫu dòng 1: ${JSON.stringify(records[0])}`);
+    }
+
     let createdCount = 0;
     let updatedCount = 0;
 
@@ -3429,7 +3537,11 @@ export class RbacManagerService {
       // 2. Lấy data từ Object (Rất an toàn, không sợ phẩy trong ngoặc kép nữa)
       const { role: roleName, resource, action, attributes, description } = row;
 
-      if (!roleName || !resource) continue;
+      // ✅ THÊM LOG ĐỂ XEM CÓ BỊ SKIP KHÔNG
+      if (!roleName || !resource) {
+        this.logger.warn(`[CSV Import] Bỏ qua dòng do thiếu role hoặc resource: ${JSON.stringify(row)}`);
+        continue;
+      }
 
       const permName = resource === '*' ? 'manage:all' : `${resource}:${action}`;
 
@@ -3510,6 +3622,7 @@ import {
 } from '../../domain/repositories/rbac.repository';
 // IMPORT Interface
 import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { CORE_ROLES } from '@modules/rbac/domain/constants/rbac.constants';
 
 @Injectable()
 export class PermissionService {
@@ -3520,9 +3633,9 @@ export class PermissionService {
     @Inject(IUserRoleRepository) private userRoleRepo: IUserRoleRepository,
     @Inject(IRoleRepository) private roleRepo: IRoleRepository,
     @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
-  ) {}
+  ) { }
 
-  async userHasPermission(
+  async userHasPermission_old(
     userId: number,
     permissionName: string,
   ): Promise<boolean> {
@@ -3557,6 +3670,56 @@ export class PermissionService {
     // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
 
     return permArray.includes(permissionName);
+  }
+
+  async userHasPermission(userId: number, permissionName: string): Promise<boolean> {
+    const cacheKey = `${this.CACHE_PREFIX}${userId}`;
+
+    // 1. Lấy từ Cache
+    const cached = await this.cacheService.get<string[]>(cacheKey);
+
+    if (cached) {
+      // ✅ Bổ sung logic: Nếu trong cache có role SUPER_ADMIN hoặc quyền '*' -> Cho qua luôn
+      if (cached.includes(CORE_ROLES.SUPER_ADMIN) || cached.includes('*') || cached.includes('manage:all')) {
+        return true;
+      }
+      return cached.includes(permissionName);
+    }
+
+    // 2. Query DB nếu Cache Miss
+    const userRoles = await this.userRoleRepo.findByUserId(userId);
+    const activeRoles = userRoles.filter((ur) => ur.isActive() && ur.role?.isActive);
+
+    if (activeRoles.length === 0) return false;
+
+    // ✅ KIỂM TRA SUPER_ADMIN Bypass
+    const isSuperAdmin = activeRoles.some(ur => ur.role?.name === CORE_ROLES.SUPER_ADMIN);
+
+    const roleIds = activeRoles.map((ur) => ur.roleId);
+    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+
+    const permissions = new Set<string>();
+
+    // Nếu là Super Admin, cache lại keyword nhận diện để lần sau bỏ qua nhanh
+    if (isSuperAdmin) {
+      permissions.add(CORE_ROLES.SUPER_ADMIN);
+      permissions.add('*');
+    } else {
+      roles.forEach((r) =>
+        r.permissions?.forEach((p) => {
+          if (p.isActive) permissions.add(p.name); // Lưu string "module:action"
+        }),
+      );
+    }
+
+    const permArray = Array.from(permissions);
+
+    // Lưu vào cache Redis
+    await this.cacheService.set(cacheKey, permArray, this.CACHE_TTL);
+
+    // Trả về kết quả
+    if (isSuperAdmin) return true;
+    return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
   }
 
   async assignRole(
@@ -3891,12 +4054,15 @@ export class AssignRoleDto {
 
 ## File: src/modules/rbac/infrastructure/decorators/permission.decorator.ts
 ```
+// src/modules/rbac/infrastructure/decorators/permission.decorator.ts
 import { SetMetadata } from '@nestjs/common';
+import { PermissionString } from '../../domain/constants/rbac.constants'; // ✅ Import type
 
 export const PERMISSIONS_KEY = 'permissions';
-export const Permissions = (...permissions: string[]) =>
-  SetMetadata(PERMISSIONS_KEY, permissions);
 
+// ✅ Ép kiểu ...permissions thành mảng PermissionString
+export const Permissions = (...permissions: PermissionString[]) =>
+  SetMetadata(PERMISSIONS_KEY, permissions);
 ```
 
 ## File: src/modules/rbac/infrastructure/persistence/mappers/rbac.mapper.ts
@@ -4282,56 +4448,86 @@ export class PermissionGuard implements CanActivate {
 
 ## File: src/modules/rbac/domain/constants/rbac.constants.ts
 ```
-export enum SystemRole {
-  SUPER_ADMIN = 'SUPER_ADMIN',
-  ADMIN = 'ADMIN',
-  MANAGER = 'MANAGER',
-  STAFF = 'STAFF',
-  USER = 'USER',
-  GUEST = 'GUEST',
-}
+import { ORG_PERMISSIONS } from "@modules/org-structure/domain/constants/org.permissions";
+import { USER_PERMISSIONS } from "@modules/user/domain/constants/user.permissions";
 
-export enum SystemPermission {
-  // User permissions
-  USER_CREATE = 'user:create',
-  USER_READ = 'user:read',
-  USER_UPDATE = 'user:update',
-  USER_DELETE = 'user:delete',
-  USER_MANAGE = 'user:manage',
+/**
+ * 1. CORE ROLES
+ * Chỉ khai báo các Role mang tính hệ thống (Bypass quyền, Default User).
+ * Tuyệt đối không khai báo MANAGER, STAFF, HR... ở đây.
+ */
+export const CORE_ROLES = {
+  SUPER_ADMIN: 'SUPER_ADMIN', // Thượng phương bảo kiếm (Bypass mọi Guard)
+  DEFAULT_USER: 'USER',       // Vai trò mặc định khi có người đăng ký mới
+} as const;
 
-  // Booking permissions
-  BOOKING_CREATE = 'booking:create',
-  BOOKING_READ = 'booking:read',
-  BOOKING_UPDATE = 'booking:update',
-  BOOKING_DELETE = 'booking:delete',
-  BOOKING_MANAGE = 'booking:manage',
+/**
+ * 2. CORE ACTIONS
+ * Các hành động CRUD chuẩn. Dùng để tham chiếu trong code nếu cần, 
+ * giúp đồng bộ với file rbac.csv
+ */
+export const ACTIONS = {
+  MANAGE: 'manage', // Toàn quyền (Tương đương *)
+  CREATE: 'create',
+  READ: 'read',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  EXPORT: 'export',
+} as const;
 
-  // Payment permissions
-  PAYMENT_PROCESS = 'payment:process',
-  PAYMENT_REFUND = 'payment:refund',
-  PAYMENT_VIEW = 'payment:view',
-
-  // Report permissions
-  REPORT_VIEW = 'report:view',
-  REPORT_EXPORT = 'report:export',
-  REPORT_MANAGE = 'report:manage',
-
-  // System permissions
-  SYSTEM_CONFIG = 'system:config',
-  RBAC_MANAGE = 'rbac:manage',
-  AUDIT_VIEW = 'audit:view',
-}
-
-export const ROLE_HIERARCHY: Record<SystemRole, number> = {
-  [SystemRole.SUPER_ADMIN]: 100,
-  [SystemRole.ADMIN]: 90,
-  [SystemRole.MANAGER]: 80,
-  [SystemRole.STAFF]: 70,
-  [SystemRole.USER]: 60,
-  [SystemRole.GUEST]: 50,
+/**
+ * 3. HIERARCHY
+ * So sánh cấp bậc (Giúp Admin không thể xóa/sửa Super Admin).
+ */
+export const ROLE_HIERARCHY: Record<string, number> = {
+  [CORE_ROLES.SUPER_ADMIN]: 100,
+  'ADMIN': 90,
+  'MANAGER': 80,
+  'STAFF': 70,
+  [CORE_ROLES.DEFAULT_USER]: 60,
 };
 
-export const DEFAULT_ROLE = SystemRole.USER;
+/**
+ * 4. BỘ TỪ ĐIỂN QUYỀN (Dành cho Developer)
+ * - Đây KHÔNG PHẢI là giới hạn của hệ thống.
+ * - Đây chỉ là bộ hằng số để Developer gõ code có Auto-complete, tránh sai chính tả.
+ * - Nếu có module mới (VD: payroll), Dev có thể gõ thẳng string 'payroll:view' 
+ *   hoặc bổ sung vào đây cho team cùng dùng.
+ */
+// Nhờ Spread Operator (...), nếu bạn thêm module mới (VD: PAYROLL), 
+// bạn chỉ cần import PAYROLL_PERMISSIONS vào đây.
+export const PERMISSIONS = {
+  // 1. Module đã có file riêng
+  ...USER_PERMISSIONS, // user:manage, user:read...
+  ...ORG_PERMISSIONS,  // org:manage, org:read, org:update
+
+  // 2. Các quyền Hệ thống
+  SYSTEM_CONFIG: 'system:config',
+  RBAC_MANAGE: 'rbac:manage',
+  AUDIT_VIEW: 'audit:view',
+
+  // 3. Khai báo nhanh các module từ CSV (Sau này có module riêng thì tách ra sau)
+  EMPLOYEE_MANAGE: 'employee:manage',
+  EMPLOYEE_READ: 'employee:read',
+  EMPLOYEE_UPDATE: 'employee:update',
+
+  REPORT_MANAGE: 'report:manage',
+  REPORT_VIEW: 'report:view',
+  REPORT_EXPORT: 'report:export',
+
+  BOOKING_MANAGE: 'booking:manage',
+  BOOKING_CREATE: 'booking:create',
+  BOOKING_READ: 'booking:read',
+  BOOKING_UPDATE: 'booking:update',
+} as const;
+
+
+// Trích xuất các value thành 1 Type (VD: 'system:config' | 'rbac:manage' | ...)
+export type KnownPermission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
+
+// 🚀 MAGIC TRICK: Cho phép Auto-complete các quyền đã biết, 
+// nhưng VẪN CHO PHÉP Dev gõ string bất kỳ nếu hệ thống có Module mới!
+export type PermissionString = KnownPermission | (string & {});
 
 ```
 
@@ -4529,31 +4725,100 @@ export class OrgStructureModule { }
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { IOrgStructureRepository } from '../../domain/repositories/org-structure.repository';
 import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../dtos/org-unit.dto';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port'; // 👉 INJECT TRANSACTION
 
 @Injectable()
 export class OrgStructureService {
     constructor(
         @Inject(IOrgStructureRepository) private readonly repo: IOrgStructureRepository,
+        @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
     ) { }
 
+    // 1. TẠO MỚI (Tự động tính toán Path)
     async createUnit(dto: CreateOrgUnitDto) {
-        if (dto.parentId) {
-            const parent = await this.repo.findById(dto.parentId);
-            if (!parent) throw new NotFoundException('Phòng ban cha không tồn tại');
-        }
-        return this.repo.createOrgUnit(dto);
+        return this.txManager.runInTransaction(async (tx) => {
+            let parentPath = '';
+
+            if (dto.parentId) {
+                const parent = await this.repo.findById(dto.parentId, tx);
+                if (!parent) throw new NotFoundException('Phòng ban cha không tồn tại');
+                parentPath = parent.path || '';
+            }
+
+            // Bước 1: Insert data vào DB để DB cấp ID tự động (Lúc này path = null)
+            const newUnit = await this.repo.createOrgUnit(dto, tx);
+
+            // Bước 2: Nối chuỗi tạo Path (VD: parent = /1/3/ -> path mới = /1/3/4/)
+            const newPath = dto.parentId ? `${parentPath}${newUnit.id}/` : `/${newUnit.id}/`;
+
+            // Bước 3: Update lại Path cho Unit vừa tạo
+            return this.repo.updateOrgUnit(newUnit.id, { path: newPath }, tx);
+        });
     }
 
+    // 2. CẬP NHẬT (Xử lý thuật toán Di chuyển cành cây - Move Node)
     async updateUnit(id: number, dto: UpdateOrgUnitDto) {
-        const unit = await this.repo.updateOrgUnit(id, dto);
+        const unit = await this.repo.findById(id);
         if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
-        return unit;
+
+        return this.txManager.runInTransaction(async (tx) => {
+            // NẾU CÓ SỰ THAY ĐỔI VỀ PHÒNG BAN CHA (Move Node)
+            if (dto.parentId !== undefined && dto.parentId !== unit.parentId) {
+
+                let newParentPath = '';
+                if (dto.parentId) {
+                    const newParent = await this.repo.findById(dto.parentId, tx);
+                    if (!newParent) throw new NotFoundException('Phòng ban cha mới không tồn tại');
+
+                    // 🚨 BẢO VỆ CHẶT CHẼ: Chống lỗi vòng lặp (Vác ông nội làm con của thằng cháu)
+                    // Nếu path của cha mới bắt đầu bằng path của node hiện tại -> BÁO LỖI!
+                    if (newParent.path?.startsWith(unit.path!)) {
+                        throw new BadRequestException('Không thể di chuyển phòng ban này vào bên trong phòng ban con của chính nó!');
+                    }
+                    newParentPath = newParent.path || '';
+                }
+
+                const oldPath = unit.path!;
+                const newPath = dto.parentId ? `${newParentPath}${unit.id}/` : `/${unit.id}/`;
+
+                // Bước 1: Cập nhật thông tin node hiện tại
+                await this.repo.updateOrgUnit(id, { ...dto, path: newPath }, tx);
+
+                // Bước 2: Cập nhật Path cho TOÀN BỘ nhánh con bên dưới (Descendants)
+                await this.repo.updateDescendantsPath(oldPath, newPath, tx);
+
+            } else {
+                // Cập nhật bình thường (Đổi tên, trạng thái) không ảnh hưởng tới cây
+                await this.repo.updateOrgUnit(id, dto, tx);
+            }
+
+            return this.repo.findById(id, tx);
+        });
     }
 
+    // 3. XÓA (Check an toàn bằng Path)
     async deleteUnit(id: number) {
-        const success = await this.repo.deleteOrgUnit(id);
-        if (!success) throw new BadRequestException('Không thể xóa. Vui lòng kiểm tra xem phòng ban này có chứa phòng ban con không.');
+        const unit = await this.repo.findById(id);
+        if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
+
+        // Check xem có phòng ban con nào mang path của node này không
+        const descendants = await this.repo.findDescendantsByPath(unit.path!);
+        if (descendants.length > 1) { // Lớn hơn 1 vì nó đếm cả chính nó
+            throw new BadRequestException('Không thể xóa. Có phòng ban con đang trực thuộc đơn vị này.');
+        }
+
+        await this.repo.deleteOrgUnit(id);
         return { message: 'Xóa thành công' };
+    }
+
+    // 4. BIỂU DIỄN SỨC MẠNH CỦA PATH (API Lấy phòng ban + toàn bộ cấp dưới)
+    async getDepartmentWithAllDescendants(id: number) {
+        const unit = await this.repo.findById(id);
+        if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
+
+        // Chỉ bằng 1 câu LIKE, ta lấy được toàn bộ Sơ đồ tổ chức từ Node này trở xuống
+        const flatList = await this.repo.findDescendantsByPath(unit.path!);
+        return flatList;
     }
 
     // 🚀 THUẬT TOÁN VẼ CÂY SƠ ĐỒ TỔ CHỨC SIÊU TỐC
@@ -4584,6 +4849,63 @@ export class OrgStructureService {
         });
 
         return tree;
+    }
+
+    // HÀM MIGRATION: Cập nhật Path cho dữ liệu cũ - cái này có thể sẽ không dùng nếu là mới
+    async migrateAllNullPaths() {
+        // 1. Lấy toàn bộ phòng ban lên RAM
+        const allUnits = await this.repo.findAllActiveUnits(); // Hoặc viết hàm lấy cả unit ko active
+
+        // 2. Chuyển thành Dictionary (Map) để tra cứu cực nhanh O(1)
+        const unitMap = new Map(allUnits.map(u => [u.id, u]));
+        const calculatedPaths = new Map<number, string>(); // Lưu path đã tính
+
+        // 3. Hàm đệ quy tính Path
+        const calculatePath = (id: number): string => {
+            // Nếu đã tính rồi thì lấy ra dùng luôn (Tránh tính lại)
+            if (calculatedPaths.has(id)) return calculatedPaths.get(id)!;
+
+            const unit = unitMap.get(id);
+            if (!unit) return ''; // Trường hợp data rác, parentId trỏ đi đâu không biết
+
+            // Nếu là Root Node
+            if (!unit.parentId) {
+                const newPath = `/${unit.id}/`;
+                calculatedPaths.set(id, newPath);
+                return newPath;
+            }
+
+            // Nếu là Child Node -> Gọi đệ quy lấy Path của Cha, rồi nối ID của mình vào
+            const parentPath = calculatePath(unit.parentId);
+            const newPath = `${parentPath}${unit.id}/`;
+
+            calculatedPaths.set(id, newPath);
+            return newPath;
+        };
+
+        // 4. Bắt đầu tính toán cho tất cả
+        for (const unit of allUnits) {
+            if (!unit.path) { // Chỉ tính những thằng đang bị null
+                calculatePath(unit.id);
+            }
+        }
+
+        // 5. Cập nhật hàng loạt xuống DB (Dùng Transaction để an toàn)
+        await this.txManager.runInTransaction(async (tx) => {
+            const promises: Promise<any>[] = [];
+
+            for (const [id, newPath] of calculatedPaths.entries()) {
+                promises.push(this.repo.updateOrgUnit(id, { path: newPath }, tx));
+            }
+
+            await Promise.all(promises);
+        });
+
+        return {
+            success: true,
+            message: `Đã Migrate thành công ${calculatedPaths.size} phòng ban!`,
+            data: Object.fromEntries(calculatedPaths) // Trả về xem chơi cho vui
+        };
     }
 }
 
@@ -4836,6 +5158,14 @@ export class UpdateOrgUnitDto {
     @IsOptional()
     @IsBoolean()
     isActive?: boolean;
+
+    @ApiPropertyOptional({
+        description: 'Gán cho đơn vị hiện tại phụ thuộc vào đơn vị cha.',
+        example: 1
+    })
+    @IsOptional()
+    @IsNumber()
+    parentId?: number;
 }
 
 ```
@@ -4882,19 +5212,25 @@ export class CompanyImportController {
 
 ## File: src/modules/org-structure/infrastructure/controllers/org-structure.controller.ts
 ```
-import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { OrgStructureService } from '../../application/services/org-structure.service';
 import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../../application/dtos/org-unit.dto';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { ORG_PERMISSIONS } from '@modules/org-structure/domain/constants/org.permissions';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 
-// @UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
 @ApiTags('Organization Structure (Cơ cấu tổ chức)') // Gom nhóm API trên Swagger
 @Controller('org-structure')
 export class OrgStructureController {
     constructor(private readonly orgService: OrgStructureService) { }
 
     @Get('tree')
-    // @Permissions('org:read')
+    @Permissions(ORG_PERMISSIONS.READ) //'org:read'
     @ApiOperation({
         summary: 'Lấy toàn bộ sơ đồ tổ chức (Organization Tree)',
         description: 'Trả về dữ liệu cây phân cấp (Hierarchical Tree) của toàn bộ công ty. Các phòng ban con được chứa trong mảng `children`.'
@@ -4934,7 +5270,7 @@ export class OrgStructureController {
     }
 
     @Post('units')
-    // @Permissions('org:create')
+    @Permissions(ORG_PERMISSIONS.MANAGE)// @Permissions('org:create')
     @ApiOperation({
         summary: 'Tạo mới một Đơn vị/Phòng ban',
         description: 'Thêm một phòng ban hoặc chi nhánh mới vào sơ đồ tổ chức. Truyền `parentId` nếu nó trực thuộc một phòng ban khác.'
@@ -4948,7 +5284,7 @@ export class OrgStructureController {
     }
 
     @Patch('units/:id')
-    // @Permissions('org:update')
+    @Permissions(ORG_PERMISSIONS.UPDATE) // @Permissions('org:update')
     @ApiOperation({ summary: 'Cập nhật thông tin Phòng ban' })
     @ApiParam({ name: 'id', description: 'ID của phòng ban cần cập nhật', example: 2 })
     @ApiBody({ type: UpdateOrgUnitDto })
@@ -4970,6 +5306,13 @@ export class OrgStructureController {
     async deleteUnit(@Param('id', ParseIntPipe) id: number) {
         return this.orgService.deleteUnit(id);
     }
+
+    @Post('tools/migrate-paths')
+    @Permissions(PERMISSIONS.SYSTEM_CONFIG)
+    @ApiOperation({ summary: 'Tool chạy 1 lần: Tự động tính toán trường path cho data cũ' })
+    async runMigration() {
+        return this.orgService.migrateAllNullPaths();
+    }
 }
 
 ```
@@ -4977,22 +5320,23 @@ export class OrgStructureController {
 ## File: src/modules/org-structure/infrastructure/persistence/drizzle-org-structure.repository.ts
 ```
 import { Injectable } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql, like } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { IOrgStructureRepository, OrgUnitEntity, PositionEntity } from '../../domain/repositories/org-structure.repository';
 import { orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
+import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
 
-    async createOrgUnit(data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity> {
-        const db = this.getDb();
+    async createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity> {
+        const db = this.getDb(tx);
         const [result] = await db.insert(orgUnits).values(data as any).returning();
         return result as OrgUnitEntity;
     }
 
-    async updateOrgUnit(id: number, data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity | null> {
-        const db = this.getDb();
+    async updateOrgUnit(id: number, data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity | null> {
+        const db = this.getDb(tx);
         const [result] = await db
             .update(orgUnits)
             .set({ ...data, updatedAt: new Date() })
@@ -5001,8 +5345,29 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
         return result ? (result as OrgUnitEntity) : null;
     }
 
-    async deleteOrgUnit(id: number): Promise<boolean> {
+    // 🚀 MAGIC Ở ĐÂY: Update Path hàng loạt cho nhánh con bằng SQL REPLACE
+    async updateDescendantsPath(oldPath: string, newPath: string, tx?: Transaction): Promise<void> {
+        const db = this.getDb(tx);
+        await db.update(orgUnits)
+            .set({
+                // SQL: REPLACE(path, '/1/3/', '/1/5/3/')
+                path: sql`REPLACE(${orgUnits.path}, ${oldPath}, ${newPath})`,
+                updatedAt: new Date(),
+            })
+            // Chỉ tác động vào những node bắt đầu bằng oldPath (Cây con)
+            .where(like(orgUnits.path, `${oldPath}%`));
+    }
+
+    // 🚀 LẤY TOÀN BỘ CÂY CON CỰC NHANH VỚI MỆNH ĐỀ LIKE
+    async findDescendantsByPath(path: string): Promise<OrgUnitEntity[]> {
         const db = this.getDb();
+        return await db.select()
+            .from(orgUnits)
+            .where(like(orgUnits.path, `${path}%`));
+    }
+
+    async deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean> {
+        const db = this.getDb(tx);
         try {
             // Sẽ báo lỗi nếu phòng này đang được làm parentId của phòng khác (do có FK)
             await db.delete(orgUnits).where(eq(orgUnits.id, id));
@@ -5012,14 +5377,14 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
         }
     }
 
-    async findById(id: number): Promise<OrgUnitEntity | null> {
-        const db = this.getDb();
+    async findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null> {
+        const db = this.getDb(tx);
         const result = await db.select().from(orgUnits).where(eq(orgUnits.id, id)).limit(1);
         return result[0] ? (result[0] as OrgUnitEntity) : null;
     }
 
-    async findPositionById(id: number): Promise<PositionEntity | null> {
-        const db = this.getDb();
+    async findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null> {
+        const db = this.getDb(tx);
         const result = await db.select()
             .from(positions)
             .where(eq(positions.id, id))
@@ -5031,18 +5396,32 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
     async findAllActiveUnits(): Promise<OrgUnitEntity[]> {
         const db = this.getDb();
         return await db.select().from(orgUnits).where(eq(orgUnits.isActive, true));
+
     }
 }
 
 ```
 
+## File: src/modules/org-structure/domain/constants/org.permissions.ts
+```
+export const ORG_PERMISSIONS = {
+    MANAGE: 'org:manage',
+    READ: 'org:read',
+    UPDATE: 'org:update',
+} as const;
+
+```
+
 ## File: src/modules/org-structure/domain/repositories/org-structure.repository.ts
 ```
+import { Transaction } from "@core/shared/application/ports/transaction-manager.port";
+
 export const IOrgStructureRepository = Symbol('IOrgStructureRepository');
 
 export interface OrgUnitEntity {
     id: number;
     parentId: number | null;
+    path: string | null;
     type: string;
     code: string;
     name: string;
@@ -5065,12 +5444,18 @@ export interface PositionEntity {
 }
 
 export interface IOrgStructureRepository {
-    createOrgUnit(data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity>;
-    updateOrgUnit(id: number, data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity | null>;
-    deleteOrgUnit(id: number): Promise<boolean>;
-    findById(id: number): Promise<OrgUnitEntity | null>;
+    createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity>;
+    updateOrgUnit(id: number, data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity | null>;
+    deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean>;
+    findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null>;
 
-    findPositionById(id: number): Promise<PositionEntity | null>;
+    findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null>;
+
+    // 1. Cập nhật Path cho toàn bộ cây con khi Phòng ban cha bị di chuyển
+    updateDescendantsPath(oldPath: string, newPath: string, tx?: Transaction): Promise<void>;
+
+    // 2. Lấy toàn bộ phòng ban con, cháu chắt (Flat list)
+    findDescendantsByPath(path: string): Promise<OrgUnitEntity[]>;
 
     // Lấy toàn bộ danh sách phòng ban (phục vụ việc vẽ cây)
     findAllActiveUnits(): Promise<OrgUnitEntity[]>;
@@ -5240,6 +5625,7 @@ import {
 } from '@core/shared/application/ports/logger.port';
 import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
 import { ICacheService } from '@core/shared/application/ports/cache.port';
+import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
 
 export type AuthResponse = {
   accessToken: string;
@@ -5271,7 +5657,11 @@ export class AuthenticationService {
     if (!isValid) throw new UnauthorizedException('Invalid credentials');
     if (!user.id) throw new InternalServerErrorException('User ID is missing');
 
-    const payload: JwtPayload = { sub: user.id, username: user.username, roles: [] };
+    const payload: JwtPayload = {
+      sub: user.id,
+      username: user.username,
+      roles: user.roles || []
+    };
     const accessToken = this.jwtService.sign(payload);
 
     const expiresAt = new Date();
@@ -5359,21 +5749,17 @@ export class AuthenticationService {
 
     const hashedPassword = await PasswordUtil.hash(data.password);
 
-    const newUser = new User(
-      data.id,
-      data.username,
-      data.email,
-      hashedPassword,
-      data.fullName,
-      true,
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      new Date(),
-      new Date(),
-    );
+    const newUser = new User({
+      id: data.id,
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      fullName: data.fullName,
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     return this.txManager.runInTransaction(async (tx) => {
       const savedUser = await this.userRepository.save(newUser, tx);
@@ -5411,6 +5797,83 @@ export class AuthenticationService {
 
       return { accessToken, user: savedUser.toJSON() };
     });
+  }
+
+  // =========================================================================
+  // 4. ĐỔI MẬT KHẨU (Dành cho User đang đăng nhập)
+  // =========================================================================
+  async changePassword(userId: number, dto: any): Promise<void> {
+    const user = await this.userRepository.findById(userId);
+    if (!user || !user.hashedPassword) throw new BadRequestException('User không hợp lệ');
+
+    // Kiểm tra mật khẩu cũ
+    const isMatch = await PasswordUtil.compare(dto.oldPassword, user.hashedPassword);
+    if (!isMatch) throw new BadRequestException('Mật khẩu cũ không chính xác');
+
+    // Hash mật khẩu mới và gọi hàm của Rich Domain Entity
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew); // Logic đổi trạng thái nằm gọn trong Entity
+
+    await this.txManager.runInTransaction(async (tx) => {
+      // 1. Lưu user
+      await this.userRepository.save(user, tx);
+
+      // 2. Bảo mật: Xóa toàn bộ Session cũ trong DB để ép các thiết bị khác văng ra (Đăng xuất khỏi mọi nơi)
+      await this.sessionRepository.deleteByUserId(userId);
+    });
+  }
+
+  // =========================================================================
+  // 5. QUÊN MẬT KHẨU (Gửi OTP)
+  // =========================================================================
+  async forgotPassword(email: string): Promise<void> {
+    const user = await this.userRepository.findByEmail(email);
+
+    // Bảo mật: Không ném lỗi NotFound để tránh hacker dò quét email trong hệ thống
+    if (!user || !user.isActive) return;
+
+    // Sinh OTP 6 số ngẫu nhiên
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Lưu vào Redis (TTL 5 phút = 300 giây)
+    const redisKey = `auth:otp:${email}`;
+    await this.cacheService.set(redisKey, otpCode, 300);
+
+    // Bắn Event để NotificationModule lo việc gửi Email
+    await this.eventBus.publish(
+      new OtpRequestedEvent(email, {
+        email: user.email!,
+        fullName: user.fullName || 'Người dùng',
+        otpCode: otpCode,
+      })
+    );
+  }
+
+  // =========================================================================
+  // 6. ĐẶT LẠI MẬT KHẨU (Xác thực OTP)
+  // =========================================================================
+  async resetPassword(dto: any): Promise<void> {
+    const redisKey = `auth:otp:${dto.email}`;
+    const cachedOtp = await this.cacheService.get<string>(redisKey);
+
+    if (!cachedOtp || cachedOtp !== dto.otp) {
+      throw new BadRequestException('Mã OTP không hợp lệ hoặc đã hết hạn');
+    }
+
+    const user = await this.userRepository.findByEmail(dto.email);
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    // Cập nhật mật khẩu mới
+    const hashedNew = await PasswordUtil.hash(dto.newPassword);
+    user.changePassword(hashedNew);
+
+    await this.txManager.runInTransaction(async (tx) => {
+      await this.userRepository.save(user, tx);
+      await this.sessionRepository.deleteByUserId(user.id); // Xóa session cũ
+    });
+
+    // Hủy OTP trong Redis sau khi dùng thành công
+    await this.cacheService.del(redisKey);
   }
 
 }
@@ -5521,14 +5984,16 @@ import {
   Get,
   Req,
   Ip,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthenticationService } from '../../application/services/authentication.service';
 import { Public } from '../decorators/public.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { User } from '../../../user/domain/entities/user.entity';
-import { LoginDto, RegisterDto } from '../dtos/auth.dto';
+import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto } from '../dtos/auth.dto';
 import type { Request } from 'express'; // Import Request
+import { ApiBearerAuth } from '@nestjs/swagger';
 
 @Controller('auth')
 export class AuthController {
@@ -5554,12 +6019,16 @@ export class AuthController {
     return this.authService.register(data);
   }
 
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('profile')
-  getProfile(@CurrentUser() user: User) {
-    return { user: user.toJSON() };
+  async getProfile(@CurrentUser() user: User) {
+    //
+    const data = user.toString()
+    return user.toJSON()
   }
 
+  @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@Req() request: Request) {
@@ -5570,6 +6039,30 @@ export class AuthController {
     }
     return { success: true, message: 'Đăng xuất thành công' };
   }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  async changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {
+    if (!user.id) throw new BadRequestException('Lỗi định danh User');
+    await this.authService.changePassword(user.id, dto);
+    return { success: true, message: 'Đổi mật khẩu thành công. Vui lòng đăng nhập lại.' };
+  }
+
+  @Public() // Không cần đăng nhập
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+    // Luôn trả về thông báo chung chung để chống Hacker dò email
+    return { success: true, message: 'Nếu email tồn tại trong hệ thống, mã OTP đã được gửi đến bạn.' };
+  }
+
+  @Public() // Không cần đăng nhập
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto);
+    return { success: true, message: 'Đặt lại mật khẩu thành công. Bạn có thể đăng nhập ngay.' };
+  }
 }
 
 ```
@@ -5578,6 +6071,7 @@ export class AuthController {
 ```
 import {
   IsString,
+  Length,
   MinLength,
   IsNumber,
   IsOptional,
@@ -5621,6 +6115,39 @@ export class RegisterDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+}
+
+export class ChangePasswordDto {
+  @ApiProperty({ example: 'OldPass123!' })
+  @IsString()
+  oldPassword: string;
+
+  @ApiProperty({ example: 'NewPass123!', description: 'Mật khẩu mới (Tối thiểu 6 ký tự)' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'user@test.com', description: 'Email đã đăng ký tài khoản' })
+  @IsEmail()
+  email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ example: 'user@test.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ example: '123456', description: 'Mã OTP 6 số nhận từ Email' })
+  @IsString()
+  @Length(6, 6)
+  otp: string;
+
+  @ApiProperty({ example: 'NewPass123!' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
 }
 
 ```
@@ -5681,7 +6208,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get('JWT_SECRET') || 'super-secret-key',
+      secretOrKey: configService.get('JWT_SECRET') || 'secret',
       passReqToCallback: true, // Lấy nguyên Request để tách Token
     });
   }
@@ -5707,13 +6234,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Tài khoản đã bị khóa hoặc không tồn tại');
     }
 
-    return {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      fullName: user.fullName,
-      roles: payload.roles || [],
-    };
+    return user
   }
 }
 
@@ -5931,6 +6452,26 @@ export interface ISessionRepository {
 
 ```
 
+## File: src/modules/auth/domain/events/otp-requested.event.ts
+```
+import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface';
+
+export class OtpRequestedEvent implements IDomainEvent {
+    static readonly EVENT_NAME = 'OtpRequested';
+    readonly occurredAt = new Date();
+
+    constructor(
+        public readonly aggregateId: string, // Email của user
+        public readonly payload: {
+            email: string;
+            fullName: string;
+            otpCode: string;
+        },
+    ) { }
+}
+
+```
+
 ## File: src/modules/notification/notification.module.ts
 ```
 import { Module } from '@nestjs/common';
@@ -5941,12 +6482,14 @@ import { DrizzleNotificationRepository } from './infrastructure/persistence/driz
 import { INotificationRepository } from './domain/repositories/notification.repository';
 import { ConsoleEmailAdapter } from './infrastructure/adapters/console-email.adapter';
 import { IEmailSender } from './application/ports/email-sender.port';
+import { OtpRequestedListener } from './application/listeners/otp-requested.listener';
 
 @Module({
   controllers: [NotificationController],
   providers: [
     NotificationService,
     UserRegisteredListener, // Đăng ký Listener để EventBus Explorer quét được
+    OtpRequestedListener, // ✅ Đăng ký Listener tại đây để EventBus quét được
     {
       provide: INotificationRepository,
       useClass: DrizzleNotificationRepository,
@@ -5958,7 +6501,7 @@ import { IEmailSender } from './application/ports/email-sender.port';
   ],
   exports: [NotificationService],
 })
-export class NotificationModule {}
+export class NotificationModule { }
 
 ```
 
@@ -6073,6 +6616,42 @@ export class UserRegisteredListener {
       );
     }
   }
+}
+
+```
+
+## File: src/modules/notification/application/listeners/otp-requested.listener.ts
+```
+import { Injectable, Inject } from '@nestjs/common';
+import { EventHandler } from '@core/shared/infrastructure/event-bus/decorators/event-handler.decorator';
+import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
+import { IEmailSender } from '../ports/email-sender.port';
+import { ILogger, LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+
+@Injectable()
+export class OtpRequestedListener {
+    constructor(
+        @Inject(IEmailSender) private readonly emailSender: IEmailSender,
+        @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
+    ) { }
+
+    @EventHandler(OtpRequestedEvent)
+    async handleOtpRequested(event: OtpRequestedEvent) {
+        const { email, fullName, otpCode } = event.payload;
+
+        this.logger.info(`📢 [EVENT RECEIVED] OtpRequested: Cấp mã OTP cho ${email}`);
+
+        const subject = 'Mã xác thực đặt lại mật khẩu (OTP)';
+        const body = `
+      Xin chào ${fullName},
+      
+      Mã OTP để đặt lại mật khẩu của bạn là: ${otpCode}
+      Mã này sẽ hết hạn trong 5 phút. Vui lòng không chia sẻ mã này cho bất kỳ ai.
+    `;
+
+        // Gửi email thông qua Port (ConsoleEmailAdapter sẽ in ra Terminal)
+        await this.emailSender.send(email, subject, body);
+    }
 }
 
 ```
@@ -6350,13 +6929,10 @@ export class TestModule {}
 import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
 import { DRIZZLE } from '@database/drizzle.provider';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema'; // Sẽ tự động lấy từ index.ts mới
+import * as schema from '@database/schema';
 import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
-import {
-  SystemPermission,
-  SystemRole,
-} from '../../rbac/domain/constants/rbac.constants';
+import { CORE_ROLES } from '../../rbac/domain/constants/rbac.constants'; // ✅ Import hằng số mới
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
@@ -6365,26 +6941,26 @@ export class DatabaseSeeder implements OnModuleInit {
   constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
 
   async onModuleInit() {
-    // Chỉ chạy khi biến môi trường cho phép hoặc ở môi trường dev
     if (process.env.RUN_SEEDS !== 'true' && process.env.NODE_ENV !== 'development') {
       return;
     }
 
-    this.logger.log('🌱 Bắt đầu Seeding database (New Schema: Identity & Profile)...');
+    this.logger.log('🌱 Bắt đầu Seeding database (Dynamic RBAC)...');
 
     try {
-      // 1. Seed cấu hình hệ thống
-      await this.seedPermissions();
-      await this.seedRoles();
+      // 1. Chỉ tạo Role hệ thống (SUPER_ADMIN)
+      await this.seedCoreRoles();
 
-      // 2. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
+      // 2. Tạo Master Permission (manage:all)
+      await this.seedMasterPermission();
+
+      // 3. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
       await this.seedHrmDictionaries();
 
-      // 3. Seed Users & Employee Profiles
+      // 4. Seed User Admin gốc
       await this.seedUsersAndProfiles();
 
-      // 4. Gán quyền
-      await this.assignPermissionsToRoles();
+      // 5. Gán quyền tối cao cho Admin gốc
       await this.assignRolesToUsers();
 
       this.logger.log('✅ Database seeded successfully!');
@@ -6393,123 +6969,74 @@ export class DatabaseSeeder implements OnModuleInit {
     }
   }
 
-  private async seedPermissions() {
-    const values = Object.values(SystemPermission).map((name) => {
-      const [res, act] = name.split(':');
-      return {
-        name,
-        resourceType: res,
-        action: act,
+  private async seedCoreRoles() {
+    // Chỉ tạo đúng Role cốt lõi. Các Role khác (MANAGER, STAFF) sẽ do file rbac.csv sinh ra.
+    await this.db
+      .insert(schema.roles)
+      .values({
+        name: CORE_ROLES.SUPER_ADMIN,
+        description: 'System role: Root Administrator',
+        isSystem: true,
         isActive: true,
-        description: `System permission: ${name}`,
-      };
-    });
-
-    if (values.length > 0) {
-      await this.db
-        .insert(schema.permissions)
-        .values(values)
-        .onConflictDoNothing({ target: schema.permissions.name });
-    }
-    this.logger.log(` - Checked/Inserted ${values.length} permissions`);
+      })
+      .onConflictDoNothing({ target: schema.roles.name });
+    this.logger.log(' - Seeded CORE_ROLES');
   }
 
-  private async seedRoles() {
-    const values = Object.values(SystemRole).map((name) => ({
-      name,
-      description: `System role: ${name}`,
-      isSystem: true,
-      isActive: true,
-    }));
-
-    if (values.length > 0) {
-      await this.db
-        .insert(schema.roles)
-        .values(values)
-        .onConflictDoNothing({ target: schema.roles.name });
-    }
-    this.logger.log(` - Checked/Inserted ${values.length} roles`);
+  private async seedMasterPermission() {
+    // Tạo 1 permission vạn năng để mồi
+    await this.db
+      .insert(schema.permissions)
+      .values({
+        name: 'manage:all',
+        resourceType: '*',
+        action: '*',
+        isActive: true,
+        description: 'Master Permission',
+      })
+      .onConflictDoNothing({ target: schema.permissions.name });
   }
 
-  // ✅ BƯỚC MỚI: Tạo dữ liệu mồi cho Cơ cấu tổ chức
   private async seedHrmDictionaries() {
-    // Tạo 1 phòng ban gốc (Công ty)
     await this.db.insert(schema.orgUnits)
       .values({ type: 'COMPANY', code: 'HQ', name: 'Trụ sở chính Công ty' })
       .onConflictDoNothing({ target: schema.orgUnits.code });
 
-    // Tạo 1 vài chức danh cơ bản
     const titles = [{ name: 'Tổng Giám Đốc' }, { name: 'Trưởng Phòng' }, { name: 'Nhân viên' }];
     await this.db.insert(schema.jobTitles)
       .values(titles)
       .onConflictDoNothing({ target: schema.jobTitles.name });
 
-    this.logger.log(' - HRM Dictionaries checked/inserted');
+    this.logger.log(' - HRM Dictionaries seeded');
   }
 
-  // ✅ BƯỚC ĐÃ REFACTOR: Tách biệt việc tạo User và Employee Profile
   private async seedUsersAndProfiles() {
     const hashedPassword = await bcrypt.hash('123456', 10);
-
-    const usersToSeed = [
-      { username: 'superadmin', email: 'admin@test.com', employeeCode: 'ADMIN-001', fullName: 'Super Admin' },
-      { username: 'user1', email: 'user@test.com', employeeCode: 'NV-0001', fullName: 'Normal User' },
-    ];
-
-    for (const data of usersToSeed) {
-      // 1. Kiểm tra xem user Identity đã tồn tại chưa
-      const existingUser = await this.db.query.users.findFirst({
-        where: eq(schema.users.username, data.username),
-      });
-
-      if (!existingUser) {
-        // 2. Insert Identity vào bảng `users`
-        const [newUser] = await this.db
-          .insert(schema.users)
-          .values({
-            username: data.username,
-            email: data.email,
-            hashedPassword: hashedPassword,
-            isActive: true,
-          })
-          .returning({ id: schema.users.id }); // Lấy ID vừa tạo
-
-        // 3. Insert Profile vào bảng `employees` sử dụng ID vừa lấy
-        await this.db
-          .insert(schema.employees)
-          .values({
-            userId: newUser.id,
-            employeeCode: data.employeeCode,
-            fullName: data.fullName,
-            // orgUnitId, jobTitleId có thể để null trong lúc seed ban đầu
-          });
-
-        this.logger.log(` - Created User Identity & Employee Profile for: ${data.username}`);
-      }
-    }
-  }
-
-  private async assignPermissionsToRoles() {
-    const adminRole = await this.db.query.roles.findFirst({
-      where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
+    const existingUser = await this.db.query.users.findFirst({
+      where: eq(schema.users.username, 'superadmin'),
     });
 
-    if (!adminRole) return;
+    if (!existingUser) {
+      const [newUser] = await this.db
+        .insert(schema.users)
+        .values({
+          username: 'superadmin',
+          email: 'admin@test.com',
+          hashedPassword: hashedPassword,
+          isActive: true,
+        })
+        .returning({ id: schema.users.id });
 
-    const allPerms = await this.db.select({ id: schema.permissions.id }).from(schema.permissions);
-    if (allPerms.length === 0) return;
+      await this.db
+        .insert(schema.employees)
+        .values({
+          userId: newUser.id,
+          employeeCode: 'ADMIN-001',
+          fullName: 'Super Admin',
+        });
 
-    const rolePermissionsValues = allPerms.map((perm) => ({
-      roleId: adminRole.id,
-      permissionId: perm.id,
-    }));
-
-    await this.db
-      .insert(schema.rolePermissions)
-      .values(rolePermissionsValues)
-      .onConflictDoNothing();
-
-    this.logger.log(` - Assigned ${allPerms.length} permissions to Super Admin`);
+      this.logger.log(' - Created Master User: superadmin');
+    }
   }
 
   private async assignRolesToUsers() {
@@ -6519,7 +7046,7 @@ export class DatabaseSeeder implements OnModuleInit {
         columns: { id: true },
       }),
       this.db.query.roles.findFirst({
-        where: eq(schema.roles.name, SystemRole.SUPER_ADMIN),
+        where: eq(schema.roles.name, CORE_ROLES.SUPER_ADMIN),
         columns: { id: true },
       }),
     ]);
@@ -6527,17 +7054,13 @@ export class DatabaseSeeder implements OnModuleInit {
     if (adminUser && adminRole) {
       await this.db
         .insert(schema.userRoles)
-        .values({
-          userId: adminUser.id,
-          roleId: adminRole.id,
-        })
+        .values({ userId: adminUser.id, roleId: adminRole.id })
         .onConflictDoNothing();
 
-      this.logger.log(' - Assigned Super Admin role to user: superadmin');
+      this.logger.log(' - Assigned SUPER_ADMIN role to superadmin');
     }
   }
 }
-
 ```
 
 ## File: src/modules/test/controllers/test.controller.ts
@@ -6551,11 +7074,12 @@ import { CurrentUser } from '../../auth/infrastructure/decorators/current-user.d
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { ILogger } from '@core/shared/application/ports/logger.port';
 import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 
 @Controller('test')
 @ApiBearerAuth()
 export class TestController {
-  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) {}
+  constructor(@Inject(LOGGER_TOKEN) private readonly logger: ILogger) { }
 
   @Public()
   @Get('health')
@@ -6607,6 +7131,55 @@ export class TestController {
       },
     };
   }
+
+  // =========================================================================
+  // 🚀 API SANDBOX: DÙNG ĐỂ BẬT/TẮT TEST TỪNG QUYỀN
+  // =========================================================================
+  @Get('sandbox-permissions')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @Permissions(
+    // 💡 HƯỚNG DẪN: 
+    // Hãy MỞ COMMENT (xóa dấu //) ở đúng 1 dòng mà bạn muốn test.
+    // Sau khi test xong, hãy comment lại và mở dòng khác để thử.
+
+    // --- 1. NHÓM QUYỀN HỆ THỐNG (SYSTEM & RBAC) ---
+    // PERMISSIONS.SYSTEM_CONFIG,      // Chỉ ADMIN hoặc SUPER_ADMIN mới qua được
+    // PERMISSIONS.RBAC_MANAGE,        // Chỉ IT_ADMIN hoặc SUPER_ADMIN
+    // PERMISSIONS.AUDIT_VIEW,         // Chỉ QA_AUDITOR hoặc ADMIN
+
+    // --- 2. NHÓM QUYỀN TÀI KHOẢN (USER) ---
+    // PERMISSIONS.USER_MANAGE,        // ADMIN, IT_ADMIN
+    // PERMISSIONS.USER_READ,          // STAFF, MANAGER (Xem danh bạ)
+
+    // --- 3. NHÓM QUYỀN NHÂN SỰ & TỔ CHỨC (HRM) ---
+    // PERMISSIONS.ORG_MANAGE,         // ADMIN
+    // PERMISSIONS.ORG_READ,           // STAFF, MANAGER (Xem sơ đồ công ty)
+    // PERMISSIONS.EMPLOYEE_MANAGE,    // ADMIN (HR)
+    // PERMISSIONS.EMPLOYEE_UPDATE,    // MANAGER (Cập nhật nhân sự cấp dưới)
+    // PERMISSIONS.EMPLOYEE_READ,      // MANAGER
+
+    // --- 4. NHÓM QUYỀN NGHIỆP VỤ (BOOKING/ĐƠN HÀNG) ---
+    // PERMISSIONS.BOOKING_MANAGE,     // MANAGER (Quản lý toàn bộ đơn của phòng)
+    // PERMISSIONS.BOOKING_CREATE,     // STAFF (Lên đơn mới)
+    // PERMISSIONS.BOOKING_READ,       // STAFF (Xem đơn của mình)
+    // PERMISSIONS.BOOKING_UPDATE,     // STAFF (Sửa đơn của mình)
+
+    // --- 5. TÍNH NĂNG MỚI (TEST MAGIC STRING) ---
+    // 'payroll:approve',              // Bạn có thể gõ string bất kỳ vào đây để test!
+  )
+  testSandbox(@CurrentUser() user: any) {
+    return {
+      success: true,
+      message: '🎉 CHÚC MỪNG! BẠN ĐÃ VƯỢT QUA GUARD BẢO VỆ.',
+      note: 'Nếu bạn thấy dòng này, nghĩa là tài khoản của bạn ĐÃ CÓ quyền vừa được mở comment.',
+      user_info: {
+        id: user.id,
+        username: user.username,
+        roles: user.roles, // Các role đang sở hữu
+      },
+    };
+  }
+
 }
 
 ```

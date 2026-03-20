@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, integer, boolean, timestamp, numeric } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, integer, boolean, timestamp, numeric, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { employees } from './employees.schema';
 
@@ -37,6 +37,7 @@ export const jobTitles = pgTable('job_titles', {
 export const orgUnits = pgTable('org_units', {
     id: serial('id').primaryKey(),
     parentId: integer('parent_id'),
+    path: varchar('path', { length: 255 }), //Trường path lưu cấu trúc cây (VD: /1/3/4/)
     type: varchar('type', { length: 50 }).notNull(), // COMPANY, BOD, DEPARTMENT, TEAM
     code: varchar('code', { length: 50 }).unique().notNull(),
     name: varchar('name', { length: 255 }).notNull(),
@@ -44,7 +45,10 @@ export const orgUnits = pgTable('org_units', {
     deletedAt: timestamp('deleted_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
-});
+}, (table) => ({
+    // 👉 Đánh Index B-Tree cho trường path để tăng tốc query LIKE
+    pathIdx: index('idx_org_units_path').on(table.path),
+}));
 
 // 6. 🔥 BẢNG MỚI: VỊ TRÍ ĐỊNH BIÊN (POSITIONS - MA TRẬN CHỨC DANH)
 // Đại diện cho các ô màu vàng/xanh trong Hình 3
