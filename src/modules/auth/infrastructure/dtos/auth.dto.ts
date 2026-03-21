@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsEmail,
+  IsNotEmpty,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -73,4 +74,15 @@ export class ResetPasswordDto {
   @IsString()
   @MinLength(6)
   newPassword: string;
+}
+
+
+export class RefreshTokenDto {
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1Ni...',
+    description: 'Refresh Token được cấp khi login'
+  })
+  @IsString()
+  @IsNotEmpty()
+  refreshToken: string;
 }

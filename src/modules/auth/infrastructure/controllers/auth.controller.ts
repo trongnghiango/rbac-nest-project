@@ -13,9 +13,9 @@ import { Public } from '../decorators/public.decorator';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import { User } from '../../../user/domain/entities/user.entity';
-import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto } from '../dtos/auth.dto';
+import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RefreshTokenDto, RegisterDto, ResetPasswordDto } from '../dtos/auth.dto';
 import type { Request } from 'express'; // Import Request
-import { ApiBearerAuth } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
 @Controller('auth')
 export class AuthController {
@@ -85,5 +85,18 @@ export class AuthController {
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto);
     return { success: true, message: 'Đặt lại mật khẩu thành công. Bạn có thể đăng nhập ngay.' };
+  }
+
+  @Public() // Cho phép truy cập không cần Access Token
+  @Post('refresh')
+  @ApiOperation({ summary: 'Làm mới Access Token bằng Refresh Token' })
+  async refresh(@Body() dto: RefreshTokenDto) {
+    if (!dto.refreshToken) {
+      throw new BadRequestException('Refresh Token là bắt buộc');
+    }
+
+    const result = await this.authService.refreshToken(dto.refreshToken);
+
+    return result;
   }
 }

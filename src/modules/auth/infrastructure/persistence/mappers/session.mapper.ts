@@ -25,6 +25,7 @@ export class SessionMapper {
       id: domain.id, // UUID thì có thể truyền vào hoặc để DB tự gen
       userId: domain.userId,
       token: domain.token,
+      refreshToken: domain.refreshToken,
       expiresAt: domain.expiresAt,
       ipAddress: domain.ipAddress || null,
       userAgent: domain.userAgent || null,

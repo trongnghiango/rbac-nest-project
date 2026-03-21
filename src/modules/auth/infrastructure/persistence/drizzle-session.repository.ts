@@ -38,6 +38,28 @@ export class DrizzleSessionRepository
     await this.db.delete(sessions).where(eq(sessions.userId, userId));
   }
 
+  async findByRefreshToken(refreshToken: string): Promise<Session | null> {
+    const result = await this.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.refreshToken, refreshToken))
+      .limit(1);
+    return SessionMapper.toDomain(result[0] || null);
+  }
+
+  async update(id: string, data: Partial<Session>, tx?: Transaction): Promise<void> {
+    const db = this.getDb(tx);
+    // Chuyển đổi từ CamelCase (Entity) sang SnakeCase (DB) nếu cần, 
+    // ở đây Drizzle map tự động dựa trên schema
+    await db.update(sessions)
+      .set({
+        token: data.token,
+        refreshToken: data.refreshToken,
+        expiresAt: data.expiresAt,
+      })
+      .where(eq(sessions.id, id));
+  }
+
   // 👉 THÊM HÀM TÌM SESSION THEO TOKEN
   async findByToken(token: string): Promise<Session | null> {
     const result = await this.db

@@ -357,4 +357,69 @@ export class AuthenticationService {
     await this.cacheService.del(redisKey);
   }
 
+  async refreshToken(oldRefreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
+    // 1. Kiểm tra Refresh Token có hợp lệ về mặt chữ ký JWT không
+    let payload: any;
+    try {
+      payload = this.jwtService.verify(oldRefreshToken, {
+        secret: this.configService.get<string>('auth.jwtSecret'),
+      });
+    } catch (e) {
+      throw new UnauthorizedException('Refresh Token không hợp lệ hoặc đã hết hạn');
+    }
+
+    // 2. Tìm Session trong Database bằng Refresh Token
+    const session = await this.sessionRepository.findByRefreshToken(oldRefreshToken);
+
+    // Nếu không thấy session hoặc session đã hết hạn trong DB
+    if (!session || session.isExpired()) {
+      if (session) await this.sessionRepository.deleteByToken(session.token);
+      throw new UnauthorizedException('Phiên làm việc đã kết thúc, vui lòng đăng nhập lại');
+    }
+
+    // 3. Lấy thông tin User để tạo Payload mới
+    const user = await this.userRepository.findById(session.userId);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Tài khoản đã bị khóa hoặc không tồn tại');
+    }
+
+    const newPayload: JwtPayload = {
+      sub: user.id!,
+      username: user.username,
+      roles: user.roles || [],
+    };
+
+    // 4. Tạo bộ Token mới (Rotation)
+    const newAccessToken = this.jwtService.sign(newPayload);
+    const newRefreshToken = this.jwtService.sign(
+      { sub: user.id },
+      { expiresIn: this.configService.get('auth.refreshTokenExpiresIn') }
+    );
+
+    // 5. Tính toán ngày hết hạn mới cho Session DB
+    const rtExpiresIn = this.configService.get<string>('auth.refreshTokenExpiresIn');
+    const newExpiresAt = this.calculateExpiryDate(rtExpiresIn);
+
+    // 6. 🔥 THỰC THI SONG SONG: Cập nhật DB và Refresh Cache Redis
+    const sessionTtl = this.configService.get<number>('auth.sessionTtl');
+
+    await Promise.all([
+      // Cập nhật thông tin session cũ thành token mới
+      this.sessionRepository.update(session.id!, {
+        token: newAccessToken,
+        refreshToken: newRefreshToken,
+        expiresAt: newExpiresAt,
+      }),
+      // Xóa cache cũ (Token cũ)
+      this.cacheService.del(`auth:session:${session.token}`),
+      // Set cache mới (Token mới)
+      this.cacheService.set(`auth:session:${newAccessToken}`, { userId: user.id }, sessionTtl)
+    ]);
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
 }
