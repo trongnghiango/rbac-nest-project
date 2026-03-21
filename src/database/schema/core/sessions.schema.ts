@@ -8,6 +8,7 @@ export const sessions = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     userId: bigint('user_id', { mode: 'number' }).notNull().references(() => users.id, { onDelete: 'cascade' }),
     token: text('token').notNull(),
+    refreshToken: text('refresh_token').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),

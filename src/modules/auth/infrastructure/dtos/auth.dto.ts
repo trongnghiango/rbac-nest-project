@@ -23,10 +23,6 @@ export class LoginDto {
 }
 
 export class RegisterDto {
-  @ApiProperty({ example: 12345, description: 'User ID (BigInt)' })
-  @IsNumber()
-  id: number;
-
   @ApiProperty({ example: 'newuser', description: 'Unique username' })
   @IsString()
   username: string;

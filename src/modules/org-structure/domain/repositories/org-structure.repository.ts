@@ -33,6 +33,8 @@ export interface IOrgStructureRepository {
     deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean>;
     findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null>;
 
+    findByCode(code: string, tx?: Transaction): Promise<OrgUnitEntity | null>;
+
     findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null>;
 
     // 1. Cập nhật Path cho toàn bộ cây con khi Phòng ban cha bị di chuyển

@@ -9,6 +9,7 @@ import loggingConfig from '@config/logging.config';
 import redisConfig from '@config/redis.config';
 import eventBusConfig from '@config/event-bus.config';
 import dentalConfig from '@config/dental.config';
+import authConfig from '@config/auth.config';
 
 import { CoreModule } from '@core/core.module';
 import { SharedModule } from '@core/shared/shared.module';
@@ -35,6 +36,7 @@ import { EmployeeModule } from '@modules/employee/employee.module';
         databaseConfig,
         appConfig,
         loggingConfig,
+        authConfig,
         redisConfig,
         eventBusConfig,
         dentalConfig,

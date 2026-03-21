@@ -6,11 +6,13 @@ import { EmployeeService } from './application/services/employee.service';
 import { IEmployeeRepository } from './domain/repositories/employee.repository';
 import { DrizzleEmployeeRepository } from './infrastructure/persistence/drizzle-employee.repository';
 import { UserModule } from '@modules/user/user.module';
+import { RbacModule } from '@modules/rbac/rbac.module';
 
 @Module({
     imports: [
         UserModule,
         OrgStructureModule, // Cần import để EmployeeService dùng được IOrgStructureRepository
+        RbacModule,
     ],
     controllers: [
         EmployeeController,

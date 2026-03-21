@@ -1,4 +1,7 @@
 import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
+import * as schema from '@database/schema';
+import { eq } from 'drizzle-orm';
+import * as bcrypt from 'bcrypt';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -8,6 +11,8 @@ import { CompanyImportService } from '../../org-structure/application/services/c
 import { OrgStructureService } from '../../org-structure/application/services/org-structure.service';
 // 👉 Import FileParser để đọc file org_units.csv
 import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
@@ -19,6 +24,7 @@ export class DatabaseSeeder implements OnModuleInit {
     private readonly companyImportService: CompanyImportService,
     private readonly orgStructureService: OrgStructureService, // 👉 Inject Service
     @Inject(IFileParser) private readonly fileParser: IFileParser, // 👉 Inject Parser
+    @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>
   ) { }
 
   async onModuleInit() {
@@ -29,8 +35,9 @@ export class DatabaseSeeder implements OnModuleInit {
     try {
       // THỨ TỰ THỰC THI BẮT BUỘC:
       await this.seedRbacRules();       // 1. Tạo Role
-      await this.seedOrgUnits();        // 2. Vẽ Sơ đồ Tổ chức (Cây)
-      await this.seedCoreEmployees();   // 3. Đổ nhân sự vào sơ đồ & Gán Role
+      await this.seedSystemUsers();     // 2. admin user
+      await this.seedOrgUnits();        // 3. Vẽ Sơ đồ Tổ chức (Cây)
+      await this.seedCoreEmployees();   // 4. Đổ nhân sự vào sơ đồ & Gán Role
 
       this.logger.log('✅ Database seeded successfully từ CSV!');
     } catch (error) {
@@ -48,7 +55,71 @@ export class DatabaseSeeder implements OnModuleInit {
     this.logger.log(` - 🛡️ RBAC: Tạo mới ${result.created}, cập nhật ${result.updated} quyền.`);
   }
 
-  // 2. ĐỌC FILE SƠ ĐỒ TỔ CHỨC VÀ DỰNG CÂY
+  // 2. Tao Tai khoan He Thong
+  private async seedSystemUsers() {
+    const hashedPassword = await bcrypt.hash('K@2026', 10);
+
+    // 1. Kiểm tra User tồn tại
+    let existingUser = await this.db.query.users.findFirst({
+      where: eq(schema.users.username, 'superadmin'),
+    });
+
+    let userId: number;
+
+    if (!existingUser) {
+      // 2. Tạo User mới nếu chưa có
+      const [newUser] = await this.db
+        .insert(schema.users)
+        .values({
+          username: 'superadmin',
+          email: 'admin@test.com',
+          hashedPassword: hashedPassword,
+          isActive: true,
+        })
+        .returning({ id: schema.users.id });
+
+      userId = newUser.id;
+
+      // 3. Tạo Employee Profile
+      await this.db
+        .insert(schema.employees)
+        .values({
+          userId: userId,
+          employeeCode: 'ADMIN-001',
+          fullName: 'Super Admin',
+        });
+
+      this.logger.log(' - Created Master User: superadmin');
+    } else {
+      userId = existingUser.id;
+    }
+
+    // ==========================================================
+    // 🔥 PHẦN SỬA ĐỔI: GÁN ROLE SUPER_ADMIN VÀO BẢNG user_roles
+    // ==========================================================
+
+    // 4. Tìm ID của Role SUPER_ADMIN (đã được tạo từ bước seedRbacRules)
+    const superAdminRole = await this.db.query.roles.findFirst({
+      where: eq(schema.roles.name, 'SUPER_ADMIN'),
+    });
+
+    if (superAdminRole) {
+      await this.db
+        .insert(schema.userRoles)
+        .values({
+          userId: userId,
+          roleId: superAdminRole.id,
+          assignedAt: new Date(),
+        })
+        .onConflictDoNothing(); // Tránh lỗi nếu đã gán rồi
+
+      this.logger.log(` - 🔗 Đã gán Role [${superAdminRole.name}] cho User [superadmin]`);
+    } else {
+      this.logger.error(' ❌ Lỗi: Không tìm thấy Role SUPER_ADMIN trong DB. Hãy kiểm tra file rbac_rules.csv');
+    }
+  }
+
+  // 3. ĐỌC FILE SƠ ĐỒ TỔ CHỨC VÀ DỰNG CÂY
   private async seedOrgUnits() {
     const filePath = path.join(this.seedDir, '02_org_units.csv');
     if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 02_org_units.csv');
@@ -101,7 +172,7 @@ export class DatabaseSeeder implements OnModuleInit {
     this.logger.log(` - 🌳 Org Units: Đã dựng thành công sơ đồ tổ chức (${successCount} đơn vị).`);
   }
 
-  // 3. ĐỌC FILE NHÂN SỰ
+  // 4. ĐỌC FILE NHÂN SỰ
   private async seedCoreEmployees() {
     const filePath = path.join(this.seedDir, '03_core_employees.csv');
     if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 03_core_employees.csv');
@@ -114,3 +185,4 @@ export class DatabaseSeeder implements OnModuleInit {
     }
   }
 }
+

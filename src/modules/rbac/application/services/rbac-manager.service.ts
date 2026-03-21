@@ -55,15 +55,15 @@ export class RbacManagerService {
       // Xử lý Permission
       let perm = await this.permRepo.findByName(permName);
       if (!perm) {
-        perm = new Permission(
-          undefined,
-          permName,
-          description || '',
-          resource,
-          action,
-          true,
-          attributes || '*',
-        );
+        perm = new Permission({
+          name: permName,
+          description: description || '',
+          resourceType: resource,
+          action: action,
+          isActive: true,
+          attributes: attributes || '*',
+        });
+
         perm = await this.permRepo.save(perm);
         createdCount++;
       }
@@ -71,14 +71,14 @@ export class RbacManagerService {
       // Xử lý Role
       let role = await this.roleRepo.findByName(roleName);
       if (!role) {
-        role = new Role(
-          undefined,
-          roleName,
-          'Imported from CSV',
-          true,
-          false,
-          [],
-        );
+        role = new Role({
+          name: roleName,
+          description: 'Imported from CSV',
+          isActive: true,
+          isSystem: false,
+          permissions: []
+        });
+
         role = await this.roleRepo.save(role);
       }
 

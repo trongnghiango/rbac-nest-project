@@ -4,6 +4,8 @@ import { IEmployeeRepository } from '../../domain/repositories/employee.reposito
 import { CreateEmployeeDto } from '../dtos/create-employee.dto';
 import { UserService } from '@modules/user/application/services/user.service';
 import { ProvisionAccountDto } from '../dtos/provision-account.dto';
+import { CORE_ROLES } from '@modules/rbac/domain/constants/rbac.constants';
+import { User } from '@modules/user/domain/entities/user.entity';
 
 @Injectable()
 export class EmployeeService {
@@ -97,7 +99,37 @@ export class EmployeeService {
     }
 
 
-    async getAllEmployees() {
-        return this.employeeRepo.findAll();
+    async getAllEmployees(currentUser: User) {
+        // 🛡️ KIỂM TRA AN TOÀN
+        if (!currentUser) {
+            throw new BadRequestException('Thông tin người dùng không hợp lệ');
+        }
+
+        // 🛡️ KIỂM TRA MẢNG ROLES (Đảm bảo roles tồn tại và là mảng)
+        const userRoles = currentUser.roles || [];
+
+        // 1. Trường hợp SUPER_ADMIN: Xem tất cả
+        if (userRoles.includes(CORE_ROLES.SUPER_ADMIN)) {
+            return this.employeeRepo.findAll();
+        }
+
+        // 2. Lấy profile (Dùng optional chaining để tránh lỗi)
+        const employeeProfile = currentUser.profiles?.employee;
+
+        if (!employeeProfile || !employeeProfile.departmentCode) {
+            // Nếu là nhân viên mới chưa có phòng ban, có thể cho xem chính họ hoặc trả về mảng rỗng
+            return [];
+        }
+
+        const unit = await this.orgRepo.findByCode(employeeProfile.departmentCode);
+        if (!unit || !unit.path) {
+            return [];
+        }
+
+        const pathParts = unit.path.split('/').filter(Boolean);
+        const rootCompanyId = pathParts[0];
+        const rootPath = `/${rootCompanyId}/`;
+
+        return this.employeeRepo.findAll({ orgPath: rootPath });
     }
-}
+} 

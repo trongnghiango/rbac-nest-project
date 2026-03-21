@@ -3,6 +3,9 @@ import { eq } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
 import { employees } from '@database/schema/hrm/employees.schema'; // Import schema mới
+import { like } from 'drizzle-orm';
+import { orgUnits } from '@database/schema/hrm/org-structure.schema';
+import { positions } from '@database/schema/hrm/org-structure.schema';
 
 @Injectable()
 export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements IEmployeeRepository {
@@ -36,13 +39,40 @@ export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements 
         return result[0] || null;
     }
 
-    async findAll(): Promise<any[]> {
+    async findAll(options?: { orgPath?: string }): Promise<any[]> {
         const db = this.getDb();
-        // Dùng Relational Query để lấy luôn thông tin User và Position (Nếu cần)
+
         return await db.query.employees.findMany({
+            where: (employees, { and, exists }) => {
+                const filters = [];
+
+                // Nếu có orgPath, chỉ lấy những nhân viên thuộc các phòng ban có path bắt đầu bằng orgPath này
+                if (options?.orgPath) {
+                    filters.push(
+                        exists(
+                            db.select()
+                                .from(positions)
+                                .innerJoin(orgUnits, eq(positions.orgUnitId, orgUnits.id))
+                                .where(
+                                    and(
+                                        eq(positions.id, employees.positionId),
+                                        like(orgUnits.path, `${options.orgPath}%`) // 🚀 Sức mạnh của Materialized Path
+                                    )
+                                )
+                        )
+                    );
+                }
+                return and(...filters);
+            },
             with: {
                 user: { columns: { username: true, email: true } },
-                position: true,
+                position: {
+                    with: {
+                        orgUnit: true,
+                        grade: true
+                    }
+                },
+                location: true
             }
         });
     }

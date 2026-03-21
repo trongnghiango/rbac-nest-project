@@ -38,11 +38,12 @@ export class AuthController {
   @Public()
   @Post('register')
   async register(@Body() data: RegisterDto) {
-    return this.authService.register(data);
+    return await this.authService.register(data);
   }
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  // @UseGuards(JwtAuthGuard, PermissionGuard)
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
     //

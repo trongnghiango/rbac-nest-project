@@ -12,11 +12,13 @@ import { CurrentUser } from '../../../auth/infrastructure/decorators/current-use
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { User } from '../../domain/entities/user.entity';
 import { UpdateProfileDto } from '../dtos/update-profile.dto';
+import { ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiBearerAuth()
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UserController {
-  constructor(private userService: UserService) {}
+  constructor(private userService: UserService) { }
 
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {

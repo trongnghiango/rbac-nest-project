@@ -14,6 +14,7 @@ import { RoleResponseDto } from '../dtos/role.dto';
 import { AssignRoleDto } from '../dtos/assign-role.dto';
 import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 
 @ApiTags('RBAC - Roles')
 @ApiBearerAuth()
@@ -24,7 +25,7 @@ export class RoleController {
     private roleService: RoleService,
     private permissionService: PermissionService,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
-  ) {}
+  ) { }
 
   @ApiOperation({ summary: 'Get all roles with permissions' })
   @ApiResponse({
@@ -33,7 +34,7 @@ export class RoleController {
     type: [RoleResponseDto],
   })
   @Get()
-  @Permissions('rbac:manage')
+  @Permissions(PERMISSIONS.RBAC_MANAGE)
   async getAllRoles(): Promise<RoleResponseDto[]> {
     const roles = await this.roleService.findAllRoles();
     return roles.map((role) => RoleResponseDto.fromDomain(role));
@@ -41,7 +42,7 @@ export class RoleController {
 
   @ApiOperation({ summary: 'Assign role to user' })
   @Post('assign')
-  @Permissions('rbac:manage')
+  @Permissions(PERMISSIONS.RBAC_MANAGE)
   async assignRole(@Body() dto: AssignRoleDto) {
     await this.permissionService.assignRole(dto.userId, dto.roleId, 1);
     return { success: true, message: 'Role assigned' };

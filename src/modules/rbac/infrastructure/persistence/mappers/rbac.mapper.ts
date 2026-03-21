@@ -19,16 +19,16 @@ type UserRoleWithRole = UserRoleSelect & {
 export class RbacMapper {
   static toPermissionDomain(raw: PermissionSelect | null): Permission | null {
     if (!raw) return null;
-    return new Permission(
-      raw.id,
-      raw.name,
-      raw.description || undefined,
-      raw.resourceType || undefined,
-      raw.action || undefined,
-      raw.isActive ?? true,
-      raw.attributes || '*',
-      raw.createdAt || undefined,
-    );
+    return new Permission({
+      id: raw.id,
+      name: raw.name,
+      description: raw.description || undefined,
+      resourceType: raw.resourceType || undefined,
+      action: raw.action || undefined,
+      isActive: raw.isActive ?? true,
+      attributes: raw.attributes || '*',
+      createdAt: raw.createdAt || undefined,
+    });
   }
 
   static toPermissionPersistence(
@@ -55,16 +55,17 @@ export class RbacMapper {
         .filter(Boolean);
     }
 
-    return new Role(
-      raw.id,
-      raw.name,
-      raw.description || undefined,
-      raw.isActive ?? true,
-      raw.isSystem ?? false,
-      perms,
-      raw.createdAt || undefined,
-      raw.updatedAt || undefined,
-    );
+    // ✅ Truyền dạng Object
+    return new Role({
+      id: raw.id,
+      name: raw.name,
+      description: raw.description || undefined,
+      isActive: raw.isActive ?? true,
+      isSystem: raw.isSystem ?? false,
+      permissions: perms,
+      createdAt: raw.createdAt || undefined,
+      updatedAt: raw.updatedAt || undefined,
+    });
   }
 
   static toRolePersistence(domain: Role): InferInsertModel<typeof roles> {
@@ -85,20 +86,21 @@ export class RbacMapper {
     if (!raw) return null;
     let roleDomain;
     if ('role' in raw && raw.role) {
-      roleDomain = new Role(
-        raw.role.id,
-        raw.role.name,
-        raw.role.description || undefined,
-      );
+      roleDomain = new Role({
+        id: raw.role.id,
+        name: raw.role.name,
+        description: raw.role.description || undefined,
+      });
     }
-    return new UserRole(
-      Number(raw.userId),
-      raw.roleId,
-      raw.assignedBy ? Number(raw.assignedBy) : undefined,
-      raw.expiresAt || undefined,
-      raw.assignedAt || undefined,
-      roleDomain,
-    );
+
+    return new UserRole({
+      userId: Number(raw.userId),
+      roleId: raw.roleId,
+      assignedBy: raw.assignedBy ? Number(raw.assignedBy) : undefined,
+      expiresAt: raw.expiresAt || undefined,
+      assignedAt: raw.assignedAt || undefined,
+      role: roleDomain,
+    });
   }
 
   static toUserRolePersistence(

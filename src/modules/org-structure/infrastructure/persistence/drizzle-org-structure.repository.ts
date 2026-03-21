@@ -37,6 +37,12 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
             .where(like(orgUnits.path, `${oldPath}%`));
     }
 
+    async findByCode(code: string, tx?: Transaction): Promise<OrgUnitEntity | null> {
+        const db = this.getDb(tx);
+        const result = await db.select().from(orgUnits).where(eq(orgUnits.code, code)).limit(1);
+        return result[0] ? (result[0] as OrgUnitEntity) : null;
+    }
+
     // 🚀 LẤY TOÀN BỘ CÂY CON CỰC NHANH VỚI MỆNH ĐỀ LIKE
     async findDescendantsByPath(path: string): Promise<OrgUnitEntity[]> {
         const db = this.getDb();

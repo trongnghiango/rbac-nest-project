@@ -118,13 +118,12 @@ export class UserImportService {
                     roleNames.forEach(rName => {
                         const roleId = roleMap.get(rName);
                         if (roleId) {
-                            userRolesToInsert.push(new UserRole(
-                                savedUser.id!,
-                                roleId!,
-                                adminId, // Người thực hiện import
-                                undefined,
-                                new Date()
-                            ));
+                            userRolesToInsert.push(new UserRole({
+                                userId: savedUser.id!,
+                                roleId: roleId!,
+                                assignedBy: adminId,
+                                assignedAt: new Date()
+                            }));
                         }
                     });
                 }

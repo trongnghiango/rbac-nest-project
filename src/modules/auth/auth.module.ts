@@ -17,8 +17,11 @@ import { ISessionRepository } from './domain/repositories/session.repository';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({
-        secret: config.get('JWT_SECRET') || 'secret',
-        signOptions: { expiresIn: '1d' },
+        secret: config.get<string>('auth.jwtSecret'),
+        signOptions: {
+          // ✅ Lấy từ biến môi trường thông qua ConfigService
+          expiresIn: config.get('auth.accessTokenExpiresIn'),
+        },
       }),
       inject: [ConfigService],
     }),
@@ -32,4 +35,4 @@ import { ISessionRepository } from './domain/repositories/session.repository';
   ],
   exports: [JwtAuthGuard, AuthenticationService, JwtModule],
 })
-export class AuthModule {}
+export class AuthModule { }

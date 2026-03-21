@@ -1,14 +1,20 @@
-import { Controller, Post, Get, Body, UseGuards, Param, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Param, ParseIntPipe, UnauthorizedException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 // import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard'; // (Uncomment nếu có auth)
 import { EmployeeService } from '../../application/services/employee.service';
 import { CreateEmployeeDto } from '../../application/dtos/create-employee.dto';
 import { ProvisionAccountDto } from '@modules/employee/application/dtos/provision-account.dto';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
+import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
+import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 
 @ApiTags('Employee Management (Hồ sơ Nhân sự)')
 @ApiBearerAuth()
 @Controller('employees')
 // @UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 export class EmployeeController {
     constructor(private readonly employeeService: EmployeeService) { }
 
@@ -32,8 +38,14 @@ export class EmployeeController {
     }
 
     @Get()
-    @ApiOperation({ summary: 'Lấy danh sách toàn bộ nhân viên' })
-    async getAllEmployees() {
-        return this.employeeService.getAllEmployees();
+    @Permissions('employee:read') // Check quyền cơ bản trong bảng permissions
+    @ApiOperation({ summary: 'Lấy danh sách nhân viên theo phân quyền' })
+    async getAllEmployees(@CurrentUser() user: User) {
+        if (!user) {
+            // Nếu vào đây nghĩa là JwtAuthGuard có vấn đề hoặc Token hợp lệ nhưng User bị xóa trong DB
+            throw new UnauthorizedException('Không tìm thấy thông tin người dùng trong phiên làm việc');
+        }
+        // Truyền user đang login vào service
+        return this.employeeService.getAllEmployees(user);
     }
 }

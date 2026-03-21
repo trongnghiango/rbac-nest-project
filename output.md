@@ -389,7 +389,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
-import { users } from '@database/schema';
+import { users } from '../core/users.schema';
 
 // --- 1. TABLES DEFINITIONS ---
 
@@ -2848,11 +2848,13 @@ import { CurrentUser } from '../../../auth/infrastructure/decorators/current-use
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { User } from '../../domain/entities/user.entity';
 import { UpdateProfileDto } from '../dtos/update-profile.dto';
+import { ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiBearerAuth()
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UserController {
-  constructor(private userService: UserService) {}
+  constructor(private userService: UserService) { }
 
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
@@ -3738,7 +3740,18 @@ export class PermissionService {
 
     // Trả về kết quả
     if (isSuperAdmin) return true;
-    return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
+    // return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
+    // ✅ NÂNG CẤP THÀNH CHECK WILDCARD ĐỘNG:
+    if (permArray.includes('*') || permArray.includes('manage:all')) return true;
+    if (permArray.includes(permissionName)) return true;
+
+    // Logic phân tách (VD: 'rbac:manage' chia thành 'rbac' và 'manage')
+    const [resource, action] = permissionName.split(':');
+
+    // Kiểm tra xem user có quyền 'rbac:*' không
+    if (resource && permArray.includes(`${resource}:*`)) return true;
+
+    return false;
   }
 
   async assignRole(
@@ -3943,17 +3956,18 @@ import { RoleResponseDto } from '../dtos/role.dto';
 import { AssignRoleDto } from '../dtos/assign-role.dto';
 import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
 import type { ILogger } from '@core/shared/application/ports/logger.port';
+import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 
 @ApiTags('RBAC - Roles')
 @ApiBearerAuth()
 @Controller('rbac/roles')
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(JwtAuthGuard)
 export class RoleController {
   constructor(
     private roleService: RoleService,
     private permissionService: PermissionService,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
-  ) {}
+  ) { }
 
   @ApiOperation({ summary: 'Get all roles with permissions' })
   @ApiResponse({
@@ -3962,7 +3976,7 @@ export class RoleController {
     type: [RoleResponseDto],
   })
   @Get()
-  @Permissions('rbac:manage')
+  @Permissions('booking:update')
   async getAllRoles(): Promise<RoleResponseDto[]> {
     const roles = await this.roleService.findAllRoles();
     return roles.map((role) => RoleResponseDto.fromDomain(role));
@@ -3970,7 +3984,7 @@ export class RoleController {
 
   @ApiOperation({ summary: 'Assign role to user' })
   @Post('assign')
-  @Permissions('rbac:manage')
+  @Permissions(PERMISSIONS.RBAC_MANAGE)
   async assignRole(@Body() dto: AssignRoleDto) {
     await this.permissionService.assignRole(dto.userId, dto.roleId, 1);
     return { success: true, message: 'Role assigned' };
@@ -4705,6 +4719,7 @@ import {
     RoleService,
     IRoleRepository,
     IUserRoleRepository,
+    RbacManagerService,
   ],
 })
 export class RbacModule { }
@@ -4733,7 +4748,7 @@ import { RbacModule } from '@modules/rbac/rbac.module';
             useClass: DrizzleOrgStructureRepository,
         },
     ],
-    exports: [OrgStructureService, IOrgStructureRepository], // Export nếu các module khác (như Employee) cần gọi
+    exports: [OrgStructureService, IOrgStructureRepository, CompanyImportService], // Export nếu các module khác (như Employee) cần gọi
 })
 export class OrgStructureModule { }
 
@@ -4752,6 +4767,11 @@ export class OrgStructureService {
         @Inject(IOrgStructureRepository) private readonly repo: IOrgStructureRepository,
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
     ) { }
+
+    // 0. LẤY TẤT CẢ (Dùng cho Seeder hoặc các tác vụ map dữ liệu)
+    async findAllUnits() {
+        return this.repo.findAllActiveUnits();
+    }
 
     // 1. TẠO MỚI (Tự động tính toán Path)
     async createUnit(dto: CreateOrgUnitDto) {
@@ -4968,7 +4988,7 @@ export class CompanyImportService {
 
     async importCoreCompany(csvBuffer: Buffer, adminId: number) {
         const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
-        if (!records.length) return { success: false, message: 'File CSV rỗng' };
+        if (!records.length) return { success: false as const, message: 'File CSV rỗng' };
 
         // 1. Bóc tách dữ liệu Unique (Set/Map)
         const locations = new Set<string>();
@@ -5109,7 +5129,7 @@ export class CompanyImportService {
             }
 
             return {
-                success: true,
+                success: true as const,
                 message: 'Khởi tạo cấu trúc nhân sự (Ma trận vị trí) thành công!',
                 stats: { employeesImported: successCount },
             };
@@ -5687,7 +5707,15 @@ export class AuthenticationService {
     expiresAt.setDate(expiresAt.getDate() + 1); // Token sống 1 ngày
 
     // A. Lưu vào Database (PostgreSQL)
-    const session = new Session(undefined, user.id, accessToken, expiresAt, credentials.ip, credentials.userAgent, new Date());
+    const session = new Session({
+      userId: user.id,
+      token: accessToken,
+      expiresAt: expiresAt,
+      ipAddress: credentials.ip,
+      userAgent: credentials.userAgent,
+      createdAt: new Date(),
+    });
+
     await this.sessionRepository.create(session);
 
     // B. 👉 Lưu vào Redis (Tính TTL theo giây để Redis tự động xóa khi hết hạn)
@@ -5769,7 +5797,7 @@ export class AuthenticationService {
     const hashedPassword = await PasswordUtil.hash(data.password);
 
     const newUser = new User({
-      id: data.id,
+      // id: data.id,
       username: data.username,
       email: data.email,
       hashedPassword: hashedPassword,
@@ -5797,15 +5825,12 @@ export class AuthenticationService {
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 1);
 
-      const session = new Session(
-        undefined,
-        savedUser.id,
-        accessToken,
-        expiresAt,
-        undefined,
-        undefined,
-        new Date(),
-      );
+      const session = new Session({
+        userId: savedUser.id,
+        token: accessToken,
+        expiresAt: expiresAt,
+        createdAt: new Date(),
+      });
 
       await this.sessionRepository.create(session, tx);
 
@@ -6035,11 +6060,12 @@ export class AuthController {
   @Public()
   @Post('register')
   async register(@Body() data: RegisterDto) {
-    return this.authService.register(data);
+    return await this.authService.register(data);
   }
 
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  // @UseGuards(JwtAuthGuard, PermissionGuard)
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
     //
@@ -6113,10 +6139,6 @@ export class LoginDto {
 }
 
 export class RegisterDto {
-  @ApiProperty({ example: 12345, description: 'User ID (BigInt)' })
-  @IsNumber()
-  id: number;
-
   @ApiProperty({ example: 'newuser', description: 'Unique username' })
   @IsString()
   username: string;
@@ -6330,15 +6352,16 @@ type SessionRecord = InferSelectModel<typeof sessions>;
 export class SessionMapper {
   static toDomain(raw: SessionRecord | null): Session | null {
     if (!raw) return null;
-    return new Session(
-      raw.id,
-      Number(raw.userId),
-      raw.token,
-      raw.expiresAt,
-      raw.ipAddress || undefined,
-      raw.userAgent || undefined,
-      raw.createdAt || undefined,
-    );
+
+    return new Session({
+      id: raw.id,
+      userId: Number(raw.userId),
+      token: raw.token,
+      expiresAt: raw.expiresAt,
+      ipAddress: raw.ipAddress || undefined,
+      userAgent: raw.userAgent || undefined,
+      createdAt: raw.createdAt || undefined,
+    });
   }
 
   static toPersistence(domain: Session) {
@@ -6434,16 +6457,35 @@ export class TelegramAuthGuard implements CanActivate {
 
 ## File: src/modules/auth/domain/entities/session.entity.ts
 ```
+// Định nghĩa kiểu dữ liệu truyền vào (Props)
+export interface SessionProps {
+  id?: string;
+  userId: number;
+  token: string;
+  expiresAt: Date;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt?: Date;
+}
+
 export class Session {
-  constructor(
-    public id: string | undefined, // Cho phép undefined
-    public userId: number,
-    public token: string,
-    public expiresAt: Date,
-    public ipAddress?: string,
-    public userAgent?: string,
-    public createdAt?: Date,
-  ) {}
+  public id?: string;
+  public userId: number;
+  public token: string;
+  public expiresAt: Date;
+  public ipAddress?: string;
+  public userAgent?: string;
+  public createdAt?: Date;
+
+  constructor(props: SessionProps) {
+    this.id = props.id;
+    this.userId = props.userId;
+    this.token = props.token;
+    this.expiresAt = props.expiresAt;
+    this.ipAddress = props.ipAddress;
+    this.userAgent = props.userAgent;
+    this.createdAt = props.createdAt;
+  }
 
   isExpired(): boolean {
     return new Date() > this.expiresAt;
@@ -6930,114 +6972,88 @@ export interface INotificationRepository {
 ```
 import { Module } from '@nestjs/common';
 import { UserModule } from '../user/user.module';
-import { RbacModule } from '../rbac/rbac.module'; 
+import { RbacModule } from '../rbac/rbac.module';
 import { DatabaseSeeder } from './seeders/database.seeder';
 import { TestController } from './controllers/test.controller';
+import { OrgStructureModule } from '../org-structure/org-structure.module';
 
 @Module({
-  imports: [UserModule, RbacModule],
+  imports: [UserModule, RbacModule, OrgStructureModule],
   controllers: [TestController],
   providers: [DatabaseSeeder],
 })
-export class TestModule {} 
+export class TestModule { } 
 
 ```
 
 ## File: src/modules/test/seeders/database.seeder.ts
 ```
 import { Injectable, OnModuleInit, Inject, Logger } from '@nestjs/common';
-import { DRIZZLE } from '@database/drizzle.provider';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '@database/schema';
 import { eq } from 'drizzle-orm';
 import * as bcrypt from 'bcrypt';
-import { CORE_ROLES } from '../../rbac/domain/constants/rbac.constants'; // ✅ Import hằng số mới
+import * as fs from 'fs';
+import * as path from 'path';
+
+import { RbacManagerService } from '../../rbac/application/services/rbac-manager.service';
+import { CompanyImportService } from '../../org-structure/application/services/company-import.service';
+// 👉 Import thêm OrgStructureService
+import { OrgStructureService } from '../../org-structure/application/services/org-structure.service';
+// 👉 Import FileParser để đọc file org_units.csv
+import { IFileParser } from '@core/shared/application/ports/file-parser.port';
+import { DRIZZLE } from '@database/drizzle.provider';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 @Injectable()
 export class DatabaseSeeder implements OnModuleInit {
   private readonly logger = new Logger(DatabaseSeeder.name);
+  private readonly seedDir = path.join(process.cwd(), 'database', 'seeds');
 
-  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
+  constructor(
+    private readonly rbacManagerService: RbacManagerService,
+    private readonly companyImportService: CompanyImportService,
+    private readonly orgStructureService: OrgStructureService, // 👉 Inject Service
+    @Inject(IFileParser) private readonly fileParser: IFileParser, // 👉 Inject Parser
+    @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>
+  ) { }
 
   async onModuleInit() {
-    if (process.env.RUN_SEEDS !== 'true'
-      // && process.env.NODE_ENV !== 'development'
-    ) {
-      return;
-    }
+    if (process.env.RUN_SEEDS !== 'true') return;
 
-    this.logger.log('🌱 Bắt đầu Seeding database (Dynamic RBAC)...');
+    this.logger.log('🌱 Bắt đầu Seeding database từ file CSV...');
 
     try {
-      // 1. Chỉ tạo Role hệ thống (SUPER_ADMIN)
-      await this.seedCoreRoles();
+      // THỨ TỰ THỰC THI BẮT BUỘC:
+      await this.seedRbacRules();       // 1. Tạo Role
+      await this.seedSystemUsers();     // 2. admin user
+      await this.seedOrgUnits();        // 3. Vẽ Sơ đồ Tổ chức (Cây)
+      await this.seedCoreEmployees();   // 4. Đổ nhân sự vào sơ đồ & Gán Role
 
-      // 2. Tạo Master Permission (manage:all)
-      await this.seedMasterPermission();
-
-      // 3. Seed dữ liệu từ điển HRM (Phòng ban, Chức danh)
-      await this.seedHrmDictionaries();
-
-      // 4. Seed User Admin gốc
-      await this.seedUsersAndProfiles();
-
-      // 5. Gán quyền tối cao cho Admin gốc
-      await this.assignRolesToUsers();
-
-      this.logger.log('✅ Database seeded successfully!');
+      this.logger.log('✅ Database seeded successfully từ CSV!');
     } catch (error) {
       this.logger.error('❌ Seeding failed:', error);
     }
   }
 
-  private async seedCoreRoles() {
-    // Chỉ tạo đúng Role cốt lõi. Các Role khác (MANAGER, STAFF) sẽ do file rbac.csv sinh ra.
-    await this.db
-      .insert(schema.roles)
-      .values({
-        name: CORE_ROLES.SUPER_ADMIN,
-        description: 'System role: Root Administrator',
-        isSystem: true,
-        isActive: true,
-      })
-      .onConflictDoNothing({ target: schema.roles.name });
-    this.logger.log(' - Seeded CORE_ROLES');
+  // 1. ĐỌC FILE RBAC
+  private async seedRbacRules() {
+    const filePath = path.join(this.seedDir, '01_rbac_rules.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 01_rbac_rules.csv');
+
+    const buffer = fs.readFileSync(filePath);
+    const result = await this.rbacManagerService.importFromCsv(buffer);
+    this.logger.log(` - 🛡️ RBAC: Tạo mới ${result.created}, cập nhật ${result.updated} quyền.`);
   }
 
-  private async seedMasterPermission() {
-    // Tạo 1 permission vạn năng để mồi
-    await this.db
-      .insert(schema.permissions)
-      .values({
-        name: 'manage:all',
-        resourceType: '*',
-        action: '*',
-        isActive: true,
-        description: 'Master Permission',
-      })
-      .onConflictDoNothing({ target: schema.permissions.name });
-  }
-
-  private async seedHrmDictionaries() {
-    await this.db.insert(schema.orgUnits)
-      .values({ type: 'COMPANY', code: 'HQ', name: 'Trụ sở chính Công ty' })
-      .onConflictDoNothing({ target: schema.orgUnits.code });
-
-    const titles = [{ name: 'Tổng Giám Đốc' }, { name: 'Trưởng Phòng' }, { name: 'Nhân viên' }];
-    await this.db.insert(schema.jobTitles)
-      .values(titles)
-      .onConflictDoNothing({ target: schema.jobTitles.name });
-
-    this.logger.log(' - HRM Dictionaries seeded');
-  }
-
-  private async seedUsersAndProfiles() {
-    const hashedPassword = await bcrypt.hash('123456', 10);
+  // 2. Tao Tai khoan He Thong
+  private async seedSystemUsers() {
+    const hashedPassword = await bcrypt.hash('K@2026', 10);
     const existingUser = await this.db.query.users.findFirst({
       where: eq(schema.users.username, 'superadmin'),
     });
 
     if (!existingUser) {
+
       const [newUser] = await this.db
         .insert(schema.users)
         .values({
@@ -7054,34 +7070,79 @@ export class DatabaseSeeder implements OnModuleInit {
           userId: newUser.id,
           employeeCode: 'ADMIN-001',
           fullName: 'Super Admin',
-        });
-
-      this.logger.log(' - Created Master User: superadmin');
+        })
     }
+    this.logger.log(' - Created Master User: superadmin');
   }
 
-  private async assignRolesToUsers() {
-    const [adminUser, adminRole] = await Promise.all([
-      this.db.query.users.findFirst({
-        where: eq(schema.users.username, 'superadmin'),
-        columns: { id: true },
-      }),
-      this.db.query.roles.findFirst({
-        where: eq(schema.roles.name, CORE_ROLES.SUPER_ADMIN),
-        columns: { id: true },
-      }),
-    ]);
+  // 3. ĐỌC FILE SƠ ĐỒ TỔ CHỨC VÀ DỰNG CÂY
+  private async seedOrgUnits() {
+    const filePath = path.join(this.seedDir, '02_org_units.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 02_org_units.csv');
 
-    if (adminUser && adminRole) {
-      await this.db
-        .insert(schema.userRoles)
-        .values({ userId: adminUser.id, roleId: adminRole.id })
-        .onConflictDoNothing();
+    const buffer = fs.readFileSync(filePath);
+    const records = await this.fileParser.parseCsvAsync<any>(buffer);
 
-      this.logger.log(' - Assigned SUPER_ADMIN role to superadmin');
+    // 1. Đồng bộ Map với dữ liệu đã có trong DB
+    const existingUnits = await this.orgStructureService.findAllUnits();
+    const codeToIdMap = new Map<string, number>();
+    existingUnits.forEach(u => codeToIdMap.set(u.code, u.id));
+
+    let successCount = 0;
+
+    for (const row of records) {
+      if (codeToIdMap.has(row.code)) {
+        successCount++;
+        continue;
+      }
+
+      // Tìm parentId nếu có parentCode
+      let parentId: number | undefined = undefined;
+      if (row.parentCode) {
+        parentId = codeToIdMap.get(row.parentCode);
+        if (!parentId) {
+          this.logger.warn(`Lỗi OrgUnit: Không tìm thấy Parent Code '${row.parentCode}' cho '${row.code}'. Hãy xếp thằng Cha lên trên thằng Con trong file CSV!`);
+          continue;
+        }
+      }
+
+      try {
+        // 👉 Gọi Service xịn của bạn để nó tự tạo DB và tính Path (/1/3/4/)
+        const newUnit = await this.orgStructureService.createUnit({
+          code: row.code,
+          name: row.name,
+          type: row.type,
+          parentId: parentId,
+        });
+
+        // Lưu ID lại để lát nữa mấy thằng con tìm thấy
+        codeToIdMap.set(row.code, newUnit.id);
+        successCount++;
+      } catch (error) {
+        // Bỏ qua lỗi trùng mã (đã tồn tại) để lần khởi động sau không bị lỗi
+        if (error.code !== '23505') {
+          this.logger.error(`❌ Lỗi tạo OrgUnit ${row.code} (${row.name}): ${error.message}`, error.stack);
+        }
+      }
+    }
+    this.logger.log(` - 🌳 Org Units: Đã dựng thành công sơ đồ tổ chức (${successCount} đơn vị).`);
+  }
+
+  // 4. ĐỌC FILE NHÂN SỰ
+  private async seedCoreEmployees() {
+    const filePath = path.join(this.seedDir, '03_core_employees.csv');
+    if (!fs.existsSync(filePath)) return this.logger.warn('⚠️ Bỏ qua 03_core_employees.csv');
+
+    const buffer = fs.readFileSync(filePath);
+    const result = await this.companyImportService.importCoreCompany(buffer, 1);
+
+    if (result.success) {
+      this.logger.log(` - 🏢 Nhân sự: Import thành công ${result.stats.employeesImported} nhân sự chủ chốt.`);
     }
   }
 }
+
+
 ```
 
 ## File: src/modules/test/controllers/test.controller.ts

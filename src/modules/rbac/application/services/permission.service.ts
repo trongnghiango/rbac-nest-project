@@ -102,7 +102,18 @@ export class PermissionService {
 
     // Trả về kết quả
     if (isSuperAdmin) return true;
-    return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
+    // return permArray.includes(permissionName) || permArray.includes('*') || permArray.includes('manage:all');
+    // ✅ NÂNG CẤP THÀNH CHECK WILDCARD ĐỘNG:
+    if (permArray.includes('*') || permArray.includes('manage:all')) return true;
+    if (permArray.includes(permissionName)) return true;
+
+    // Logic phân tách (VD: 'rbac:manage' chia thành 'rbac' và 'manage')
+    const [resource, action] = permissionName.split(':');
+
+    // Kiểm tra xem user có quyền 'rbac:*' không
+    if (resource && permArray.includes(`${resource}:*`)) return true;
+
+    return false;
   }
 
   async assignRole(
