@@ -1,6 +1,8 @@
 const nodeExternals = require('webpack-node-externals');
 const webpack = require('webpack');
 
+const TerserPlugin = require('terser-webpack-plugin');
+
 module.exports = function (options, webpackInstance) {
     return {
         ...options,
@@ -64,7 +66,17 @@ module.exports = function (options, webpackInstance) {
         // 3. TỐI ƯU HÓA CHO PRODUCTION
         optimization: {
             ...options.optimization,
-            minimize: true, //process.env.NODE_ENV === 'production', // Chỉ làm rối code (Minify) khi build Prod
+            minimize: true,
+            minimizer: [
+                new TerserPlugin({
+                    terserOptions: {
+                        // BẢO TỒN TÊN CLASS VÀ TÊN HÀM
+                        // Bắt buộc phải có 2 dòng này để Swagger và NestJS DI hoạt động đúng!
+                        keep_classnames: true,
+                        keep_fnames: true,
+                    },
+                }),
+            ],
         },
     };
 };
