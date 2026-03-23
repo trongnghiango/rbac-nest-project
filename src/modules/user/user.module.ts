@@ -7,6 +7,7 @@ import { IUserRepository } from './domain/repositories/user.repository';
 import { UserImportService } from './application/services/user-import.service';
 import { UserImportController } from './infrastructure/controllers/user-import.controller';
 import { RbacModule } from '@modules/rbac/rbac.module';
+import { UserUniquenessChecker } from './domain/services/user-uniqueness.checker';
 
 @Module({
   imports: [RbacModule],
@@ -14,11 +15,12 @@ import { RbacModule } from '@modules/rbac/rbac.module';
   providers: [
     UserService,
     UserImportService,
+    UserUniquenessChecker,
     {
       provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,
     },
   ],
-  exports: [UserService, IUserRepository], // FIX: Export Symbol
+  exports: [UserService, IUserRepository, UserUniquenessChecker], // FIX: Export Symbol
 })
 export class UserModule { }

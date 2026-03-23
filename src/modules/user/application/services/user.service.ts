@@ -40,7 +40,9 @@ export class UserService {
       username: data.username,
       email: data.email,
       hashedPassword: hashedPassword,
-      fullName: data.fullName,
+      personalInfo: {
+        fullName: data.fullName
+      },
       isActive: true,
       roles: [],
       createdAt: new Date(),
@@ -74,7 +76,7 @@ export class UserService {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new NotFoundException('User not found');
 
-    user.updateProfile(profileData);
+    user.updatePersonalInfo(profileData);
     const updated = await this.userRepository.save(user);
     return updated.toJSON();
   }

@@ -23,6 +23,7 @@ import { RegisterDto } from '../../infrastructure/dtos/auth.dto';
 import { ICacheService } from '@core/shared/application/ports/cache.port';
 import { OtpRequestedEvent } from '@modules/auth/domain/events/otp-requested.event';
 import { ConfigService } from '@nestjs/config';
+import { UserUniquenessChecker } from '@modules/user/domain/services/user-uniqueness.checker';
 
 export type AuthResponse = {
   accessToken: string;
@@ -41,6 +42,7 @@ export class AuthenticationService {
     @Inject(ICacheService) private readonly cacheService: ICacheService,
     private jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly uniquenessChecker: UserUniquenessChecker,
   ) { }
 
   // =========================================================================
@@ -199,8 +201,10 @@ export class AuthenticationService {
 
   async register(data: RegisterDto): Promise<AuthResponse> {
     // 1. Kiểm tra sự tồn tại của User (Nên check cả username và email)
-    const existing = await this.userRepository.findByUsername(data.username);
-    if (existing) throw new BadRequestException('User already exists');
+    // const existing = await this.userRepository.findByUsername(data.username);
+    // if (existing) throw new BadRequestException('User already exists');
+    // Nếu trùng, nó sẽ tự động ném IdentityAlreadyTakenException
+    await this.uniquenessChecker.checkUniqueOrThrow(data.username, data.email);
 
     // 2. Hash mật khẩu
     const hashedPassword = await PasswordUtil.hash(data.password);

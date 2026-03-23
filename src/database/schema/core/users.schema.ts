@@ -34,6 +34,11 @@ export const userMetadata = pgTable('user_metadata', {
 
 // --- RELATIONS (Nhìn code như nhìn sơ đồ ERD) ---
 export const usersRelations = relations(users, ({ one, many }) => ({
+  metadata: one(userMetadata, {
+    fields: [users.id],
+    references: [userMetadata.userId],
+  }),
+
   // 1 User có nhiều Roles
   userRoles: many(userRoles),
 

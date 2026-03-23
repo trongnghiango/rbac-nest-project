@@ -31,13 +31,15 @@ export class UserMapper {
     // 3. Map Business Context (HRM, CRM, v.v.)
     const context: UserBusinessContext = {};
 
+
     if (raw.employeeProfile) {
       context.employee = {
         id: raw.employeeProfile.id,
         employeeCode: raw.employeeProfile.employeeCode,
         fullName: raw.employeeProfile.fullName,
-        position: raw.employeeProfile.position?.name || raw.employeeProfile.position?.jobTitle?.name,
+        position: raw.employeeProfile.position?.name,
         department: raw.employeeProfile.position?.orgUnit?.name,
+        departmentCode: raw.employeeProfile.position?.orgUnit?.code, // ✅ Nhặt code từ DB Join
         location: raw.employeeProfile.location?.name,
       };
     }
@@ -61,7 +63,14 @@ export class UserMapper {
       isActive: raw.isActive ?? true,
       roles: roles,
       telegramId: raw.telegramId || undefined,
-      personalInfo: personalInfo,
+
+      // personalInfo: personalInfo,
+      personalInfo: {
+        fullName: raw.metadata?.fullName || raw.fullName, // 👈 metadata lấy từ join
+        avatarUrl: raw.metadata?.avatarUrl,
+        phoneNumber: raw.metadata?.phoneNumber,
+        settings: raw.metadata?.settings,
+      },
       context: context,
       createdAt: raw.createdAt || undefined,
       updatedAt: raw.updatedAt || undefined,

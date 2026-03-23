@@ -19,6 +19,7 @@ export interface EmployeeContext {
     fullName: string;
     position?: string;
     department?: string;
+    departmentCode?: string;
     location?: string;
 }
 

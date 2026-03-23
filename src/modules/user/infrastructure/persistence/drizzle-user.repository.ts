@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, desc, inArray, or } from 'drizzle-orm';
+import { eq, desc, inArray, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
@@ -140,5 +140,62 @@ export class DrizzleUserRepository implements IUserRepository {
 
     const results = await db.insert(schema.users).values(dataToInsert).returning();
     return results.map(r => UserMapper.toDomain({ ...r, userRoles: [] })!);
+  }
+
+  async findAllActive(): Promise<User[]> {
+    const results = await this.db.query.users.findMany({
+      where: eq(schema.users.isActive, true),
+      with: {
+        metadata: true,
+        userRoles: { with: { role: true } },
+      },
+    });
+    return results.map(u => UserMapper.toDomain(u)).filter((u): u is User => u !== null);
+  }
+
+  // ✅ Thêm hàm này
+  async updateTelegramId(userId: string | number, telegramId: string): Promise<void> {
+    await this.db.update(schema.users)
+      .set({ telegramId })
+      .where(eq(schema.users.id, Number(userId)));
+  }
+
+  // ✅ Thêm hàm này
+  async removeTelegramId(telegramId: string): Promise<void> {
+    await this.db.update(schema.users)
+      .set({ telegramId: null })
+      .where(eq(schema.users.telegramId, telegramId));
+  }
+
+  // ✅ Thêm hàm này
+  async count(): Promise<number> {
+    const result = await this.db.execute(sql`SELECT COUNT(*) as count FROM users`);
+    return Number((result.rows[0] as any).count);
+  }
+
+  // ✅ Thêm hàm update (Dùng cho logic UserService)
+  async update(id: number, data: Partial<User>): Promise<User> {
+    const updatePayload: any = {};
+    if (data.username) updatePayload.username = data.username;
+    if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
+    // ... map các trường khác nếu cần
+
+    const result = await this.db.update(schema.users)
+      .set({ ...updatePayload, updatedAt: new Date() })
+      .where(eq(schema.users.id, id))
+      .returning();
+
+    // Re-fetch để có đầy đủ relations sau khi update
+    return this.findById(id) as Promise<User>;
+  }
+
+  async exists(id: number, tx?: Transaction): Promise<boolean> {
+    const db = this.getDb(tx);
+    const result = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.id, id))
+      .limit(1);
+    return result.length > 0;
   }
 }
