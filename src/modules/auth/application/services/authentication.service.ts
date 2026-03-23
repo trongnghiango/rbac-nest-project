@@ -210,7 +210,9 @@ export class AuthenticationService {
       username: data.username,
       email: data.email,
       hashedPassword: hashedPassword,
-      fullName: data.fullName,
+      personalInfo: {
+        fullName: data.fullName
+      },
       isActive: true,
       roles: [],
       createdAt: new Date(),
@@ -324,7 +326,7 @@ export class AuthenticationService {
     await this.eventBus.publish(
       new OtpRequestedEvent(email, {
         email: user.email!,
-        fullName: user.fullName || 'Người dùng',
+        fullName: user.fullName || user.personalInfo.fullName || 'Người dùng',
         otpCode: otpCode,
       })
     );

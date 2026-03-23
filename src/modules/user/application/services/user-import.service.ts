@@ -93,7 +93,9 @@ export class UserImportService {
                     username: row.username,
                     email: row.email || undefined,
                     hashedPassword: hashedPasswords[j],
-                    fullName: row.fullName,
+                    personalInfo: {
+                        fullName: row.fullName
+                    },
                     isActive: true,
                     roles: [],
                     createdAt: new Date(),

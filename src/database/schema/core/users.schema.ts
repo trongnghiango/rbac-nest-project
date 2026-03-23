@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { pgTable, bigserial, text, boolean, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { pgTable, bigserial, text, boolean, timestamp, varchar, bigint, jsonb } from 'drizzle-orm/pg-core';
 import { userRoles } from '../rbac/rbac.schema';
 import { employees } from '../hrm/employees.schema';
 import { organizations } from '../crm/organizations.schema';
@@ -17,6 +17,18 @@ export const users = pgTable('users', {
   deletedAt: timestamp('deleted_at'),
 
   createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+
+export const userMetadata = pgTable('user_metadata', {
+  userId: bigint('user_id', { mode: 'number' }).primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  fullName: text('full_name'),
+  avatarUrl: text('avatar_url'),
+  bio: text('bio'),
+  phoneNumber: text('phone_number'),
+  // Lưu cài đặt UI/UX (Theme, Ngôn ngữ) vào JSONB vì nó không cần query phức tạp
+  settings: jsonb('settings').default({ theme: 'light', lang: 'vi' }),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 

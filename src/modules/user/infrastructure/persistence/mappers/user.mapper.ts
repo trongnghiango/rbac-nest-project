@@ -1,41 +1,50 @@
-
 import { InferInsertModel } from 'drizzle-orm';
-import { AssociatedProfiles, User } from '../../../domain/entities/user.entity';
+import { User } from '../../../domain/entities/user.entity';
 import { users } from '@database/schema';
+import {
+  EmployeeContext,
+  OrganizationContext,
+  UserBusinessContext,
+  UserPersonalInfo
+} from '../../../domain/types/user-contexts.type';
 
-// Type insert cho bảng users (flat)
 type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  /**
-   * Map từ kết quả query Drizzle (có Relation) sang Domain Entity
-   * `raw` ở đây là `any` vì type của Drizzle Query Builder rất phức tạp để define tĩnh
-   */
   static toDomain(raw: any): User | null {
     if (!raw) return null;
 
-    // ✅ Logic Strict RBAC: Map từ bảng nối ra mảng string
+    // 1. Map Roles (Strict RBAC)
     const roles: string[] = raw.userRoles
       ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
       : [];
 
-    // ✅ LOGIC MỚI: Khởi tạo cái túi rỗng
-    const businessProfiles: AssociatedProfiles = {};
+    // 2. Map Personal Info (Từ bảng user_metadata Join 1-1)
+    const personalInfo: UserPersonalInfo = {
+      fullName: raw.metadata?.fullName || raw.fullName, // Fallback nếu metadata chưa có
+      avatarUrl: raw.metadata?.avatarUrl,
+      bio: raw.metadata?.bio,
+      phoneNumber: raw.metadata?.phoneNumber,
+      settings: raw.metadata?.settings,
+    };
 
-    // 1. Nhặt dữ liệu HRM (Nếu User là Nhân viên)
+    // 3. Map Business Context (HRM, CRM, v.v.)
+    const context: UserBusinessContext = {};
+
     if (raw.employeeProfile) {
-      businessProfiles.employee = {
+      context.employee = {
+        id: raw.employeeProfile.id,
         employeeCode: raw.employeeProfile.employeeCode,
         fullName: raw.employeeProfile.fullName,
         position: raw.employeeProfile.position?.name || raw.employeeProfile.position?.jobTitle?.name,
-        departmentCode: raw.employeeProfile.position?.orgUnit?.code,
+        department: raw.employeeProfile.position?.orgUnit?.name,
         location: raw.employeeProfile.location?.name,
       };
     }
 
-    // 2. Nhặt dữ liệu CRM (Nếu User là Đối tác/Doanh nghiệp B2B)
     if (raw.organizationProfile) {
-      businessProfiles.organization = {
+      context.organization = {
+        id: raw.organizationProfile.id,
         companyName: raw.organizationProfile.companyName,
         taxCode: raw.organizationProfile.taxCode,
         industry: raw.organizationProfile.industry,
@@ -43,29 +52,22 @@ export class UserMapper {
       };
     }
 
-    // ✅ TRUYỀN DƯỚI DẠNG OBJECT
+    // 4. Khởi tạo Entity với Object Pattern sạch sẽ
     return new User({
       id: raw.id,
       username: raw.username,
       email: raw.email || undefined,
       hashedPassword: raw.hashedPassword || undefined,
-      fullName: raw.fullName || undefined,
       isActive: raw.isActive ?? true,
       roles: roles,
       telegramId: raw.telegramId || undefined,
-      phoneNumber: raw.phoneNumber || undefined,
-      avatarUrl: raw.avatarUrl || undefined,
-      profile: (raw.profile as any) || undefined,
-      profiles: businessProfiles, // Truyền cái túi vào
+      personalInfo: personalInfo,
+      context: context,
       createdAt: raw.createdAt || undefined,
       updatedAt: raw.updatedAt || undefined,
     });
   }
 
-  /**
-   * Map từ Domain sang Persistence (Chỉ map các field thuộc bảng `users`)
-   * Không map `roles` vì roles nằm ở bảng `user_roles`
-   */
   static toPersistence(domain: User): UserInsert {
     return {
       id: domain.id,
@@ -73,7 +75,7 @@ export class UserMapper {
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
       isActive: domain.isActive,
-      telegramId: domain.telegramId || null, // ✅ Map TelegramId
+      telegramId: domain.telegramId || null,
       createdAt: domain.createdAt || new Date(),
       updatedAt: domain.updatedAt || new Date(),
     };
