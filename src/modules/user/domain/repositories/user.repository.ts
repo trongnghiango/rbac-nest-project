@@ -22,4 +22,8 @@ export interface IUserRepository {
   delete(id: number, tx?: Transaction): Promise<void>;
   exists(id: number, tx?: Transaction): Promise<boolean>;
   count(): Promise<number>;
+
+  //
+  findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction): Promise<{ username: string; email: string | null }[]>;
+  saveMany(users: User[], tx?: Transaction): Promise<User[]>;
 }

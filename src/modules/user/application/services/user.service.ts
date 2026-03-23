@@ -5,12 +5,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { IUserRepository } from '../../domain/repositories/user.repository';
-import { PasswordUtil } from '../../../shared/utils/password.util';
+import { PasswordUtil } from '@core/shared/utils/password.util';
 import { User } from '../../domain/entities/user.entity';
 import { UserProfile } from '../../domain/types/user-profile.type';
 
 export interface CreateUserParams {
-  id: number;
+  id: number | string;
   username: string;
   email?: string;
   password?: string;
@@ -36,21 +36,18 @@ export class UserService {
       hashedPassword = await PasswordUtil.hash(data.password);
     }
 
-    const newUser = new User(
-      data.id,
-      data.username,
-      data.email,
-      hashedPassword,
-      data.fullName,
-      true,       // isActive
-      [],         // roles (Mặc định rỗng, gán role sau)
-      undefined,  // telegramId
-      undefined,  // phoneNumber
-      undefined,  // avatarUrl
-      undefined,  // profile
-      new Date(), // createdAt
-      new Date(), // updatedAt 
-    );
+    const newUser = new User({
+      username: data.username,
+      email: data.email,
+      hashedPassword: hashedPassword,
+      personalInfo: {
+        fullName: data.fullName
+      },
+      isActive: true,
+      roles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const user = await this.userRepository.save(newUser);
     return user.toJSON();
@@ -79,7 +76,7 @@ export class UserService {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new NotFoundException('User not found');
 
-    user.updateProfile(profileData);
+    user.updatePersonalInfo(profileData);
     const updated = await this.userRepository.save(user);
     return updated.toJSON();
   }

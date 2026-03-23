@@ -1,57 +1,90 @@
-
 import { InferInsertModel } from 'drizzle-orm';
 import { User } from '../../../domain/entities/user.entity';
 import { users } from '@database/schema';
+import {
+  EmployeeContext,
+  OrganizationContext,
+  UserBusinessContext,
+  UserPersonalInfo
+} from '../../../domain/types/user-contexts.type';
 
-// Type insert cho bảng users (flat)
 type UserInsert = InferInsertModel<typeof users>;
 
 export class UserMapper {
-  /**
-   * Map từ kết quả query Drizzle (có Relation) sang Domain Entity
-   * `raw` ở đây là `any` vì type của Drizzle Query Builder rất phức tạp để define tĩnh
-   */
   static toDomain(raw: any): User | null {
     if (!raw) return null;
 
-    // ✅ Logic Strict RBAC: Map từ bảng nối ra mảng string
+    // 1. Map Roles (Strict RBAC)
     const roles: string[] = raw.userRoles
       ? raw.userRoles.map((ur: any) => ur.role?.name || '').filter(Boolean)
       : [];
 
-    return new User(
-      raw.id,
-      raw.username,
-      raw.email || undefined,
-      raw.hashedPassword || undefined,
-      raw.fullName || undefined,
-      raw.isActive ?? true,
-      roles, // ✅ Inject Roles
-      raw.telegramId || undefined, // ✅ Inject TelegramId
-      raw.phoneNumber || undefined,
-      raw.avatarUrl || undefined,
-      (raw.profile as any) || undefined,
-      raw.createdAt || undefined,
-      raw.updatedAt || undefined,
-    );
+    // 2. Map Personal Info (Từ bảng user_metadata Join 1-1)
+    const personalInfo: UserPersonalInfo = {
+      fullName: raw.metadata?.fullName || raw.fullName, // Fallback nếu metadata chưa có
+      avatarUrl: raw.metadata?.avatarUrl,
+      bio: raw.metadata?.bio,
+      phoneNumber: raw.metadata?.phoneNumber,
+      settings: raw.metadata?.settings,
+    };
+
+    // 3. Map Business Context (HRM, CRM, v.v.)
+    const context: UserBusinessContext = {};
+
+
+    if (raw.employeeProfile) {
+      context.employee = {
+        id: raw.employeeProfile.id,
+        employeeCode: raw.employeeProfile.employeeCode,
+        fullName: raw.employeeProfile.fullName,
+        position: raw.employeeProfile.position?.name,
+        department: raw.employeeProfile.position?.orgUnit?.name,
+        departmentCode: raw.employeeProfile.position?.orgUnit?.code, // ✅ Nhặt code từ DB Join
+        location: raw.employeeProfile.location?.name,
+      };
+    }
+
+    if (raw.organizationProfile) {
+      context.organization = {
+        id: raw.organizationProfile.id,
+        companyName: raw.organizationProfile.companyName,
+        taxCode: raw.organizationProfile.taxCode,
+        industry: raw.organizationProfile.industry,
+        status: raw.organizationProfile.status,
+      };
+    }
+
+    // 4. Khởi tạo Entity với Object Pattern sạch sẽ
+    return new User({
+      id: raw.id,
+      username: raw.username,
+      email: raw.email || undefined,
+      hashedPassword: raw.hashedPassword || undefined,
+      isActive: raw.isActive ?? true,
+      roles: roles,
+      telegramId: raw.telegramId || undefined,
+
+      // personalInfo: personalInfo,
+      personalInfo: {
+        fullName: raw.metadata?.fullName || raw.fullName, // 👈 metadata lấy từ join
+        avatarUrl: raw.metadata?.avatarUrl,
+        phoneNumber: raw.metadata?.phoneNumber,
+        settings: raw.metadata?.settings,
+      },
+      context: context,
+      createdAt: raw.createdAt || undefined,
+      updatedAt: raw.updatedAt || undefined,
+    });
   }
 
-  /**
-   * Map từ Domain sang Persistence (Chỉ map các field thuộc bảng `users`)
-   * Không map `roles` vì roles nằm ở bảng `user_roles`
-   */
   static toPersistence(domain: User): UserInsert {
     return {
       id: domain.id,
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
-      fullName: domain.fullName || null,
       isActive: domain.isActive,
-      telegramId: domain.telegramId || null, // ✅ Map TelegramId
-      phoneNumber: domain.phoneNumber || null,
-      avatarUrl: domain.avatarUrl || null,
-      profile: domain.profile || null,
+      telegramId: domain.telegramId || null,
       createdAt: domain.createdAt || new Date(),
       updatedAt: domain.updatedAt || new Date(),
     };

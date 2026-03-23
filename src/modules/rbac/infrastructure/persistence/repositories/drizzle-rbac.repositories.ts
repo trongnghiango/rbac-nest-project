@@ -22,8 +22,7 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 @Injectable()
 export class DrizzleRoleRepository
   extends DrizzleBaseRepository
-  implements IRoleRepository
-{
+  implements IRoleRepository {
   async findByName(name: string, tx?: Transaction): Promise<Role | null> {
     const db = this.getDb(tx);
     const result = await db.query.roles.findFirst({
@@ -90,13 +89,21 @@ export class DrizzleRoleRepository
     });
     return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
   }
+
+  async findInNames(names: string[], tx?: Transaction): Promise<Role[]> {
+    if (!names || names.length === 0) return [];
+    const db = this.getDb(tx);
+    const results = await db.query.roles.findMany({
+      where: inArray(roles.name, names),
+    });
+    return results.map((r) => RbacMapper.toRoleDomain(r as any)!);
+  }
 }
 
 @Injectable()
 export class DrizzlePermissionRepository
   extends DrizzleBaseRepository
-  implements IPermissionRepository
-{
+  implements IPermissionRepository {
   async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
     const db = this.getDb(tx);
     const result = await db
@@ -136,8 +143,7 @@ export class DrizzlePermissionRepository
 @Injectable()
 export class DrizzleUserRoleRepository
   extends DrizzleBaseRepository
-  implements IUserRoleRepository
-{
+  implements IUserRoleRepository {
   async findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]> {
     const db = this.getDb(tx);
     const results = await db.query.userRoles.findMany({
@@ -182,4 +188,16 @@ export class DrizzleUserRoleRepository
       .delete(userRoles)
       .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
+
+  async saveMany(usrRoles: UserRole[], tx?: Transaction): Promise<void> {
+    if (!usrRoles || usrRoles.length === 0) return;
+    const db = this.getDb(tx);
+    const data = usrRoles.map(ur => RbacMapper.toUserRolePersistence(ur));
+
+    await db
+      .insert(userRoles)
+      .values(data as typeof userRoles.$inferInsert[])
+      .onConflictDoNothing(); // Nếu đã có quyền thì bỏ qua
+  }
+
 }

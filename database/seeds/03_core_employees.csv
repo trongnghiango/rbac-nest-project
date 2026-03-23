@@ -1,0 +1,11 @@
+username,email,fullName,employeeCode,locationCode,departmentCode,departmentName,positionName,jobTitle,gradeLevel,role
+ceo_bod,ceo@cty.com,Chủ tịch HĐTV,BOD-001,HQ,HDTV,Hội đồng thành viên,Chủ tịch HĐTV,Chủ tịch,1,SUPER_ADMIN
+dir_bod,dir@cty.com,Giám đốc Điều hành,BOD-002,HQ,BOD,Ban Giám Đốc,CEO (Giám đốc),Giám đốc,2,ADMIN
+tp_dv,tpdv@cty.com,Trưởng phòng Dịch vụ,PDV-001,HCM,P_DICHVU,Phòng Dịch Vụ,Trưởng phòng,Trưởng phòng,4,MANAGER
+lts_dv,lts@cty.com,Lưu Tiến Sĩ,005,HCM,P_DICHVU,Phòng Dịch Vụ,Chuyên viên B2,Chuyên viên,6,STAFF
+nttt_dv,nttt@cty.com,Nguyễn Thị Thu Thủy,006,HCM,P_DICHVU,Phòng Dịch Vụ,Chuyên viên B2,Chuyên viên,6,STAFF
+tttd_dv,tttd@cty.com,Trần Thị Trúc Đào,001,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A2,Trợ lý,8,STAFF
+vtla_dv,vtla@cty.com,Văn Thị Lan Anh,007,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A2,Trợ lý,8,STAFF
+vtmd_dv,vtmd@cty.com,Võ Thị Mỹ Duyên,014,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A1,Trợ lý,9,STAFF
+dev_it,dev@cty.com,Lập trình viên IT,IT-001,HQ,P_HT,Phòng Hệ Thống,CV-IT,Chuyên viên,6,STAFF
+qa_ht,qa@cty.com,Nhân viên QA,QA-001,HQ,P_QLCL,Phòng Quản lý chất lượng,Auditor,Chuyên viên,6,STAFF

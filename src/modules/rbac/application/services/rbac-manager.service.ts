@@ -16,6 +16,7 @@ type RbacCsvRow = {
   description: string;
 };
 
+
 @Injectable()
 export class RbacManagerService {
   private readonly logger = new Logger(RbacManagerService.name);
@@ -24,61 +25,71 @@ export class RbacManagerService {
     @Inject(IRoleRepository) private roleRepo: IRoleRepository,
     @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
     @Inject(IFileParser) private fileParser: IFileParser, // Injected Parser
-  ) {}
+  ) { }
 
-  async importFromCsv(csvContent: string): Promise<any> {
-    // Sử dụng Adapter để parse (Implementation nên dùng thư viện csv-parse)
-    // Hiện tại adapter đang simple split, nhưng service đã decouple
-    let lines = csvContent.split(/\r?\n/).filter((line) => line.trim() !== '');
-    if (lines.length > 0 && lines[0].toLowerCase().includes('role')) {
-      lines.shift();
+  async importFromCsv(csvBuffer: Buffer): Promise<any> {
+    // 1. Dùng Adapter xịn để parse CSV thành mảng Objects
+    const records = await this.fileParser.parseCsvAsync<RbacCsvRow>(csvBuffer);
+
+    // ✅ THÊM LOG ĐỂ DEBUG
+    this.logger.debug(`[CSV Import] Đã parse được: ${records.length} dòng.`);
+    if (records.length > 0) {
+      this.logger.debug(`[CSV Import] Dữ liệu mẫu dòng 1: ${JSON.stringify(records[0])}`);
     }
 
     let createdCount = 0;
     let updatedCount = 0;
 
-    for (const line of lines) {
-      const cols = line.split(',').map((c) => c.trim());
-      if (cols.length < 3) continue;
+    for (const row of records) {
+      // 2. Lấy data từ Object (Rất an toàn, không sợ phẩy trong ngoặc kép nữa)
+      const { role: roleName, resource, action, attributes, description } = row;
 
-      const [roleName, resource, action, attributes, description] = cols;
-      const permName =
-        resource === '*' ? 'manage:all' : `${resource}:${action}`;
+      // ✅ THÊM LOG ĐỂ XEM CÓ BỊ SKIP KHÔNG
+      if (!roleName || !resource) {
+        this.logger.warn(`[CSV Import] Bỏ qua dòng do thiếu role hoặc resource: ${JSON.stringify(row)}`);
+        continue;
+      }
 
+      const permName = resource === '*' ? 'manage:all' : `${resource}:${action}`;
+
+      // Xử lý Permission
       let perm = await this.permRepo.findByName(permName);
       if (!perm) {
-        perm = new Permission(
-          undefined,
-          permName,
-          description || '',
-          resource,
-          action,
-          true,
-          attributes || '*',
-        );
+        perm = new Permission({
+          name: permName,
+          description: description || '',
+          resourceType: resource,
+          action: action,
+          isActive: true,
+          attributes: attributes || '*',
+        });
+
         perm = await this.permRepo.save(perm);
         createdCount++;
       }
 
+      // Xử lý Role
       let role = await this.roleRepo.findByName(roleName);
       if (!role) {
-        role = new Role(
-          undefined,
-          roleName,
-          'Imported from CSV',
-          true,
-          false,
-          [],
-        );
+        role = new Role({
+          name: roleName,
+          description: 'Imported from CSV',
+          isActive: true,
+          isSystem: false,
+          permissions: []
+        });
+
         role = await this.roleRepo.save(role);
       }
 
+      // Gán quyền vào Role
       if (!role.permissions) role.permissions = [];
       const hasPerm = role.permissions.some((p) => p.name === perm!.name);
 
       if (!hasPerm) {
         role.permissions.push(perm!);
         await this.roleRepo.save(role);
+        updatedCount++;
       }
     }
     return { created: createdCount, updated: updatedCount };

@@ -11,7 +11,8 @@ export class KafkaEventBusAdapter implements IEventBus, OnModuleInit {
   }
 
   async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    this.logger.log(`[Kafka] Publishing: ${event.eventName}`);
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
   }
 
   subscribe<T extends IDomainEvent>(

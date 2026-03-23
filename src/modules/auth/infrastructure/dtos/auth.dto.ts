@@ -1,9 +1,11 @@
 import {
   IsString,
+  Length,
   MinLength,
   IsNumber,
   IsOptional,
   IsEmail,
+  IsNotEmpty,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -22,10 +24,6 @@ export class LoginDto {
 }
 
 export class RegisterDto {
-  @ApiProperty({ example: 12345, description: 'User ID (BigInt)' })
-  @IsNumber()
-  id: number;
-
   @ApiProperty({ example: 'newuser', description: 'Unique username' })
   @IsString()
   username: string;
@@ -43,4 +41,48 @@ export class RegisterDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+}
+
+export class ChangePasswordDto {
+  @ApiProperty({ example: 'OldPass123!' })
+  @IsString()
+  oldPassword: string;
+
+  @ApiProperty({ example: 'NewPass123!', description: 'Mật khẩu mới (Tối thiểu 6 ký tự)' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'user@test.com', description: 'Email đã đăng ký tài khoản' })
+  @IsEmail()
+  email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ example: 'user@test.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ example: '123456', description: 'Mã OTP 6 số nhận từ Email' })
+  @IsString()
+  @Length(6, 6)
+  otp: string;
+
+  @ApiProperty({ example: 'NewPass123!' })
+  @IsString()
+  @MinLength(6)
+  newPassword: string;
+}
+
+
+export class RefreshTokenDto {
+  @ApiProperty({
+    example: 'eyJhbGciOiJIUzI1Ni...',
+    description: 'Refresh Token được cấp khi login'
+  })
+  @IsString()
+  @IsNotEmpty()
+  refreshToken: string;
 }

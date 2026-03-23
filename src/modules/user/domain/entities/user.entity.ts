@@ -1,81 +1,142 @@
-import { UserProfile } from '../types/user-profile.type';
+import { UserPersonalInfo, UserBusinessContext } from '../types/user-contexts.type';
+
+export interface UserProps {
+  id?: number;
+  username: string;
+  email?: string;
+  hashedPassword?: string;
+  isActive?: boolean;
+  roles?: string[];
+  telegramId?: string;
+
+  // Dữ liệu Metadata (Con người)
+  personalInfo?: UserPersonalInfo;
+
+  // Ngữ cảnh nghiệp vụ (Công việc)
+  context?: UserBusinessContext;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+}
 
 export class User {
-  constructor(
-    private _id: number,
-    private _username: string,
-    private _email?: string,
-    private _hashedPassword?: string,
-    private _fullName?: string,
-    private _isActive: boolean = true,
-    // ✅ Strict RBAC: Role là danh sách mảng string
-    private _roles: string[] = [],
-    // ✅ Chatbot Integration
-    private _telegramId?: string,
-    private _phoneNumber?: string,
-    private _avatarUrl?: string,
-    private _profile?: UserProfile,
-    private _createdAt?: Date,
-    private _updatedAt?: Date,
-  ) { }
+  private _id?: number;
+  private _username: string;
+  private _email?: string;
+  private _hashedPassword?: string;
+  private _isActive: boolean;
+  private _roles: string[];
+  private _telegramId?: string;
 
-  // --- Getters ---
+  private _personalInfo: UserPersonalInfo;
+  private _context: UserBusinessContext;
+
+  private _createdAt?: Date;
+  private _updatedAt?: Date;
+
+  constructor(props: UserProps) {
+    this._id = props.id;
+    this._username = props.username;
+    this._email = props.email;
+    this._hashedPassword = props.hashedPassword;
+    this._telegramId = props.telegramId;
+
+    // Sử dụng Nullish Coalescing (??) để tránh ghi đè giá trị 'false' hoặc '0'
+    this._isActive = props.isActive ?? true;
+    this._roles = props.roles ?? [];
+
+    // Khởi tạo đối tượng rỗng để đảm bảo user.personalInfo.fullName không bao giờ bị crash
+    this._personalInfo = props.personalInfo ?? {};
+    this._context = props.context ?? {};
+
+    this._createdAt = props.createdAt ?? new Date();
+    this._updatedAt = props.updatedAt ?? new Date();
+  }
+
+  // --- Getters (Truy cập dữ liệu) ---
   get id() { return this._id; }
   get username() { return this._username; }
   get email() { return this._email; }
   get hashedPassword() { return this._hashedPassword; }
-  get fullName() { return this._fullName; }
   get isActive() { return this._isActive; }
-  get roles() { return this._roles; } // Getter cho roles
-  get telegramId() { return this._telegramId; } // Getter cho telegramId
-  get phoneNumber() { return this._phoneNumber; }
-  get avatarUrl() { return this._avatarUrl; }
-  get profile() { return this._profile; }
+  get roles() { return [...this._roles]; } // Trả về bản sao để bảo vệ mảng gốc (Immutability)
+  get telegramId() { return this._telegramId; }
+
+  // ✅ [LEGACY SUPPORT] Giúp các service cũ gọi user.fullName vẫn chạy tốt
+  get fullName(): string {
+    return this._personalInfo.fullName ?? this._username;
+  }
+
+  get personalInfo() { return this._personalInfo; }
+  get context() { return this._context; }
+
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
 
-  // --- Domain Behaviors ---
+  // --- Domain Behaviors (Logic nghiệp vụ) ---
 
-  // Lưu ý: ID thường được set bởi DB hoặc Service khi tạo mới, 
-  // nhưng trong Entity Constructor nên có để hydrate từ DB.
-
+  /**
+   * Cập nhật mật khẩu và tự động đổi updatedAt
+   */
   changePassword(hashedPassword: string): void {
+    if (!hashedPassword) throw new Error('Hashed password is required');
     this._hashedPassword = hashedPassword;
-    this._updatedAt = new Date();
+    this.markModified();
   }
 
-  updateProfile(profileData: UserProfile): void {
-    this._profile = { ...this._profile, ...profileData };
-    this._updatedAt = new Date();
+  /**
+   * Cập nhật thông tin cá nhân (Merge dữ liệu cũ và mới)
+   */
+  updatePersonalInfo(data: Partial<UserPersonalInfo>): void {
+    this._personalInfo = { ...this._personalInfo, ...data };
+    this.markModified();
   }
 
   deactivate(): void {
     this._isActive = false;
-    this._updatedAt = new Date();
+    this.markModified();
   }
 
   activate(): void {
     this._isActive = true;
-    this._updatedAt = new Date();
+    this.markModified();
   }
 
-  // Phương thức này giúp Service/Chatbot kiểm tra nhanh quyền
+  /**
+   * Kiểm tra quyền nhanh
+   */
   hasRole(roleName: string): boolean {
     return this._roles.includes(roleName);
   }
 
+  // --- Business Helpers (Check vai trò) ---
+
+  // Tối ưu: Kiểm tra xem User có đang đóng vai trò nào trong hệ thống không
+  isEmployee(): boolean { return !!this._context.employee; }
+  isOrganization(): boolean { return !!this._context.organization; }
+  isStudent(): boolean { return !!this._context.student; }
+
+  /**
+   * Cập nhật thời gian sửa đổi cuối cùng
+   */
+  private markModified(): void {
+    this._updatedAt = new Date();
+  }
+
+  /**
+   * Xuất dữ liệu sạch cho API
+   */
   toJSON() {
     return {
       id: this._id,
       username: this._username,
       email: this._email,
-      fullName: this._fullName,
+      fullName: this.fullName, // Phẳng hóa fullName ra ngoài cho Frontend dễ dùng
       isActive: this._isActive,
-      roles: this._roles, // ✅ Trả về mảng roles
+      roles: this._roles,
       telegramId: this._telegramId,
-      phoneNumber: this._phoneNumber,
-      avatarUrl: this._avatarUrl,
-      profile: this._profile,
+      personalInfo: this._personalInfo,
+      context: this._context,
       createdAt: this._createdAt,
       updatedAt: this._updatedAt,
     };

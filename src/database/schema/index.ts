@@ -1,13 +1,18 @@
-export * from './users.schema';
-export * from './sessions.schema';
-export * from './rbac.schema';
-export * from './notifications.schema';
+// src/database/schema/index.ts
 
-// Organization Module
-export * from '../../modules/organization/infrastructure/persistence/schema/clinics.schema';
-// Medical Staff Module
-export * from '../../modules/medical-staff/infrastructure/persistence/schema/dentists.schema';
-// Patient Module
-export * from '../../modules/patient/infrastructure/persistence/schema/patients.schema';
-// Dental Treatment Module
-export * from '../../modules/dental-treatment/infrastructure/persistence/schema/cases.schema';
+// Core
+export * from './core/users.schema';
+export * from './core/sessions.schema';
+
+// RBAC
+export * from './rbac/rbac.schema';
+
+// System
+export * from './system/notifications.schema';
+
+// HRM (Nhân sự)
+export * from './hrm/org-structure.schema';
+export * from './hrm/employees.schema';
+
+// ✅ BỔ SUNG DÒNG NÀY (CRM - Đối tác/Khách hàng)
+export * from './crm/organizations.schema';

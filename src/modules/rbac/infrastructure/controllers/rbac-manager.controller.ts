@@ -29,7 +29,7 @@ import { BypassTransform } from '@core/decorators/bypass-transform.decorator';
 @Controller('rbac/data')
 @UseGuards(JwtAuthGuard, PermissionGuard)
 export class RbacManagerController {
-  constructor(private rbacManagerService: RbacManagerService) {}
+  constructor(private rbacManagerService: RbacManagerService) { }
 
   @ApiOperation({ summary: 'Import RBAC Rules from CSV' })
   @ApiConsumes('multipart/form-data') // Báo cho Swagger biết đây là upload file
@@ -56,8 +56,7 @@ export class RbacManagerController {
       throw new BadRequestException('Only .csv files are allowed');
     }
 
-    const content = file.buffer.toString('utf-8');
-    const result = await this.rbacManagerService.importFromCsv(content);
+    const result = await this.rbacManagerService.importFromCsv(file.buffer);
 
     return {
       success: true,

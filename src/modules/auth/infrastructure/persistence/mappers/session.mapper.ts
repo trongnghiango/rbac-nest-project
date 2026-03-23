@@ -7,15 +7,17 @@ type SessionRecord = InferSelectModel<typeof sessions>;
 export class SessionMapper {
   static toDomain(raw: SessionRecord | null): Session | null {
     if (!raw) return null;
-    return new Session(
-      raw.id,
-      Number(raw.userId),
-      raw.token,
-      raw.expiresAt,
-      raw.ipAddress || undefined,
-      raw.userAgent || undefined,
-      raw.createdAt || undefined,
-    );
+
+    return new Session({
+      id: raw.id,
+      userId: Number(raw.userId),
+      token: raw.token,
+      refreshToken: raw.refreshToken,
+      expiresAt: raw.expiresAt,
+      ipAddress: raw.ipAddress || undefined,
+      userAgent: raw.userAgent || undefined,
+      createdAt: raw.createdAt || undefined,
+    });
   }
 
   static toPersistence(domain: Session) {
@@ -23,6 +25,7 @@ export class SessionMapper {
       id: domain.id, // UUID thì có thể truyền vào hoặc để DB tự gen
       userId: domain.userId,
       token: domain.token,
+      refreshToken: domain.refreshToken,
       expiresAt: domain.expiresAt,
       ipAddress: domain.ipAddress || null,
       userAgent: domain.userAgent || null,

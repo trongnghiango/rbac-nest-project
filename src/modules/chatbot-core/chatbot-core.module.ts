@@ -1,7 +1,10 @@
 import { Global, Module } from '@nestjs/common';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { session } from 'telegraf'; // 👈 1. Import cái này
+// ❌ XÓA IMPORT NÀY: import { session } from 'telegraf'; 
+// ✅ Bỏ import * as, dùng require để bypass lỗi TypeScript
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const RedisSession = require('telegraf-session-redis');
 
 import { AuthModule } from '../auth/auth.module';
 import { AuthChatbotHandler } from '@modules/auth/infrastructure/chatbot/auth.chatbot';
@@ -14,17 +17,41 @@ import { UserModule } from '@modules/user/user.module';
     imports: [
         TelegrafModule.forRootAsync({
             imports: [ConfigModule],
-            useFactory: (configService: ConfigService) => ({
-                token: configService.get<string>('TELEGRAM_BOT_TOKEN'),
-                // 👇 2. BẮT BUỘC PHẢI CÓ DÒNG NÀY ĐỂ WIZARD CHẠY ĐƯỢC
-                middlewares: [session()],
-                options: {
-                    telegram: {
-                        // apiRoot phải nằm trong object 'telegram'
-                        apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'http://localhost:8081'
-                    }
+            useFactory: (configService: ConfigService) => {
+
+                // 1. Lấy thông tin Redis từ config
+                const uri = configService.get<string>('redis.uri');
+                const host = configService.get<string>('redis.host');
+                const port = configService.get<number>('redis.port');
+                const password = configService.get<string>('redis.password');
+
+                // 2. Khởi tạo cấu hình kết nối cho Redis Session
+                let redisUrl = uri;
+                if (!redisUrl) {
+                    // Fallback tự build URL nếu dùng host/port (Local Docker)
+                    redisUrl = password
+                        ? `redis://:${password}@${host}:${port}`
+                        : `redis://${host}:${port}`;
                 }
-            }),
+
+                // 3. Khởi tạo Store Redis cho Telegraf
+                const redisSession = new RedisSession({
+                    store: { url: redisUrl },
+                    property: 'session',
+                    ttl: 86400, // Session hết hạn sau 1 ngày (tùy chỉnh)
+                });
+
+                return {
+                    token: configService.get<string>('TELEGRAM_BOT_TOKEN'),
+                    // ✅ Thay session() bằng middleware của Redis
+                    middlewares: [redisSession.middleware()],
+                    options: {
+                        telegram: {
+                            apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'http://localhost:8081'
+                        }
+                    }
+                };
+            },
             inject: [ConfigService],
         }),
         AuthModule,

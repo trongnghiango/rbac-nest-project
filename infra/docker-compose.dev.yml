@@ -1,0 +1,102 @@
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rbac_postgres_dev
+    restart: unless-stopped
+    env_file:
+      - ../.env.development
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-rbac_system}
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - rbac_dev_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rbac_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - rbac_dev_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 👇 THÊM SERVICE TELEGRAM LOCAL VÀO ĐÂY
+  telegram-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: rbac_telegram_api_dev
+    restart: unless-stopped
+    env_file:
+      - ../.env.development
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_STAT: 1
+      TELEGRAM_LOCAL: 1
+    volumes:
+      # Map thư mục data của Telegram ra ổ cứng thật của bạn
+      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+    networks:
+      - rbac_dev_net
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/docker/Dockerfile.dev
+    container_name: rbac_api_dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Đợi Telegram bật lên mới chạy API
+      telegram-api:
+        condition: service_started 
+    env_file:
+      - ../.env.development
+    environment:
+      - RUN_MIGRATIONS=true
+      # Ghi đè cấu hình để API gọi vào đúng Container Telegram
+      - TELEGRAM_API_ROOT=http://telegram-api:8081
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - ..:/app
+      - /app/node_modules
+      - dental_data_dev:/app/uploads
+      # 💡 Trick siêu hay: Map chung thư mục data Telegram vào API 
+      # để NestJS lấy thẳng file do Telegram tải về mà không cần qua mạng HTTP
+      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
+      # Map thư mục chứa file CSV Seed
+      - ../database/seeds:/app/database/seeds
+    ports:
+      - "${PORT:-8080}:8080"
+      - "9229:9229"
+    networks:
+      - rbac_dev_net
+
+networks:
+  rbac_dev_net:
+    driver: bridge
+
+volumes:
+  pgdata_dev:
+  dental_data_dev:

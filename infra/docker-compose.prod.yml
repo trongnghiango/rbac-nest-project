@@ -1,24 +1,25 @@
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: dental_postgres_prod
+    container_name: rbac_postgres_prod
     restart: always
     env_file:
       - ../.env.production
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-dental_system}
+      POSTGRES_DB: ${DB_NAME:-rbac_system}
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
-      - dental_prod_net
+      - rbac_prod_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-dental_system}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-rbac_system}"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
     deploy:
       resources:
         limits:
@@ -27,10 +28,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: dental_redis_prod
+    container_name: rbac_redis_prod
     restart: always
+    env_file:
+      - ../.env.production
     networks:
-      - dental_prod_net
+      - rbac_prod_net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -41,51 +44,89 @@ services:
         limits:
           memory: 256M
 
+  telegram-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: rbac_telegram_api_prod
+    restart: always
+    env_file:
+      - ../.env.production
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_STAT: 1
+      TELEGRAM_LOCAL: 1
+    volumes:
+      # Map thư mục data của Telegram ra ổ cứng vật lý của host
+      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
+    networks:
+      - rbac_prod_net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # 👇 Đã sửa lỗi thụt lề, service api nằm ngang hàng với các service trên
   api:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
-    container_name: dental_api_prod
+    container_name: rbac_api_prod
     restart: always
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      telegram-api:
+        condition: service_started
     env_file:
       - ../.env.production
     environment:
-      - DB_HOST=postgres
-      - REDIS_HOST=redis
-      - RUN_MIGRATIONS=true
-      - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=1536
+      # 1. Ghi đè cấu hình DB/Redis để API gọi vào đúng tên Container
+      DB_HOST: postgres
+      REDIS_HOST: redis
+      # 2. Cấu hình Telegram Local Server
+      TELEGRAM_API_ROOT: http://telegram-api:8081
+      # 3. Kích hoạt tự động chạy Migration khi khởi động
+      RUN_MIGRATIONS: "true"
+      # 4. 
+      RUN_SEEDS: ${RUN_SEEDS}
+      # 5. Tăng bộ nhớ RAM cho Node.js (Vận hành xử lý file 3D cần nhiều RAM)
+      NODE_OPTIONS: --max-old-space-size=1536
     volumes:
-      - dental_data:/app/uploads
-      - api_logs:/app/logs
+      # Map thư mục Uploads chung (Data 3D, CSV, v.v...) vào /app/uploads
+      - dental_data_prod:/app/uploads
+      # Map thư mục Logs vào /app/logs
+      - api_logs_prod:/app/logs
+      # 💡 Trick siêu hay: Map CHUNG thư mục data Telegram vào API
+      # NestJS (/app/telegram-data) sẽ nhìn thấy cùng file ảnh với Telegram Bot API (/var/lib/telegram-bot-api)
+      - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/app/telegram-data
+      # Map thư mục chứa file CSV Seed
+      - ../database/seeds:/app/database/seeds
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:8080"
     networks:
-      - dental_prod_net
-      - lvt_tunnel_net
+      - rbac_prod_net
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
           cpus: '2.0'
           memory: 2G
 
+# ==========================================
+# KHAI BÁO MẠNG VÀ Ổ ĐĨA ẢO (VOLUMES)
+# ==========================================
 networks:
-  dental_prod_net:
+  rbac_prod_net:
     driver: bridge
-
-  lvt_tunnel_net:
-    # SỬ DỤNG BIẾN MÔI TRƯỜNG TẠI ĐÂY
-    # Nếu không tìm thấy biến, nó sẽ báo lỗi hoặc bạn có thể set default (không khuyến khích nếu ID thay đổi)
-    name: ${EXTERNAL_NETWORK_NAME} 
-    external: true
 
 volumes:
   pgdata_prod:
-  dental_data:
-  api_logs:
-  
+  dental_data_prod:
+  api_logs_prod:

@@ -5,6 +5,10 @@ import {
 } from '../../domain/repositories/rbac.repository';
 import { Role } from '../../domain/entities/role.entity';
 
+//
+import { ICacheService } from '@core/shared/application/ports/cache.port';
+
+
 export interface CreateRoleParams {
   name: string;
   description?: string;
@@ -23,19 +27,22 @@ export class RoleService {
   constructor(
     @Inject(IRoleRepository) private roleRepo: IRoleRepository,
     @Inject(IPermissionRepository) private permRepo: IPermissionRepository,
-  ) {}
+    @Inject(ICacheService) private cacheService: ICacheService,
+  ) { }
 
   async createRole(data: CreateRoleParams): Promise<Role> {
     const existing = await this.roleRepo.findByName(data.name);
     if (existing) throw new Error('Role exists');
-    const role = new Role(
-      undefined,
-      data.name,
-      data.description,
-      true,
-      data.isSystem,
-    );
+    // ✅ Không còn positional arguments
+    const role = new Role({
+      name: data.name,
+      description: data.description,
+      isActive: true,
+      isSystem: data.isSystem || false
+    });
     return this.roleRepo.save(role);
+    // ✅ SAU NÀY NẾU BẠN VIẾT HÀM UPDATE ROLE, HÃY NHỚ GỌI HÀM RESET CACHE
+    // await this.cacheService.reset(); // (Hoặc dùng pattern để xóa riêng rbac:permissions:*)
   }
 
   async findAllRoles(): Promise<Role[]> {

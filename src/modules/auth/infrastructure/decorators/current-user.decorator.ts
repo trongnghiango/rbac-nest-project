@@ -11,10 +11,3 @@ export const CurrentUser = createParamDecorator(
     return request.user;
   },
 );
-
-// export const CurrentUserOld = createParamDecorator(
-//   (data: unknown, ctx: ExecutionContext) => {
-//     const request = ctx.switchToHttp().getRequest();
-//     return request.user;
-//   },
-// );

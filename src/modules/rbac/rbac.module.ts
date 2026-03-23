@@ -20,7 +20,6 @@ import {
 
 @Module({
   imports: [
-    UserModule,
     // Không cần import CacheModule nữa vì RedisCacheModule là Global
   ],
   controllers: [RoleController, RbacManagerController],
@@ -33,6 +32,13 @@ import {
     { provide: IPermissionRepository, useClass: DrizzlePermissionRepository },
     { provide: IUserRoleRepository, useClass: DrizzleUserRoleRepository },
   ],
-  exports: [PermissionService, PermissionGuard, RoleService],
+  exports: [
+    PermissionService,
+    PermissionGuard,
+    RoleService,
+    IRoleRepository,
+    IUserRoleRepository,
+    RbacManagerService,
+  ],
 })
-export class RbacModule {}
+export class RbacModule { }

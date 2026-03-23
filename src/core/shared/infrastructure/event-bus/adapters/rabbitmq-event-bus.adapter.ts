@@ -9,8 +9,7 @@ import { IDomainEvent } from '@core/shared/domain/events/domain-event.interface'
 
 @Injectable()
 export class RabbitMQEventBusAdapter
-  implements IEventBus, OnModuleInit, OnModuleDestroy
-{
+  implements IEventBus, OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RabbitMQEventBusAdapter.name);
 
   async onModuleInit() {
@@ -22,7 +21,9 @@ export class RabbitMQEventBusAdapter
   }
 
   async publish<T extends IDomainEvent>(event: T): Promise<void> {
-    this.logger.log(`[RabbitMQ] Publishing: ${event.eventName}`);
+    const eventName = (event.constructor as any).EVENT_NAME || event.constructor.name;
+    this.logger.log(`[RabbitMQ] Publishing: ${eventName} - Payload:`, event.payload);
+
   }
 
   subscribe<T extends IDomainEvent>(

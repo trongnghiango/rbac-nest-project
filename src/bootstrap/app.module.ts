@@ -9,9 +9,10 @@ import loggingConfig from '@config/logging.config';
 import redisConfig from '@config/redis.config';
 import eventBusConfig from '@config/event-bus.config';
 import dentalConfig from '@config/dental.config';
+import authConfig from '@config/auth.config';
 
 import { CoreModule } from '@core/core.module';
-import { SharedModule } from '@modules/shared/shared.module';
+import { SharedModule } from '@core/shared/shared.module';
 import { DrizzleModule } from '@database/drizzle.module';
 import { LoggingModule } from '@modules/logging/logging.module';
 import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
@@ -22,9 +23,9 @@ import { AuthModule } from '@modules/auth/auth.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { TestModule } from '@modules/test/test.module';
 import { NotificationModule } from '@modules/notification/notification.module';
-import { DentalModule } from '@modules/dental/dental.module';
 import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
-import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatment.module';
+import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
+import { EmployeeModule } from '@modules/employee/employee.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatmen
         databaseConfig,
         appConfig,
         loggingConfig,
+        authConfig,
         redisConfig,
         eventBusConfig,
         dentalConfig,
@@ -43,24 +45,26 @@ import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatmen
 
     ServeStaticModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (config: ConfigService) => [
-        {
-          rootPath: path.resolve(
-            config.get('dental.outputDir') || 'uploads/dental/converted',
-          ),
-          serveRoot: '/models',
-          // 👇 SỬA DÒNG NÀY:
-          // CŨ (Lỗi): exclude: ['/api/(.*)'],
-          // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
-          exclude: ['/api/{*path}'],
-          serveStaticOptions: {
-            setHeaders: (res) => {
-              res.setHeader('Access-Control-Allow-Origin', '*');
-              res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      useFactory: (config: ConfigService) => {
+        // path.resolve(config.get('dental.outputDir') || 'uploads/dental/converted',)
+        const outputDir = config.get<string>('dental.outputDir');
+        return [
+          {
+            rootPath: outputDir,
+            serveRoot: '/models',
+            // 👇 SỬA DÒNG NÀY:
+            // CŨ (Lỗi): exclude: ['/api/(.*)'],
+            // MỚI (Đúng): Dùng cú pháp của NestJS mới hoặc đặt tên cho tham số wildcard
+            exclude: ['/api/{*path}'],
+            serveStaticOptions: {
+              setHeaders: (res) => {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+              },
             },
           },
-        },
-      ],
+        ]
+      },
       inject: [ConfigService],
     }),
 
@@ -75,9 +79,12 @@ import { DentalTreatmentModule } from '@modules/dental-treatment/dental-treatmen
     AuthModule,
     RbacModule,
     NotificationModule,
-    DentalTreatmentModule, // ✅ Core Logic & Chatbot Handler
-    DentalModule,          // ✅ API Controller & File Upload
+
     TestModule,
+
+    //
+    OrgStructureModule,
+    EmployeeModule,
   ],
 })
 export class AppModule {
