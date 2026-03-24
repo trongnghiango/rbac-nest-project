@@ -11,8 +11,10 @@ services:
       POSTGRES_DB: ${DB_NAME:-rbac_system}
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    shm_size: 1g # Bắt buộc cho Prod: Chống crash DB khi query dữ liệu nặng
+    # XÓA PORTS Ở ĐÂY ĐỂ BẢO MẬT TUYỆT ĐỐI
+    # ports:
+    #   - "5432:5432"
     networks:
       - rbac_prod_net
     healthcheck:
@@ -22,9 +24,12 @@ services:
       retries: 5
     deploy:
       resources:
+        reservations:
+          cpus: '0.5'
+          memory: 512M
         limits:
-          cpus: '1.0'
-          memory: 1G
+          cpus: '2.0'
+          memory: 2G
 
   redis:
     image: redis:7-alpine
@@ -34,6 +39,7 @@ services:
       - ../.env.production
     networks:
       - rbac_prod_net
+    # XÓA PORTS
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -42,7 +48,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          cpus: '0.5'
+          memory: 256M # Redis thường chỉ lưu Token/OTP nên tốn rất ít RAM
 
   telegram-api:
     image: aiogram/telegram-bot-api:latest
@@ -56,16 +63,25 @@ services:
       TELEGRAM_STAT: 1
       TELEGRAM_LOCAL: 1
     volumes:
-      # Map thư mục data của Telegram ra ổ cứng vật lý của host
       - ${TELEGRAM_LOCAL_ROOT:-./telegram-data}:/var/lib/telegram-bot-api
     networks:
       - rbac_prod_net
+    healthcheck: # Thêm healthcheck cho Local Bot API
+      test: ["CMD-SHELL", "stat /var/lib/telegram-bot-api || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     deploy:
       resources:
-        limits:
+        # Mức tài nguyên KHỞI ĐIỂM (Đảm bảo hệ điều hành luôn giữ phần này cho API)
+        reservations:
+          cpus: '0.5'
           memory: 512M
+        # Mức tài nguyên TỐI ĐA (Tránh làm treo máy chủ)
+        limits:
+          cpus: '4.0' # Cho phép xài tối đa 4 Core để convert 3D cho lẹ
+          memory: 4G  # RAM tối đa (Phải luôn LỚN HƠN mức max-old-space-size của Nodejs ít nhất 20%)
 
-  # 👇 Đã sửa lỗi thụt lề, service api nằm ngang hàng với các service trên
   api:
     build:
       context: ..
@@ -78,19 +94,16 @@ services:
       redis:
         condition: service_healthy
       telegram-api:
-        condition: service_started
+        condition: service_healthy # Đợi API khỏe hẳn mới gọi API Server lên
     env_file:
       - ../.env.production
     environment:
-      # 1. Ghi đè cấu hình DB/Redis để API gọi vào đúng tên Container
       DB_HOST: postgres
       REDIS_HOST: redis
-      # 2. Cấu hình Telegram Local Server
       TELEGRAM_API_ROOT: http://telegram-api:8081
-      # 3. Kích hoạt tự động chạy Migration khi khởi động
       RUN_MIGRATIONS: "true"
       # 4. 
-      RUN_SEEDS: ${RUN_SEEDS}
+      RUN_SEEDS: ${RUN_SEEDS:-false}
       # 5. Tăng bộ nhớ RAM cho Node.js (Vận hành xử lý file 3D cần nhiều RAM)
       NODE_OPTIONS: --max-old-space-size=1536
     volumes:
@@ -104,7 +117,7 @@ services:
       # Map thư mục chứa file CSV Seed
       - ../database/seeds:/app/database/seeds
     ports:
-      - "${PORT:-8080}:8080"
+      - "${PORT:-8080}:8080" # Chỉ public cổng API ra ngoài (Hoặc trỏ qua Nginx/Traefik)
     networks:
       - rbac_prod_net
     healthcheck:
@@ -113,11 +126,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
 
 # ==========================================
 # KHAI BÁO MẠNG VÀ Ổ ĐĨA ẢO (VOLUMES)

@@ -1,10 +1,8 @@
 #!/bin/sh
-# Gọi thẳng vào API Healthcheck bạn đã viết trong TestController
-# Chấp nhận localhost hoặc tên container
 API_URL="http://localhost:${PORT:-8080}/api/test/health"
 
-# curl lấy HTTP status code
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL")
+# Thêm -f (fail on HTTP error) và --max-time 5 (timeout 5s chống treo)
+STATUS=$(curl -s -f -o /dev/null -w "%{http_code}" --max-time 5 "$API_URL")
 
 if [ "$STATUS" = "200" ]; then
     exit 0

@@ -27,7 +27,7 @@ if (!process.env.DATABASE_URL && !process.env.DB_HOST) {
 
 export default defineConfig({
   schema: schemaPath,
-  out: './src/database/migrations',
+  out: './database/migrations',
   dialect: 'postgresql',
   dbCredentials: {
     // Ưu tiên DATABASE_URL, nếu không có thì tự ghép chuỗi
