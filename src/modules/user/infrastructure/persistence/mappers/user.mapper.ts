@@ -29,11 +29,11 @@ export class UserMapper {
     };
 
     // 3. Map Business Context (HRM, CRM, v.v.)
-    const context: UserBusinessContext = {};
+    const profileContext: UserBusinessContext = {};
 
 
     if (raw.employeeProfile) {
-      context.employee = {
+      profileContext.employee = {
         id: raw.employeeProfile.id,
         employeeCode: raw.employeeProfile.employeeCode,
         fullName: raw.employeeProfile.fullName,
@@ -45,7 +45,7 @@ export class UserMapper {
     }
 
     if (raw.organizationProfile) {
-      context.organization = {
+      profileContext.organization = {
         id: raw.organizationProfile.id,
         companyName: raw.organizationProfile.companyName,
         taxCode: raw.organizationProfile.taxCode,
@@ -71,7 +71,7 @@ export class UserMapper {
         phoneNumber: raw.metadata?.phoneNumber,
         settings: raw.metadata?.settings,
       },
-      context: context,
+      profileContext: profileContext,
       createdAt: raw.createdAt || undefined,
       updatedAt: raw.updatedAt || undefined,
     });

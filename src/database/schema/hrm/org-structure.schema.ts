@@ -67,14 +67,24 @@ export const positions = pgTable('positions', {
 
 // --- RELATIONS ---
 export const orgUnitsRelations = relations(orgUnits, ({ one, many }) => ({
-    parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id] }),
-    children: many(orgUnits),
+    parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id], relationName: 'unit_hierarchy', }),
+    children: many(orgUnits, {
+        relationName: 'unit_hierarchy',
+    }),
     positions: many(positions), // 1 Phòng ban có nhiều Vị trí
 }));
 
 export const gradesRelations = relations(grades, ({ many }) => ({
     salaryScales: many(salaryScales),
     positions: many(positions),
+}));
+
+// Thêm đoạn này vào để Drizzle hiểu được mối liên kết ngược từ lương về bậc
+export const salaryScalesRelations = relations(salaryScales, ({ one }) => ({
+    grade: one(grades, {
+        fields: [salaryScales.gradeId],
+        references: [grades.id],
+    }),
 }));
 
 export const positionsRelations = relations(positions, ({ one, many }) => ({

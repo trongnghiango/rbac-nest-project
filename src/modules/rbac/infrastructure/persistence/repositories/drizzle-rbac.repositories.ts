@@ -104,13 +104,21 @@ export class DrizzleRoleRepository
 export class DrizzlePermissionRepository
   extends DrizzleBaseRepository
   implements IPermissionRepository {
+
   async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
-    const db = this.getDb(tx);
-    const result = await db
-      .select()
-      .from(permissions)
-      .where(eq(permissions.name, name));
-    return result[0] ? RbacMapper.toPermissionDomain(result[0]) : null;
+    try {
+      const db = this.getDb(tx);
+      const result = await db
+        .select()
+        .from(permissions)
+        .where(eq(permissions.name, name));
+      return result[0] ? RbacMapper.toPermissionDomain(result[0]) : null;
+    } catch (error) {
+      // IN LỖI THẬT CỦA POSTGRES RA MÀN HÌNH
+      console.error('🔴 LỖI GỐC TỪ POSTGRES:', error);
+      throw error;
+    }
+
   }
 
   async save(permission: Permission, tx?: Transaction): Promise<Permission> {

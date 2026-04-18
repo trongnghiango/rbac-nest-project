@@ -18,41 +18,44 @@ export class PermissionService {
     @Inject(ICacheService) private cacheService: ICacheService, // ✅ Inject Token
   ) { }
 
-  async userHasPermission_old(
-    userId: number,
-    permissionName: string,
-  ): Promise<boolean> {
+  // Thêm hàm này vào class PermissionService
+  async getUserPermissions(userId: number): Promise<string[]> {
     const cacheKey = `${this.CACHE_PREFIX}${userId}`;
 
-    // Sử dụng abstraction layer
+    // 1. Kiểm tra Cache Redis trước
     const cached = await this.cacheService.get<string[]>(cacheKey);
+    if (cached) return cached;
 
-    if (cached) return cached.includes(permissionName) || cached.includes('*');
-
+    // 2. Nếu Cache miss, query Database
     const userRoles = await this.userRoleRepo.findByUserId(userId);
-    const activeRoles = userRoles.filter(
-      (ur) => ur.isActive() && ur.role?.isActive,
-    );
-    if (activeRoles.length === 0) return false;
+    const activeRoles = userRoles.filter((ur) => ur.isActive() && ur.role?.isActive);
 
-    const roleIds = activeRoles.map((ur) => ur.roleId);
-    const roles = await this.roleRepo.findAllWithPermissions(roleIds);
+    if (activeRoles.length === 0) return [];
 
-    const permissions = new Set<string>();
-    roles.forEach((r) =>
-      r.permissions?.forEach((p) => {
-        if (p.isActive) permissions.add(p.name);
-      }),
-    );
+    // Kiểm tra nếu là SUPER_ADMIN thì trả về quyền tuyệt đối
+    const isSuperAdmin = activeRoles.some(ur => ur.role?.name === CORE_ROLES.SUPER_ADMIN);
 
-    const permArray = Array.from(permissions);
+    let permissions: string[] = [];
 
-    // Cache result
-    await this.cacheService.set(cacheKey, permArray);
-    // Mặc định adapter sẽ lấy TTL từ config nếu không truyền,
-    // hoặc bạn có thể truyền this.CACHE_TTL vào tham số thứ 3
+    if (isSuperAdmin) {
+      permissions = ['*']; // Hoặc ['manage:all'] tùy quy ước của bạn
+    } else {
+      const roleIds = activeRoles.map((ur) => ur.roleId);
+      const roles = await this.roleRepo.findAllWithPermissions(roleIds);
 
-    return permArray.includes(permissionName);
+      const permSet = new Set<string>();
+      roles.forEach((r) =>
+        r.permissions?.forEach((p) => {
+          if (p.isActive) permSet.add(p.name);
+        }),
+      );
+      permissions = Array.from(permSet);
+    }
+
+    // 3. Lưu lại vào Cache để lần sau lấy cho nhanh
+    await this.cacheService.set(cacheKey, permissions, this.CACHE_TTL);
+
+    return permissions;
   }
 
   async userHasPermission(userId: number, permissionName: string): Promise<boolean> {

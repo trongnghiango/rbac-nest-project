@@ -114,7 +114,8 @@ export class EmployeeService {
         }
 
         // 2. Lấy profile (Dùng optional chaining để tránh lỗi)
-        const employeeProfile = currentUser.context?.employee;
+        const employeeProfile = currentUser.profileContext?.employee;
+
 
         if (!employeeProfile || !employeeProfile.departmentCode) {
             // Nếu là nhân viên mới chưa có phòng ban, có thể cho xem chính họ hoặc trả về mảng rỗng

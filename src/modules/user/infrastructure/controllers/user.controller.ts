@@ -12,13 +12,17 @@ import { CurrentUser } from '../../../auth/infrastructure/decorators/current-use
 import { JwtAuthGuard } from '../../../auth/infrastructure/guards/jwt-auth.guard';
 import { User } from '../../domain/entities/user.entity';
 import { UpdateProfileDto } from '../dtos/update-profile.dto';
-import { ApiBearerAuth } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { PermissionService } from '@modules/rbac/application/services/permission.service';
 
 @ApiBearerAuth()
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UserController {
-  constructor(private userService: UserService) { }
+  constructor(
+    private userService: UserService,
+    private permissionService: PermissionService
+  ) { }
 
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
@@ -40,5 +44,20 @@ export class UserController {
   @Get(':id')
   async getUserById(@Param('id') id: number) {
     return this.userService.getUserById(id);
+  }
+
+  @Get('me/permissions')
+  @ApiOperation({ summary: 'Lấy danh sách quyền của người dùng hiện tại' })
+  async getMyPermissions(@CurrentUser() user: User) {
+    if (!user.id) throw new BadRequestException('Invalid User Context');
+
+    // Gọi service để lấy mảng string các quyền
+    const permissions = await this.permissionService.getUserPermissions(user.id);
+
+    return {
+      userId: user.id,
+      username: user.username,
+      permissions: permissions
+    };
   }
 }

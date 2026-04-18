@@ -2,6 +2,7 @@ import { pgTable, serial, text, integer, date, timestamp, bigint, numeric } from
 import { relations } from 'drizzle-orm';
 import { users } from '../core/users.schema';
 import { locations, positions } from './org-structure.schema';
+import { leads } from '../crm/leads.schema';
 
 // 1. Hồ sơ Nhân viên
 export const employees = pgTable('employees', {
@@ -52,8 +53,16 @@ export const employeesRelations = relations(employees, ({ one, many }) => ({
     // Liên kết chặt chẽ với Ma trận Vị trí
     position: one(positions, { fields: [employees.positionId], references: [positions.id] }),
 
-    manager: one(employees, { fields: [employees.managerId], references: [employees.id], relationName: 'managerRelation' }),
-    subordinates: many(employees, { relationName: 'managerRelation' }),
+    // 👈 THÊM 2 DÒNG NÀY ĐỂ KHỚP VỚI LEADS:
+    assignedLeads: many(leads, { relationName: 'assignedLeads' }),
+    createdLeads: many(leads, { relationName: 'createdLeads' }),
+
+    manager: one(employees, {
+        fields: [employees.managerId],
+        references: [employees.id],
+        relationName: 'employee_management',
+    }),
+    subordinates: many(employees, { relationName: 'employee_management' }),
     reviews: many(performanceReviews, { relationName: 'employeeReviews' }),
 }));
 

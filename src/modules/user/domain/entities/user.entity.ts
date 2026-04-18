@@ -13,7 +13,7 @@ export interface UserProps {
   personalInfo?: UserPersonalInfo;
 
   // Ngữ cảnh nghiệp vụ (Công việc)
-  context?: UserBusinessContext;
+  profileContext?: UserBusinessContext;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -29,7 +29,8 @@ export class User {
   private _telegramId?: string;
 
   private _personalInfo: UserPersonalInfo;
-  private _context: UserBusinessContext;
+  private _profileContext: UserBusinessContext;
+
 
   private _createdAt?: Date;
   private _updatedAt?: Date;
@@ -47,7 +48,7 @@ export class User {
 
     // Khởi tạo đối tượng rỗng để đảm bảo user.personalInfo.fullName không bao giờ bị crash
     this._personalInfo = props.personalInfo ?? {};
-    this._context = props.context ?? {};
+    this._profileContext = props.profileContext ?? {};
 
     this._createdAt = props.createdAt ?? new Date();
     this._updatedAt = props.updatedAt ?? new Date();
@@ -68,7 +69,7 @@ export class User {
   }
 
   get personalInfo() { return this._personalInfo; }
-  get context() { return this._context; }
+  get profileContext() { return this._profileContext; }
 
   get createdAt() { return this._createdAt; }
   get updatedAt() { return this._updatedAt; }
@@ -112,9 +113,9 @@ export class User {
   // --- Business Helpers (Check vai trò) ---
 
   // Tối ưu: Kiểm tra xem User có đang đóng vai trò nào trong hệ thống không
-  isEmployee(): boolean { return !!this._context.employee; }
-  isOrganization(): boolean { return !!this._context.organization; }
-  isStudent(): boolean { return !!this._context.student; }
+  isEmployee(): boolean { return !!this._profileContext.employee; }
+  isOrganization(): boolean { return !!this._profileContext.organization; }
+  isStudent(): boolean { return !!this._profileContext.student; }
 
   /**
    * Cập nhật thời gian sửa đổi cuối cùng
@@ -136,7 +137,7 @@ export class User {
       roles: this._roles,
       telegramId: this._telegramId,
       personalInfo: this._personalInfo,
-      context: this._context,
+      profileContext: this._profileContext,
       createdAt: this._createdAt,
       updatedAt: this._updatedAt,
     };

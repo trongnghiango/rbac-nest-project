@@ -47,7 +47,7 @@ import { UserModule } from '@modules/user/user.module';
                     middlewares: [redisSession.middleware()],
                     options: {
                         telegram: {
-                            apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'http://localhost:8081'
+                            apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'https://api.telegram.org'
                         }
                     }
                 };
