@@ -224,9 +224,9 @@ export class AuthenticationService {
     });
 
     // 4. Chạy Transaction
-    const result = await this.txManager.runInTransaction(async (tx) => {
+    const result = await this.txManager.runInTransaction(async () => {
       // A. Lưu User
-      const savedUser = await this.userRepository.save(newUser, tx);
+      const savedUser = await this.userRepository.save(newUser);
       if (!savedUser.id) {
         throw new InternalServerErrorException('Failed to generate User ID');
       }
@@ -257,7 +257,7 @@ export class AuthenticationService {
         createdAt: new Date(),
       });
 
-      await this.sessionRepository.create(session, tx);
+      await this.sessionRepository.create(session);
 
       return { savedUser, accessToken, refreshToken };
     });
@@ -301,9 +301,9 @@ export class AuthenticationService {
     const hashedNew = await PasswordUtil.hash(dto.newPassword);
     user.changePassword(hashedNew); // Logic đổi trạng thái nằm gọn trong Entity
 
-    await this.txManager.runInTransaction(async (tx) => {
+    await this.txManager.runInTransaction(async () => {
       // 1. Lưu user
-      await this.userRepository.save(user, tx);
+      await this.userRepository.save(user);
 
       // 2. Bảo mật: Xóa toàn bộ Session cũ trong DB để ép các thiết bị khác văng ra (Đăng xuất khỏi mọi nơi)
       await this.sessionRepository.deleteByUserId(userId);
@@ -354,8 +354,8 @@ export class AuthenticationService {
     const hashedNew = await PasswordUtil.hash(dto.newPassword);
     user.changePassword(hashedNew);
 
-    await this.txManager.runInTransaction(async (tx) => {
-      await this.userRepository.save(user, tx);
+    await this.txManager.runInTransaction(async () => {
+      await this.userRepository.save(user);
       await this.sessionRepository.deleteByUserId(user.id); // Xóa session cũ
     });
 

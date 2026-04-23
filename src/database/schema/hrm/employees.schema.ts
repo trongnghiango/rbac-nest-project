@@ -3,10 +3,14 @@ import { relations } from 'drizzle-orm';
 import { users } from '../core/users.schema';
 import { locations, positions } from './org-structure.schema';
 import { leads } from '../crm/leads.schema';
+import { organizations } from '../crm/organizations.schema';
 
 // 1. Hồ sơ Nhân viên
 export const employees = pgTable('employees', {
     id: serial('id').primaryKey(),
+
+    // Neo Nhân viên này thuộc Công ty nào?
+    organization_id: integer('organization_id').notNull().references(() => organizations.id),
     userId: bigint('user_id', { mode: 'number' })
         .unique() // Vẫn giữ unique để 1 User chỉ map 1 Employee
         .references(() => users.id, { onDelete: 'set null' }), // Đổi cascade thành set null để khi xóa User, hồ sơ NV vẫn còn
@@ -47,6 +51,10 @@ export const performanceReviews = pgTable('performance_reviews', {
 
 // --- RELATIONS ---
 export const employeesRelations = relations(employees, ({ one, many }) => ({
+    organization: one(organizations, {
+        fields: [employees.organization_id],
+        references: [organizations.id]
+    }),
     user: one(users, { fields: [employees.userId], references: [users.id] }),
     location: one(locations, { fields: [employees.locationId], references: [locations.id] }),
 

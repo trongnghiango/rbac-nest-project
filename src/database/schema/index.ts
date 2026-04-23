@@ -19,6 +19,7 @@ export * from './rbac/rbac.schema';           // FIX: đổi tên cột sang sna
 // ─── SYSTEM ──────────────────────────────────────────────────────────────────
 export * from './system/notifications.schema';
 export * from './system/attachments.schema';  // NEW: File đính kèm dùng chung (Polymorphic)
+export * from './system/sequences.schema';
 
 // ─── HRM ─────────────────────────────────────────────────────────────────────
 export * from './hrm/org-structure.schema';   // locations, grades, orgUnits, positions
@@ -30,6 +31,8 @@ export * from './crm/organizations.schema';   // FIX: userId nullable
 export * from './crm/leads.schema';           // NEW: Pipeline bán hàng
 export * from './crm/contracts.schema';       // NEW: Hợp đồng khách hàng
 export * from './crm/quotes.schema';          // NEW: Báo giá + Quote Items
+export * from './crm/contacts.schema'; // <-- NEW
+export * from './crm/service-assignments.schema'; // <-- NEW
 
 // ─── ACCOUNTING ──────────────────────────────────────────────────────────────
 export * from './accounting/finotes.schema';  // NEW: Phiếu ĐNTT + Attachments

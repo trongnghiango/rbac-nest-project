@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import * as https from 'https';
 // ❌ XÓA IMPORT NÀY: import { session } from 'telegraf'; 
 // ✅ Bỏ import * as, dùng require để bypass lỗi TypeScript
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -41,12 +42,19 @@ import { UserModule } from '@modules/user/user.module';
                     ttl: 86400, // Session hết hạn sau 1 ngày (tùy chỉnh)
                 });
 
+                // Tạo một HTTPS Agent để kết nối sống dai hơn và tránh timeout
+                const agent = new https.Agent({
+                    keepAlive: true,
+                    keepAliveMsecs: 10000,
+                });
+
                 return {
                     token: configService.get<string>('TELEGRAM_BOT_TOKEN'),
                     // ✅ Thay session() bằng middleware của Redis
                     middlewares: [redisSession.middleware()],
                     options: {
                         telegram: {
+                            agent: agent,
                             apiRoot: configService.get<string>('TELEGRAM_API_ROOT') || 'https://api.telegram.org'
                         }
                     }

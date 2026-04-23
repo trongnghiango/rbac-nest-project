@@ -6,6 +6,7 @@ import { ITransactionManager } from '@core/shared/application/ports/transaction-
 @Injectable()
 export class OrgStructureService {
     constructor(
+
         @Inject(IOrgStructureRepository) private readonly repo: IOrgStructureRepository,
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
     ) { }
@@ -16,24 +17,34 @@ export class OrgStructureService {
     }
 
     // 1. TẠO MỚI (Tự động tính toán Path)
-    async createUnit(dto: CreateOrgUnitDto) {
-        return this.txManager.runInTransaction(async (tx) => {
+    async createUnit(dto: CreateOrgUnitDto & { organizationId: number }) {
+        return this.txManager.runInTransaction(async () => {
             let parentPath = '';
 
             if (dto.parentId) {
-                const parent = await this.repo.findById(dto.parentId, tx);
+                const parent = await this.repo.findById(dto.parentId);
                 if (!parent) throw new NotFoundException('Phòng ban cha không tồn tại');
                 parentPath = parent.path || '';
             }
 
+            // Đảm bảo map đúng tên cột cho Drizzle
+            const insertData = {
+                organizationId: dto.organizationId,
+                parentId: dto.parentId,
+                type: dto.type,
+                code: dto.code,
+                name: dto.name
+            };
+
             // Bước 1: Insert data vào DB để DB cấp ID tự động (Lúc này path = null)
-            const newUnit = await this.repo.createOrgUnit(dto, tx);
+            const newUnit = await this.repo.createOrgUnit(insertData);
+
 
             // Bước 2: Nối chuỗi tạo Path (VD: parent = /1/3/ -> path mới = /1/3/4/)
             const newPath = dto.parentId ? `${parentPath}${newUnit.id}/` : `/${newUnit.id}/`;
 
             // Bước 3: Update lại Path cho Unit vừa tạo
-            return this.repo.updateOrgUnit(newUnit.id, { path: newPath }, tx);
+            return this.repo.updateOrgUnit(newUnit.id, { path: newPath });
         });
     }
 
@@ -42,13 +53,13 @@ export class OrgStructureService {
         const unit = await this.repo.findById(id);
         if (!unit) throw new NotFoundException('Không tìm thấy phòng ban');
 
-        return this.txManager.runInTransaction(async (tx) => {
+        return this.txManager.runInTransaction(async () => {
             // NẾU CÓ SỰ THAY ĐỔI VỀ PHÒNG BAN CHA (Move Node)
             if (dto.parentId !== undefined && dto.parentId !== unit.parentId) {
 
                 let newParentPath = '';
                 if (dto.parentId) {
-                    const newParent = await this.repo.findById(dto.parentId, tx);
+                    const newParent = await this.repo.findById(dto.parentId);
                     if (!newParent) throw new NotFoundException('Phòng ban cha mới không tồn tại');
 
                     // 🚨 BẢO VỆ CHẶT CHẼ: Chống lỗi vòng lặp (Vác ông nội làm con của thằng cháu)
@@ -63,17 +74,17 @@ export class OrgStructureService {
                 const newPath = dto.parentId ? `${newParentPath}${unit.id}/` : `/${unit.id}/`;
 
                 // Bước 1: Cập nhật thông tin node hiện tại
-                await this.repo.updateOrgUnit(id, { ...dto, path: newPath }, tx);
+                await this.repo.updateOrgUnit(id, { ...dto, path: newPath });
 
                 // Bước 2: Cập nhật Path cho TOÀN BỘ nhánh con bên dưới (Descendants)
-                await this.repo.updateDescendantsPath(oldPath, newPath, tx);
+                await this.repo.updateDescendantsPath(oldPath, newPath);
 
             } else {
                 // Cập nhật bình thường (Đổi tên, trạng thái) không ảnh hưởng tới cây
-                await this.repo.updateOrgUnit(id, dto, tx);
+                await this.repo.updateOrgUnit(id, dto);
             }
 
-            return this.repo.findById(id, tx);
+            return this.repo.findById(id);
         });
     }
 
@@ -172,11 +183,11 @@ export class OrgStructureService {
         }
 
         // 5. Cập nhật hàng loạt xuống DB (Dùng Transaction để an toàn)
-        await this.txManager.runInTransaction(async (tx) => {
+        await this.txManager.runInTransaction(async () => {
             const promises: Promise<any>[] = [];
 
             for (const [id, newPath] of calculatedPaths.entries()) {
-                promises.push(this.repo.updateOrgUnit(id, { path: newPath }, tx));
+                promises.push(this.repo.updateOrgUnit(id, { path: newPath }));
             }
 
             await Promise.all(promises);

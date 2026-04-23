@@ -6,14 +6,17 @@ import {
   ITransactionManager,
   Transaction,
 } from '@core/shared/application/ports/transaction-manager.port';
+import { TransactionContextService } from '../context/transaction-context.service';
 
 @Injectable()
 export class DrizzleTransactionManager implements ITransactionManager {
-  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) {}
+  constructor(@Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>) { }
 
-  async runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+  async runInTransaction<T>(work: () => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
-      return work(tx as unknown as Transaction);
+      return TransactionContextService.run(tx as unknown as Transaction, async () => {
+        return await work();
+      });
     });
   }
 }

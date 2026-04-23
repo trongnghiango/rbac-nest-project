@@ -105,9 +105,9 @@ export class UserImportService {
         }
 
         // 6. Thực thi Transaction Bulk Insert
-        await this.txManager.runInTransaction(async (tx) => {
+        await this.txManager.runInTransaction(async () => {
             // 6.1 Insert toàn bộ User (Và lấy ID trả về)
-            const insertedUsers = await this.userRepo.saveMany(usersToInsert, tx);
+            const insertedUsers = await this.userRepo.saveMany(usersToInsert);
 
             // 6.2 Chuẩn bị data cho bảng UserRoles
             const userRolesToInsert: UserRole[] = [];
@@ -133,7 +133,7 @@ export class UserImportService {
 
             // 6.3 Insert toàn bộ UserRoles
             if (userRolesToInsert.length > 0) {
-                await this.userRoleRepo.saveMany(userRolesToInsert, tx);
+                await this.userRoleRepo.saveMany(userRolesToInsert);
             }
         });
 

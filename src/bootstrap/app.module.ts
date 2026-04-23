@@ -26,6 +26,8 @@ import { NotificationModule } from '@modules/notification/notification.module';
 import { ChatbotCoreModule } from '@modules/chatbot-core/chatbot-core.module';
 import { OrgStructureModule } from '@modules/org-structure/org-structure.module';
 import { EmployeeModule } from '@modules/employee/employee.module';
+import { AccountingModule } from '@modules/accounting/accounting.module';
+import { CrmModule } from '@modules/crm/crm.module';
 
 @Module({
   imports: [
@@ -85,6 +87,8 @@ import { EmployeeModule } from '@modules/employee/employee.module';
     //
     OrgStructureModule,
     EmployeeModule,
+    AccountingModule,
+    CrmModule,
   ],
 })
 export class AppModule {

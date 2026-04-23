@@ -15,11 +15,11 @@ import { CompanyImportService } from '../../application/services/company-import.
 export class CompanyImportController {
     constructor(private readonly importService: CompanyImportService) { }
 
-    @ApiOperation({ summary: 'Khởi tạo Nhân sự Chủ chốt từ file CSV (Production)' })
+    @ApiOperation({ summary: 'Khởi tạo Nhân sự Chủ chốt từ file CSV' })
     @ApiConsumes('multipart/form-data')
     @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
     @Post('import-core-employees')
-    @Permissions('system:config') // Yêu cầu quyền cấu hình hệ thống cao nhất
+    @Permissions('system:config')
     @UseInterceptors(FileInterceptor('file'))
     async importCoreCompany(
         @UploadedFile() file: Express.Multer.File,
@@ -28,8 +28,15 @@ export class CompanyImportController {
         if (!file) throw new BadRequestException('Vui lòng đính kèm file CSV');
         if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
 
-        // Gọi Service xử lý
-        const result = await this.importService.importCoreCompany(file.buffer, admin.id!);
+        // Lấy organizationId từ profileContext của người đang upload (Admin)
+        const organizationId = admin.profileContext?.employee?.organization_id;
+
+        if (!organizationId) {
+            throw new BadRequestException('Tài khoản của bạn chưa được liên kết với bất kỳ công ty nào, không thể upload file nhân sự!');
+        }
+
+        // Truyền đủ 3 tham số: fileBuffer, adminId, và organizationId
+        const result = await this.importService.importCoreCompany(file.buffer, admin.id!, organizationId);
         return result;
     }
 }

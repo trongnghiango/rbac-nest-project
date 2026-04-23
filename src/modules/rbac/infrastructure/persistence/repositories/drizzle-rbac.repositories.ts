@@ -24,7 +24,7 @@ export class DrizzleRoleRepository
   extends DrizzleBaseRepository
   implements IRoleRepository {
   async findByName(name: string, tx?: Transaction): Promise<Role | null> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const result = await db.query.roles.findFirst({
       where: eq(roles.name, name),
       with: { permissions: { with: { permission: true } } },
@@ -33,7 +33,7 @@ export class DrizzleRoleRepository
   }
 
   async save(role: Role, tx?: Transaction): Promise<Role> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const data = RbacMapper.toRolePersistence(role);
 
     return await db.transaction(async (trx) => {
@@ -74,7 +74,7 @@ export class DrizzleRoleRepository
     roleIds: number[],
     tx?: Transaction,
   ): Promise<Role[]> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const results = await db.query.roles.findMany({
       where: inArray(roles.id, roleIds),
       with: { permissions: { with: { permission: true } } },
@@ -83,7 +83,7 @@ export class DrizzleRoleRepository
   }
 
   async findAll(tx?: Transaction): Promise<Role[]> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const results = await db.query.roles.findMany({
       with: { permissions: { with: { permission: true } } },
     });
@@ -92,7 +92,7 @@ export class DrizzleRoleRepository
 
   async findInNames(names: string[], tx?: Transaction): Promise<Role[]> {
     if (!names || names.length === 0) return [];
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const results = await db.query.roles.findMany({
       where: inArray(roles.name, names),
     });
@@ -107,7 +107,7 @@ export class DrizzlePermissionRepository
 
   async findByName(name: string, tx?: Transaction): Promise<Permission | null> {
     try {
-      const db = this.getDb(tx);
+      const db = this.getDb();
       const result = await db
         .select()
         .from(permissions)
@@ -122,7 +122,7 @@ export class DrizzlePermissionRepository
   }
 
   async save(permission: Permission, tx?: Transaction): Promise<Permission> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const data = RbacMapper.toPermissionPersistence(permission);
     let result;
     if (data.id) {
@@ -142,7 +142,7 @@ export class DrizzlePermissionRepository
   }
 
   async findAll(tx?: Transaction): Promise<Permission[]> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const results = await db.select().from(permissions);
     return results.map((r) => RbacMapper.toPermissionDomain(r)!);
   }
@@ -153,7 +153,7 @@ export class DrizzleUserRoleRepository
   extends DrizzleBaseRepository
   implements IUserRoleRepository {
   async findByUserId(userId: number, tx?: Transaction): Promise<UserRole[]> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const results = await db.query.userRoles.findMany({
       where: eq(userRoles.userId, userId),
       with: { role: true },
@@ -162,7 +162,7 @@ export class DrizzleUserRoleRepository
   }
 
   async save(userRole: UserRole, tx?: Transaction): Promise<void> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const data = RbacMapper.toUserRolePersistence(userRole);
     await db
       .insert(userRoles)
@@ -178,7 +178,7 @@ export class DrizzleUserRoleRepository
     roleId: number,
     tx?: Transaction,
   ): Promise<UserRole | null> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const result = await db.query.userRoles.findFirst({
       where: and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)),
       with: { role: true },
@@ -191,7 +191,7 @@ export class DrizzleUserRoleRepository
     roleId: number,
     tx?: Transaction,
   ): Promise<void> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     await db
       .delete(userRoles)
       .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
@@ -199,7 +199,7 @@ export class DrizzleUserRoleRepository
 
   async saveMany(usrRoles: UserRole[], tx?: Transaction): Promise<void> {
     if (!usrRoles || usrRoles.length === 0) return;
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const data = usrRoles.map(ur => RbacMapper.toUserRolePersistence(ur));
 
     await db

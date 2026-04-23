@@ -1,11 +1,15 @@
 username,email,fullName,employeeCode,locationCode,departmentCode,departmentName,positionName,jobTitle,gradeLevel,role
-ceo_bod,ceo@cty.com,Chủ tịch HĐTV,BOD-001,HQ,HDTV,Hội đồng thành viên,Chủ tịch HĐTV,Chủ tịch,1,SUPER_ADMIN
-dir_bod,dir@cty.com,Giám đốc Điều hành,BOD-002,HQ,BOD,Ban Giám Đốc,CEO (Giám đốc),Giám đốc,2,ADMIN
-tp_dv,tpdv@cty.com,Trưởng phòng Dịch vụ,PDV-001,HCM,P_DICHVU,Phòng Dịch Vụ,Trưởng phòng,Trưởng phòng,4,MANAGER
-lts_dv,lts@cty.com, Nguyễn Văn S,005,HCM,P_DICHVU,Phòng Dịch Vụ,Chuyên viên B2,Chuyên viên,6,STAFF
-nttt_dv,nttt@cty.com,Trương Vô Kỵ,006,HCM,P_DICHVU,Phòng Dịch Vụ,Chuyên viên B2,Chuyên viên,6,STAFF
-tttd_dv,tttd@cty.com,Trần Thị Kha,001,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A2,Trợ lý,8,STAFF
-vtla_dv,vtla@cty.com,Đỗ Vũ Kha,007,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A2,Trợ lý,8,STAFF
-vtmd_dv,vtmd@cty.com,Võ Tòng,014,HCM,P_DICHVU,Phòng Dịch Vụ,Trợ lý A1,Trợ lý,9,STAFF
-dev_it,dev@cty.com,Lập trình viên IT,IT-001,HQ,P_HT,Phòng Hệ Thống,CV-IT,Chuyên viên,6,STAFF
-qa_ht,qa@cty.com,Nhân viên QA,QA-001,HQ,P_QLCL,Phòng Quản lý chất lượng,Auditor,Chuyên viên,6,STAFF
+thuynguyen,,"Nguyễn Thị Thu Thủy",000,HCM,P_DICHVU,"Phòng Dịch Vụ","CEO","Giám đốc",2,ADMIN
+daotran,tranthitrucdao280302@gmail.com,"Trần Thị Trúc Đào",001,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A2","Trợ lý",8,STAFF
+ngannguyen,trucngan05062002@gmail.com,"Nguyễn Thị Trúc Ngân",002,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+hanhnguyen,Honghanhnguyen6699@gmail.com,"Nguyễn Thị Hồng Hạnh",003,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+siluu,,"Lưu Tiến Sĩ",005,HCM,P_DICHVU,"Phòng Dịch Vụ","Nhân viên pháp lý","Nhân viên pháp lý",10,STAFF
+duydoan,doannhatduyxsb@gmail.com,"Đoàn Nhật Duy",006,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+anhvan,lananhvan2k2@gmail.com,"Văn Thị Lan Anh",007,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A2","Trợ lý",8,STAFF
+anngo,Ngomaihoaian2506@gmail.com,"Ngô Mai Hoài An",008,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A2","Trợ lý",8,STAFF
+thangvo,thangvo0841@gmail.com,"Võ Duy Thắng",009,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+nhitang,phuongnhipc5@gmail.com,"Tăng Phượng Nhi",010,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A2","Trợ lý",8,STAFF
+vietnguyen,,"Nguyễn Hoàng Việt",011,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+chauhoang,hoangtngocchau139@gmail.com,"Hoàng Thị Ngọc Châu",012,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A2","Trợ lý",8,STAFF
+thuyvo,,"Võ Thị Thu Thủy",013,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF
+duyenvo,vothimyduyen2510@gmail.com,"Võ Thị Mỹ Duyên",014,HCM,P_DICHVU,"Phòng Dịch Vụ","Trợ lý A1","Trợ lý",9,STAFF

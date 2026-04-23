@@ -20,8 +20,7 @@ type NotificationRecord = InferSelectModel<typeof notifications>;
 @Injectable()
 export class DrizzleNotificationRepository
   extends DrizzleBaseRepository
-  implements INotificationRepository
-{
+  implements INotificationRepository {
   constructor(
     @Inject(DRIZZLE) db: NodePgDatabase<typeof schema>,
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
@@ -33,7 +32,7 @@ export class DrizzleNotificationRepository
     notification: Notification,
     tx?: Transaction,
   ): Promise<Notification> {
-    const db = this.getDb(tx);
+    const db = this.getDb();
     const data = NotificationMapper.toPersistence(notification);
 
     // 3. Khai báo kiểu rõ ràng cho result -> Fix lỗi "Variable implicitly has an 'any' type"

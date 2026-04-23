@@ -7,6 +7,9 @@ import { ORG_PERMISSIONS } from '@modules/org-structure/domain/constants/org.per
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
+import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { BadRequestException } from '@nestjs/common';
 
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard) // Uncomment khi ghép Auth
@@ -65,8 +68,21 @@ export class OrgStructureController {
     @ApiResponse({ status: 201, description: 'Phòng ban được tạo thành công.' })
     @ApiResponse({ status: 400, description: 'Dữ liệu đầu vào không hợp lệ (Validation Error).' })
     @ApiResponse({ status: 404, description: 'Phòng ban cha (parentId) không tồn tại.' })
-    async createUnit(@Body() dto: CreateOrgUnitDto) {
-        return this.orgService.createUnit(dto);
+    async createUnit(
+        @Body() dto: CreateOrgUnitDto,
+        @CurrentUser() user: User,
+    ) {
+        // Tự động lấy ID Công ty của người tạo truyền xuống Service
+        const orgId = user.profileContext?.employee?.organization_id;
+
+        if (!orgId) {
+            throw new BadRequestException('Tài khoản của bạn chưa thuộc tổ chức nào, không thể tạo phòng ban!');
+        }
+
+        return this.orgService.createUnit({
+            ...dto,
+            organizationId: orgId
+        });
     }
 
     @Patch('units/:id')

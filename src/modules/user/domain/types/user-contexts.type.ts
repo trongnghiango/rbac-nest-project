@@ -21,6 +21,7 @@ export interface EmployeeContext {
     department?: string;
     departmentCode?: string;
     location?: string;
+    organization_id?: number;
 }
 
 export interface OrganizationContext {

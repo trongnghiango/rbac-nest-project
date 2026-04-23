@@ -12,8 +12,8 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 export class DrizzleSessionRepository
   extends DrizzleBaseRepository
   implements ISessionRepository {
-  async create(session: Session, tx?: Transaction): Promise<void> {
-    const db = this.getDb(tx);
+  async create(session: Session): Promise<void> {
+    const db = this.getDb();
     const data = SessionMapper.toPersistence(session);
 
     if (data.id) {
@@ -47,8 +47,8 @@ export class DrizzleSessionRepository
     return SessionMapper.toDomain(result[0] || null);
   }
 
-  async update(id: string, data: Partial<Session>, tx?: Transaction): Promise<void> {
-    const db = this.getDb(tx);
+  async update(id: string, data: Partial<Session>): Promise<void> {
+    const db = this.getDb();
     // Chuyển đổi từ CamelCase (Entity) sang SnakeCase (DB) nếu cần, 
     // ở đây Drizzle map tự động dựa trên schema
     await db.update(sessions)

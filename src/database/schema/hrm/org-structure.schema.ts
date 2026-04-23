@@ -1,6 +1,7 @@
 import { pgTable, serial, varchar, integer, boolean, timestamp, numeric, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { employees } from './employees.schema';
+import { organizations } from '../crm/organizations.schema';
 
 // 1. Địa điểm làm việc (Chi nhánh, Tòa nhà)
 export const locations = pgTable('locations', {
@@ -36,6 +37,8 @@ export const jobTitles = pgTable('job_titles', {
 // 5. Cơ cấu tổ chức (Sơ đồ cây: Công ty -> Khối -> Phòng -> Nhóm)
 export const orgUnits = pgTable('org_units', {
     id: serial('id').primaryKey(),
+    // Neo Phòng ban này vào Công ty nào? (STAX hay Khách hàng A)
+    organizationId: integer('organization_id').notNull().references(() => organizations.id),
     parentId: integer('parent_id'),
     path: varchar('path', { length: 255 }), //Trường path lưu cấu trúc cây (VD: /1/3/4/)
     type: varchar('type', { length: 50 }).notNull(), // COMPANY, BOD, DEPARTMENT, TEAM
@@ -67,6 +70,10 @@ export const positions = pgTable('positions', {
 
 // --- RELATIONS ---
 export const orgUnitsRelations = relations(orgUnits, ({ one, many }) => ({
+    organization: one(organizations, {
+        fields: [orgUnits.organizationId],
+        references: [organizations.id]
+    }),
     parent: one(orgUnits, { fields: [orgUnits.parentId], references: [orgUnits.id], relationName: 'unit_hierarchy', }),
     children: many(orgUnits, {
         relationName: 'unit_hierarchy',

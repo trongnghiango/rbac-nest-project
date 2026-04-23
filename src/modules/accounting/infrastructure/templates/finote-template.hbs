@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Phiếu Tài Chính</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            color: #334155;
+            margin: 0;
+            padding: 40px;
+            font-size: 14px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 40px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 20px;
+        }
+
+        .company-info h1 {
+            margin: 0;
+            color: #0f172a;
+            font-size: 24px;
+            letter-spacing: 1px;
+        }
+
+        .company-info p {
+            margin: 5px 0 0 0;
+            color: #64748b;
+        }
+
+        .invoice-title {
+            text-align: right;
+        }
+
+        .invoice-title h2 {
+            margin: 0;
+            color: #2563eb;
+            font-size: 28px;
+            text-transform: uppercase;
+        }
+
+        .invoice-title p {
+            margin: 5px 0 0 0;
+            font-weight: 600;
+        }
+
+        .details-section {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 40px;
+        }
+
+        .details-box {
+            background: #f8fafc;
+            padding: 15px 20px;
+            border-radius: 8px;
+            width: 45%;
+        }
+
+        .details-box h3 {
+            margin-top: 0;
+            color: #0f172a;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 40px;
+        }
+
+        th {
+            background-color: #2563eb;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .amount-col {
+            text-align: right;
+            font-weight: 600;
+        }
+
+        .total-section {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 50px;
+        }
+
+        .total-box {
+            width: 300px;
+        }
+
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .total-row.grand-total {
+            font-size: 18px;
+            font-weight: 700;
+            color: #2563eb;
+            border-bottom: none;
+        }
+
+        .signatures {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 50px;
+            text-align: center;
+        }
+
+        .signature-box {
+            width: 30%;
+        }
+
+        .signature-line {
+            margin-top: 60px;
+            border-top: 1px solid #94a3b8;
+            padding-top: 10px;
+        }
+
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            color: #94a3b8;
+            font-size: 12px;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <div class="company-info">
+            <h1>CÔNG TY TNHH ERP TECH</h1>
+            <p>123 Đường Công Nghệ, Quận 1, TP.HCM</p>
+            <p>MST: 0312345678 | SĐT: 028 1234 5678</p>
+        </div>
+        <div class="invoice-title">
+            <!-- Nếu là THU thì ghi HÓA ĐƠN, nếu là CHI thì ghi PHIẾU CHI -->
+            <h2>{{#if isExpense}}PHIẾU ĐỀ NGHỊ CHI{{else}}HÓA ĐƠN DỊCH VỤ{{/if}}</h2>
+            <p>Mã phiếu: {{invoiceCode}}</p>
+            <p>Ngày lập: {{date}}</p>
+        </div>
+    </div>
+
+    <div class="details-section">
+        <div class="details-box">
+            <h3>{{#if isExpense}}Người đề nghị:{{else}}Khách hàng:{{/if}}</h3>
+            <p><strong>{{targetName}}</strong></p>
+            <p>Hạn thanh toán: {{deadlineDate}}</p>
+        </div>
+        <div class="details-box">
+            <h3>Thông tin thanh toán:</h3>
+            <p>Ngân hàng: Vietcombank - CN Tân Bình</p>
+            <p>STK: <strong>1029384756</strong></p>
+            <p>Chủ TK: CÔNG TY TNHH ERP TECH</p>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>STT</th>
+                <th>Nội dung (Hạng mục / Dịch vụ)</th>
+                <th>Phân loại</th>
+                <th class="amount-col">Thành tiền</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td>{{title}}</td>
+                <td>{{category}}</td>
+                <td class="amount-col">{{amountFormatted}}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="total-section">
+        <div class="total-box">
+            <div class="total-row">
+                <span>Tổng trước thuế:</span>
+                <span>{{amountFormatted}}</span>
+            </div>
+            <div class="total-row">
+                <span>VAT (0%):</span>
+                <span>0 ₫</span>
+            </div>
+            <div class="total-row grand-total">
+                <span>TỔNG CỘNG:</span>
+                <span>{{amountFormatted}}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="signatures">
+        <div class="signature-box">
+            <p><strong>Người lập phiếu</strong></p>
+            <div class="signature-line">(Ký và ghi rõ họ tên)</div>
+        </div>
+        <div class="signature-box">
+            <p><strong>{{#if isExpense}}Người phê duyệt{{else}}Khách hàng{{/if}}</strong></p>
+            <div class="signature-line">(Ký và ghi rõ họ tên)</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Phiếu này được tạo tự động từ Hệ thống ERP. Vui lòng ghi rõ mã phiếu <strong>{{invoiceCode}}</strong> trong nội
+        dung chuyển khoản.
+    </div>
+
+</body>
+
+</html>

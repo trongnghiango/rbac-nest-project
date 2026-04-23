@@ -9,13 +9,13 @@ import { Transaction } from '@core/shared/application/ports/transaction-manager.
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
 
     async createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         const [result] = await db.insert(orgUnits).values(data as any).returning();
         return result as OrgUnitEntity;
     }
 
     async updateOrgUnit(id: number, data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity | null> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         const [result] = await db
             .update(orgUnits)
             .set({ ...data, updatedAt: new Date() })
@@ -26,7 +26,7 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
 
     // 🚀 MAGIC Ở ĐÂY: Update Path hàng loạt cho nhánh con bằng SQL REPLACE
     async updateDescendantsPath(oldPath: string, newPath: string, tx?: Transaction): Promise<void> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         await db.update(orgUnits)
             .set({
                 // SQL: REPLACE(path, '/1/3/', '/1/5/3/')
@@ -38,7 +38,7 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
     }
 
     async findByCode(code: string, tx?: Transaction): Promise<OrgUnitEntity | null> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         const result = await db.select().from(orgUnits).where(eq(orgUnits.code, code)).limit(1);
         return result[0] ? (result[0] as OrgUnitEntity) : null;
     }
@@ -52,7 +52,7 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
     }
 
     async deleteOrgUnit(id: number, tx?: Transaction): Promise<boolean> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         try {
             // Sẽ báo lỗi nếu phòng này đang được làm parentId của phòng khác (do có FK)
             await db.delete(orgUnits).where(eq(orgUnits.id, id));
@@ -63,13 +63,13 @@ export class DrizzleOrgStructureRepository extends DrizzleBaseRepository impleme
     }
 
     async findById(id: number, tx?: Transaction): Promise<OrgUnitEntity | null> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         const result = await db.select().from(orgUnits).where(eq(orgUnits.id, id)).limit(1);
         return result[0] ? (result[0] as OrgUnitEntity) : null;
     }
 
     async findPositionById(id: number, tx?: Transaction): Promise<PositionEntity | null> {
-        const db = this.getDb(tx);
+        const db = this.getDb();
         const result = await db.select()
             .from(positions)
             .where(eq(positions.id, id))

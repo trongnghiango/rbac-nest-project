@@ -5,5 +5,5 @@ export const ITransactionManager = Symbol('ITransactionManager');
 
 // 2. Interface (Type)
 export interface ITransactionManager {
-  runInTransaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
+  runInTransaction<T>(work: () => Promise<T>): Promise<T>;
 }
