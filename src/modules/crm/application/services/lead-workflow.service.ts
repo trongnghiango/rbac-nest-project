@@ -1,5 +1,5 @@
 // src/modules/crm/application/services/lead-workflow.service.ts
-import { Injectable, Inject, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { IEventBus } from '@core/shared/application/ports/event-bus.port';
 import { ILeadRepository } from '@modules/crm/domain/repositories/lead.repository';
@@ -7,7 +7,7 @@ import { IOrganizationRepository } from '@modules/crm/domain/repositories/organi
 import { IContractRepository } from '@modules/crm/domain/repositories/contract.repository';
 import { IServiceAssignmentRepository } from '@modules/crm/domain/repositories/service-assignment.repository';
 import { CloseLeadCommand } from '../dtos/close-lead.dto';
-
+import { Contract, ContractType, ContractStatus } from '../../domain/entities/contract.entity';
 
 @Injectable()
 export class LeadWorkflowService {
@@ -22,59 +22,68 @@ export class LeadWorkflowService {
 
     async closeLeadAsWon(command: CloseLeadCommand) {
         return this.txManager.runInTransaction(async () => {
-            // BỎ DÒNG: const dbTx = tx as ... (Vì không còn tx)
-
+            // 1. Tải Entities (Repository đã dùng Mapper để trả về Domain Entity)
             const lead = await this.leadRepo.findById(command.leadId);
-            if (!lead) throw new BadRequestException('Không tìm thấy Lead');
-            if (lead.isWon()) throw new BadRequestException('Lead này đã được chốt Hợp đồng trước đó!');
-            if (!lead.organizationId) throw new BadRequestException('Lead này chưa được gắn với Tổ chức nào!');
+            if (!lead) throw new NotFoundException('Không tìm thấy Lead');
 
-            // Dùng Repository (nó sẽ tự lấy tx từ ALS)
-            await this.leadRepo.updateStage(lead.id, 'WON');
+            const org = await this.orgRepo.findById(lead.organizationId);
+            if (!org) throw new NotFoundException('Không tìm thấy Tổ chức liên quan');
 
-            const orgUpdateData: any = { status: 'ACTIVE', updated_at: new Date() };
-            if (command.newCompanyName) orgUpdateData.company_name = command.newCompanyName;
-            if (command.taxCode) {
-                orgUpdateData.tax_code = command.taxCode;
-                orgUpdateData.type = 'ENTERPRISE';
+            // 2. Thực thi nghiệp vụ bên trong Entity (Vấn đề 2: Rich Domain Model)
+            // Logic kiểm tra isWon, organizationId... nằm trong hàm closeAsWon() của Lead
+            lead.closeAsWon();
+
+            // Logic nâng cấp lên Enterprise, cập nhật TaxCode nằm trong hàm onboard() của Organization
+            org.activate();
+            if (command.newCompanyName || command.taxCode) {
+                org.applyEnterpriseInfo(command.newCompanyName, command.taxCode);
             }
-            await this.orgRepo.update(lead.organizationId, orgUpdateData);
 
-            // SỬA LỖI 'any' TRONG TERNARY:
-            // Thay vì: contractType: condition ? any : any
-            // Ta dùng ép kiểu cụ thể hoặc giá trị thực tế
-            const contractType = command.serviceType.includes('RETAINER') ? 'RETAINER' : 'ONE_OFF';
+            // 3. Lưu thay đổi trạng thái Entities
+            await this.leadRepo.save(lead);
+            await this.orgRepo.save(org);
 
-            const newContract = await this.contractRepo.create({
-                organizationId: lead.organizationId, // Dùng camelCase của Entity
-                leadId: lead.id,
+            // 4. Tạo Hợp đồng mới (Dùng Entity Constructor)
+            const contractType = command.serviceType.includes('RETAINER')
+                ? ContractType.RETAINER
+                : ContractType.ONE_OFF;
+
+            const contract = new Contract({
+                id: undefined as any,
+                organizationId: org.id,
+                leadId: lead.id!,
                 contractNumber: command.contractNumber,
-                value: command.feeAmount,
                 title: command.serviceType,
-                contractType: contractType as any, // Ép kiểu về enum
-                status: 'ACTIVE',
+                contractType: contractType,
+                status: ContractStatus.ACTIVE,
+                value: command.feeAmount,
+                currency: 'VND',
                 signedAt: new Date(),
-                currency: 'VND'
-            } as any);
+            });
 
-            if (command.teamAssignments && command.teamAssignments.length > 0) {
-                await this.assignmentRepo.replaceByOrganization(lead.organizationId, command.teamAssignments);
+            const savedContract = await this.contractRepo.create(contract);
+
+            // 5. Xử lý gán Team
+            if (command.teamAssignments?.length) {
+                await this.assignmentRepo.replaceByOrganization(org.id, command.teamAssignments);
             }
 
+            // 6. Bắn Event (Vấn đề 5: Sử dụng mã nghiệp vụ hoặc ID sạch)
             await this.eventBus.publish({
-                aggregateId: lead.organizationId.toString(),
+                aggregateId: org.id.toString(),
                 occurredAt: new Date(),
                 payload: {
                     event: 'CLIENT_ONBOARDED',
-                    orgId: lead.organizationId,
-                    contractId: newContract.id
+                    orgId: org.id,
+                    contractId: savedContract.id,
+                    contractNumber: savedContract.contractNumber
                 }
             });
 
             return {
                 success: true,
                 message: 'Chốt hợp đồng thành công!',
-                contractId: newContract.id
+                contractId: savedContract.id
             };
         });
     }

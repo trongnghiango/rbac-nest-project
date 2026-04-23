@@ -150,6 +150,20 @@ export class Lead {
         this._updatedAt = new Date();
     }
 
+    closeAsWon() {
+        if (this._stage === LeadStage.WON) {
+            throw new Error('Lead này đã được chốt (WON) trước đó.');
+        }
+
+        if (!this._organizationId) {
+            throw new Error('Lead phải được gắn với một Tổ chức/Khách hàng trước khi chốt.');
+        }
+
+        this._stage = LeadStage.WON;
+        this._closedAt = new Date();
+        this._updatedAt = new Date();
+    }
+
     // Chuyển đổi sang Plain Object để lưu DB hoặc trả về API
     toJSON() {
         return {

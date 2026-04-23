@@ -1,4 +1,35 @@
 #
+### Câu hỏi 0: 
+```md
+# BACKEND_CONTEXT.md
+
+**Kiến trúc:** Clean + DDD + Event-Driven + Ports/Adapters + UoW + DI
+
+## Quy tắc QA
+1. **Hiểu rõ trước khi trả lời** → hỏi lại nếu mơ hồ, hỏi rõ layer (Domain/App/Infra/Interface)
+2. **Phân tích business logic trước** → không show code trừ khi có từ khóa: "show code"/"coding"/"viết code"/"implement"
+3. **Code ngắn, đúng layer**:
+   - Domain: Entity, VO, Agg, Domain Event, Repo interface (cấm DB, HTTP, DI, UoW.Commit)
+   - App: Use Case, gọi UoW, publish event sau commit (cấm SQL, DB chi tiết)
+   - Infra: Repo impl, UoW impl (cấm logic nghiệp vụ)
+   - Interface: Controller, gọi use case (cấm logic, cấm gọi trực tiếp repo)
+4. **Show code**:
+   - Sửa nhiều/file mới → full file/hàm
+   - Sửa ít → diff/patch
+   - Thêm dependency → diff constructor
+5. **UoW + Event + DI**:
+   - Constructor injection, container chỉ ở composition root
+   - App layer gọi Begin → Commit, event publish sau commit
+   - Không inject bus vào Entity
+
+---
+
+**Ghi chú:** Suy nghĩ cá nhân do người hỏi tự làm. File này chỉ để lưu trữ (archive).
+
+---
+
+Dài **14 dòng**, giữ được toàn bộ nguyên tắc cốt lõi. Bạn có thể đặt tên là `BACKEND_CONTEXT.md` hoặc `QA_RULES.md` gì cũng được.
+```
 
 
 #### câu hỏi 1: Tôi đang có dự án về crm/hrm/erp với nội dung đính kèm. Hãy đánh giá chi tiết về khả năng phát triển và ngưỡng mở rộng tối đa của hệ thống này? - định hình kiến trúc ban đầu là "Domain-Driven Design (DDD), Clean Architecture (Ports & Adapters), và Event-Driven"

@@ -1,40 +1,34 @@
 // src/modules/accounting/application/services/finote.service.ts
 import { Injectable, Inject } from '@nestjs/common';
-import { ITransactionManager, Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { SequenceGeneratorService } from '@core/shared/application/services/sequence-generator.service';
 import { CreateFinoteDto } from '../dtos/create-finote.dto';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
 import { IEventBus } from '@core/shared/application/ports/event-bus.port';
 import { FinoteCreatedEvent } from '@modules/accounting/domain/events/finote-created.event';
-import { DRIZZLE } from '@database/drizzle.provider';
+import { IFinoteRepository } from '../../domain/repositories/finote.repository';
 
 @Injectable()
 export class FinoteService {
     constructor(
-        @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>,
-        @Inject(ITransactionManager) private txManager: ITransactionManager,
-        private sequenceService: SequenceGeneratorService,
-        @Inject(IEventBus) private eventBus: IEventBus,
+        @Inject(IFinoteRepository) private readonly finoteRepo: IFinoteRepository,
+        @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
+        @Inject(IEventBus) private readonly eventBus: IEventBus,
+        private readonly sequenceService: SequenceGeneratorService,
     ) { }
 
     async createFinote(dto: CreateFinoteDto, creatorId: number) {
         return this.txManager.runInTransaction(async () => {
-
-            // 1. SINH MÃ TỰ ĐỘNG
-            // Tự động chọn Prefix: INC (Income) hoặc EXP (Expense)
             const prefix = dto.type === 'INCOME' ? 'INC' : 'EXP';
             const finoteCode = await this.sequenceService.generateCode(prefix, {
                 padLength: 4,
                 resetYearly: true
             });
 
-            // 2. CHUẨN BỊ DỮ LIỆU
-            const newFinote = {
+            const newFinoteData = {
                 code: finoteCode,
                 type: dto.type,
                 title: dto.title,
-                amount: dto.amount.toString(), // Drizzle numeric yêu cầu string
+                amount: dto.amount.toString(),
                 category: dto.category,
                 description: dto.description,
                 source_org_id: dto.organizationId || null,
@@ -43,14 +37,8 @@ export class FinoteService {
                 deadline_at: new Date(dto.deadlineAt),
             };
 
-            // 3. LƯU VÀO DATABASE
-            const [savedFinote] = await this.db
-                .insert(schema.finotes)
-                .values(newFinote)
-                .returning();
+            const savedFinote = await this.finoteRepo.save(newFinoteData);
 
-            // [TODO] Sau này có thể thêm EventBus ở đây: this.eventBus.publish(new FinoteCreatedEvent(...))
-            // CHUẨN CLEAN ARCHITECTURE: Chỉ phát Event khi Transaction đã thành công 100%
             if (savedFinote) {
                 this.eventBus.publish(
                     new FinoteCreatedEvent(savedFinote.id.toString(), {
@@ -64,7 +52,6 @@ export class FinoteService {
                     })
                 );
             }
-
             return savedFinote;
         });
     }

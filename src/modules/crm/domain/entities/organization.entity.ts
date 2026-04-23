@@ -11,7 +11,7 @@ export enum OrganizationType {
 }
 
 export interface OrganizationProps {
-    id: number;
+    id?: number;
     companyName: string;
     taxCode: string | null;
     type: OrganizationType;
@@ -21,59 +21,111 @@ export interface OrganizationProps {
     website?: string;
     address?: string;
     note?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 export class Organization {
-    public readonly id: number;
-    public companyName: string;
-    public taxCode: string | null;
-    public type: OrganizationType;
-    public status: OrganizationStatus;
-    public isInternal: boolean;
-    public industry?: string;
-    public website?: string;
-    public address?: string;
-    public note?: string;
+    private _id?: number;
+    private _companyName: string;
+    private _taxCode: string | null;
+    private _type: OrganizationType;
+    private _status: OrganizationStatus;
+    private _isInternal: boolean;
+    private _industry?: string;
+    private _website?: string;
+    private _address?: string;
+    private _note?: string;
+    private _createdAt?: Date;
+    private _updatedAt?: Date;
 
-    constructor({
-        id,
-        companyName,
-        taxCode,
-        type,
-        status,
-        isInternal,
-        industry,
-        website,
-        address,
-        note,
-    }: OrganizationProps) {
-        this.id = id;
-        this.companyName = companyName;
-        this.taxCode = taxCode;
-        this.type = type;
-        this.status = status;
-        this.isInternal = isInternal;
-        this.industry = industry;
-        this.website = website;
-        this.address = address;
-        this.note = note;
+    constructor(props: OrganizationProps) {
+        this._id = props.id;
+        this._companyName = props.companyName;
+        this._taxCode = props.taxCode;
+        this._type = props.type || OrganizationType.INDIVIDUAL;
+        this._status = props.status || OrganizationStatus.PROSPECT;
+        this._isInternal = props.isInternal ?? false;
+        this._industry = props.industry;
+        this._website = props.website;
+        this._address = props.address;
+        this._note = props.note;
+        this._createdAt = props.createdAt || new Date();
+        this._updatedAt = props.updatedAt || new Date();
     }
 
-    activate() { this.status = OrganizationStatus.ACTIVE; }
-    deactivate() { this.status = OrganizationStatus.INACTIVE; }
+    // --- Getters ---
+    get id() { return this._id; }
+    get companyName() { return this._companyName; }
+    get taxCode() { return this._taxCode; }
+    get type() { return this._type; }
+    get status() { return this._status; }
+    get isInternal() { return this._isInternal; }
+    get industry() { return this._industry; }
+    get website() { return this._website; }
+    get address() { return this._address; }
+    get note() { return this._note; }
+    get createdAt() { return this._createdAt; }
+    get updatedAt() { return this._updatedAt; }
 
+    // --- Business Logic (Rich Domain Model) ---
+
+    /**
+     * Kích hoạt tổ chức sang trạng thái ACTIVE
+     */
+    activate(): void {
+        this._status = OrganizationStatus.ACTIVE;
+        this.markModified();
+    }
+
+    /**
+     * Tạm dừng hoạt động của tổ chức
+     */
+    deactivate(): void {
+        this._status = OrganizationStatus.INACTIVE;
+        this.markModified();
+    }
+
+    /**
+     * Cập nhật thông tin pháp nhân (Vấn đề 2 trong Hiến pháp)
+     * Tự động chuyển đổi sang ENTERPRISE nếu có mã số thuế
+     */
+    applyEnterpriseInfo(companyName?: string, taxCode?: string): void {
+        if (companyName) {
+            this._companyName = companyName.trim();
+        }
+
+        if (taxCode) {
+            this._taxCode = taxCode.trim();
+            // Logic nghiệp vụ đặc thù: Có MST thì auto là doanh nghiệp
+            this._type = OrganizationType.ENTERPRISE;
+        }
+
+        this.markModified();
+    }
+
+    private markModified(): void {
+        this._updatedAt = new Date();
+    }
+
+    /**
+     * Chuyển đổi về Plain Object để Mapper hoặc Response sử dụng
+     */
     toJSON() {
         return {
-            id: this.id,
-            companyName: this.companyName,
-            taxCode: this.taxCode,
-            type: this.type,
-            status: this.status,
-            isInternal: this.isInternal,
-            industry: this.industry,
-            website: this.website,
-            address: this.address,
-            note: this.note,
+            id: this._id,
+            companyName: this._companyName,
+            taxCode: this._taxCode,
+            type: this._type,
+            status: this._status,
+            isInternal: this._isInternal,
+            industry: this._industry,
+            website: this._website,
+            address: this._address,
+            note: this._note,
+            createdAt: this._createdAt,
+            updatedAt: this._updatedAt,
         };
     }
 }
+

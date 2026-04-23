@@ -6,9 +6,10 @@ import { DrizzleOrgStructureRepository } from './infrastructure/persistence/driz
 import { CompanyImportController } from './infrastructure/controllers/company-import.controller';
 import { CompanyImportService } from './application/services/company-import.service';
 import { RbacModule } from '@modules/rbac/rbac.module';
+import { UserModule } from '@modules/user/user.module';
 
 @Module({
-    imports: [RbacModule],
+    imports: [RbacModule, UserModule],
     controllers: [OrgStructureController, CompanyImportController],
     providers: [
         OrgStructureService,

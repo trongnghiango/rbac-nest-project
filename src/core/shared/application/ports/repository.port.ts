@@ -1,12 +1,9 @@
-import { Transaction } from './transaction-manager.port';
-
 export interface IRepository<T, ID> {
-  findById(id: ID, tx?: Transaction): Promise<T | null>;
-  findAll(criteria?: Partial<T>, tx?: Transaction): Promise<T[]>;
-  // FIX: save trả về Promise<T> thay vì void để đồng bộ với User Repo
-  save(entity: T, tx?: Transaction): Promise<T>;
-  delete(id: ID, tx?: Transaction): Promise<void>;
-  exists(id: ID, tx?: Transaction): Promise<boolean>;
+  findById(id: ID): Promise<T | null>;
+  findAll(criteria?: Partial<T>): Promise<T[]>;
+  save(entity: T): Promise<T>;
+  delete(id: ID): Promise<void>;
+  exists(id: ID): Promise<boolean>;
 }
 
 export interface IPaginatedRepository<T, ID> extends IRepository<T, ID> {

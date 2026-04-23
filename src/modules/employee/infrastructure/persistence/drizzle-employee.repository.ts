@@ -6,6 +6,7 @@ import { employees } from '@database/schema/hrm/employees.schema'; // Import sch
 import { like } from 'drizzle-orm';
 import { orgUnits } from '@database/schema/hrm/org-structure.schema';
 import { positions } from '@database/schema/hrm/org-structure.schema';
+import { EmployeeMapper } from './mappers/employee.mapper';
 
 @Injectable()
 export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements IEmployeeRepository {
@@ -36,7 +37,8 @@ export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements 
     async findById(id: number): Promise<any> {
         const db = this.getDb();
         const result = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
-        return result[0] || null;
+
+        return EmployeeMapper.toDomain(result[0]);
     }
 
     async findAll(options?: { orgPath?: string }): Promise<any[]> {

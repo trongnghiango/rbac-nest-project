@@ -1,11 +1,16 @@
+// src/modules/org-structure/application/services/company-import.service.ts
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { IFileParser } from '@core/shared/application/ports/file-parser.port';
 import { PasswordUtil } from '@core/shared/utils/password.util';
-import { DRIZZLE } from '@database/drizzle.provider';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { IOrgStructureRepository } from '../../domain/repositories/org-structure.repository';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
+import { IEmployeeRepository } from '@modules/employee/domain/repositories/employee.repository';
+import { IRoleRepository, IUserRoleRepository } from '@modules/rbac/domain/repositories/rbac.repository';
+import { User } from '@modules/user/domain/entities/user.entity';
+import { UserRole } from '@modules/rbac/domain/entities/user-role.entity';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { CoreEmployeeImportedEvent } from '@modules/org-structure/domain/events/core-employee-imported.event';
 
 export type CoreEmployeeCsvRow = {
     username: string;
@@ -26,16 +31,108 @@ export class CompanyImportService {
     private readonly logger = new Logger(CompanyImportService.name);
 
     constructor(
-        @Inject(DRIZZLE) private db: NodePgDatabase<typeof schema>,
-        @Inject(ITransactionManager) private txManager: ITransactionManager,
-        @Inject(IFileParser) private fileParser: IFileParser,
+        @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
+        @Inject(IFileParser) private readonly fileParser: IFileParser,
+        @Inject(IOrgStructureRepository) private readonly orgRepo: IOrgStructureRepository,
+        @Inject(IUserRepository) private readonly userRepo: IUserRepository,
+        @Inject(IRoleRepository) private readonly roleRepo: IRoleRepository,
+        @Inject(IUserRoleRepository) private readonly userRoleRepo: IUserRoleRepository,
+        @Inject(IEventBus) private readonly eventBus: IEventBus,
     ) { }
 
-    // THÊM THAM SỐ: organizationId
     async importCoreCompany(csvBuffer: Buffer, adminId: number, organizationId: number) {
         const records = await this.fileParser.parseCsvAsync<CoreEmployeeCsvRow>(csvBuffer);
         if (!records.length) return { success: false as const, message: 'File CSV rỗng' };
 
+        // 1. Thu thập dữ liệu duy nhất để xử lý batch
+        const uniqueData = this.extractUniqueMetadata(records);
+        const defaultPassword = await PasswordUtil.hash('Company@2026');
+
+        return await this.txManager.runInTransaction(async () => {
+            // 2. Xử lý Master Data (Locations, Grades, JobTitles) thông qua Repositories
+            const locMap = await this.syncLocations(Array.from(uniqueData.locations));
+            const gradeMap = await this.syncGrades(Array.from(uniqueData.grades));
+            const titleMap = await this.syncJobTitles(Array.from(uniqueData.jobTitles));
+
+            // 3. Xử lý Đơn vị tổ chức (OrgUnits)
+            await this.orgRepo.upsertOrgUnits(Array.from(uniqueData.departments.entries()).map(([code, name]) => ({
+                organizationId,
+                code,
+                name: name || code,
+                type: code === 'HQ' ? 'COMPANY' : 'DEPARTMENT',
+            })));
+            const orgsDb = await this.orgRepo.findOrgUnitsByCodes(Array.from(uniqueData.departments.keys()));
+            const orgMap = new Map(orgsDb.map(o => [o.code, o.id]));
+
+            let successCount = 0;
+
+            // 4. Xử lý từng nhân sự
+            for (const row of records) {
+                const orgId = orgMap.get(row.departmentCode);
+                const titleId = titleMap.get(row.jobTitle);
+                const gradeId = gradeMap.get(Number(row.gradeLevel));
+
+                if (!orgId || !titleId || !gradeId) continue;
+
+                // Xử lý Vị trí (Position)
+                const position = await this.getOrCreatePosition(row, orgId, titleId, gradeId);
+
+                // Xử lý Tài khoản (User)
+                let user = await this.userRepo.findByUsername(row.username);
+                let userId: number;
+
+                if (!user) {
+                    const newUser = new User({
+                        username: row.username,
+                        email: row.email?.trim() || undefined,
+                        hashedPassword: defaultPassword,
+                        isActive: true,
+                    });
+                    const savedUser = await this.userRepo.save(newUser);
+                    userId = savedUser.id!;
+
+                    // Tạo/Cập nhật Hồ sơ nhân viên (Employee)
+                    await this.eventBus.publish(
+                        new CoreEmployeeImportedEvent(row.employeeCode, {
+                            userId: userId,
+                            employeeCode: row.employeeCode,
+                            fullName: row.fullName,
+                            organizationId: organizationId,
+                            positionId: position.id,
+                            locationId: locMap.get(row.locationCode) || undefined,
+                        })
+                    );
+
+
+                    successCount++;
+                } else {
+                    userId = user.id!;
+                }
+
+                // Gán quyền (Role)
+                if (row.role) {
+                    const role = await this.roleRepo.findByName(row.role);
+                    if (role) {
+                        await this.userRoleRepo.save(new UserRole({
+                            userId,
+                            roleId: role.id!,
+                            assignedBy: adminId
+                        }));
+                    }
+                }
+            }
+
+            return {
+                success: true as const,
+                message: 'Khởi tạo cấu trúc nhân sự thành công!',
+                stats: { employeesImported: successCount },
+            };
+        });
+    }
+
+    // --- HÀM TRỢ GIÚP (PRIVATE) ĐỂ GIỮ CODE SẠCH ---
+
+    private extractUniqueMetadata(records: CoreEmployeeCsvRow[]) {
         const locations = new Set<string>();
         const departments = new Map<string, string>();
         const jobTitles = new Set<string>();
@@ -47,126 +144,43 @@ export class CompanyImportService {
             if (r.jobTitle) jobTitles.add(r.jobTitle);
             if (r.gradeLevel) grades.add(Number(r.gradeLevel));
         });
+        return { locations, departments, jobTitles, grades };
+    }
 
-        const defaultPassword = await PasswordUtil.hash('Company@2026');
+    private async syncLocations(codes: string[]) {
+        if (codes.length === 0) return new Map();
+        await this.orgRepo.upsertLocations(codes.map(c => ({ code: c, name: c })));
+        const locs = await this.orgRepo.findLocationsByCodes(codes);
+        return new Map(locs.map(l => [l.code, l.id]));
+    }
 
-        return await this.txManager.runInTransaction(async () => {
+    private async syncGrades(levels: number[]) {
+        if (levels.length === 0) return new Map();
+        await this.orgRepo.upsertGrades(levels.map(g => ({ levelNumber: g, code: `BAC_${g}`, name: `Bậc ${g}` })));
+        const grades = await this.orgRepo.findGradesByLevels(levels);
+        return new Map(grades.map(g => [g.levelNumber, g.id]));
+    }
 
-            if (locations.size > 0) {
-                await this.db.insert(schema.locations).values(Array.from(locations).map(l => ({ code: l, name: l }))).onConflictDoNothing({ target: schema.locations.code });
-            }
-            const locsDb = await this.db.select().from(schema.locations).where(inArray(schema.locations.code, Array.from(locations)));
-            const locMap = new Map(locsDb.map(l => [l.code, l.id]));
+    private async syncJobTitles(names: string[]) {
+        if (names.length === 0) return new Map();
+        await this.orgRepo.upsertJobTitles(names);
+        const titles = await this.orgRepo.findJobTitlesByNames(names);
+        return new Map(titles.map(t => [t.name, t.id]));
+    }
 
-            if (grades.size > 0) {
-                await this.db.insert(schema.grades).values(Array.from(grades).map(g => ({ levelNumber: g, code: `BAC_${g}`, name: `Bậc ${g}` }))).onConflictDoNothing({ target: schema.grades.code });
-            }
-            const gradesDb = await this.db.select().from(schema.grades).where(inArray(schema.grades.levelNumber, Array.from(grades)));
-            const gradeMap = new Map(gradesDb.map(g => [g.levelNumber, g.id]));
-
-            if (jobTitles.size > 0) {
-                await this.db.insert(schema.jobTitles).values(Array.from(jobTitles).map(name => ({ name }))).onConflictDoNothing({ target: schema.jobTitles.name });
-            }
-            const titlesDb = await this.db.select().from(schema.jobTitles).where(inArray(schema.jobTitles.name, Array.from(jobTitles)));
-            const titleMap = new Map(titlesDb.map(t => [t.name, t.id]));
-
-            // TẠO PHÒNG BAN GẮN VỚI TỔ CHỨC
-            const orgUnitInserts = Array.from(departments.entries()).map(([code, name]) => ({
-                organizationId: organizationId, // <--- THÊM VÀO ĐÂY
-                code,
-                name: name || code,
-                type: code === 'HQ' ? 'COMPANY' : 'DEPARTMENT',
-            }));
-
-            if (orgUnitInserts.length > 0) {
-                await this.db.insert(schema.orgUnits).values(orgUnitInserts).onConflictDoNothing({ target: schema.orgUnits.code });
-            }
-
-            const orgsDb = await this.db.select().from(schema.orgUnits).where(inArray(schema.orgUnits.code, Array.from(departments.keys())));
-            const orgMap = new Map(orgsDb.map(o => [o.code, o.id]));
-
-            let successCount = 0;
-
-            for (const row of records) {
-                const orgId = orgMap.get(row.departmentCode);
-                const titleId = titleMap.get(row.jobTitle);
-                const gradeId = gradeMap.get(Number(row.gradeLevel));
-
-                if (!orgId || !titleId || !gradeId) continue;
-
-                const posCode = `POS-${row.departmentCode}-${row.gradeLevel}`;
-                let position = await this.db.query.positions.findFirst({ where: eq(schema.positions.code, posCode) });
-
-                if (!position) {
-                    const [newPos] = await this.db.insert(schema.positions).values({
-                        code: posCode,
-                        name: row.positionName || row.jobTitle,
-                        orgUnitId: orgId,
-                        jobTitleId: titleId,
-                        gradeId: gradeId,
-                        headcountLimit: 10,
-                    }).returning();
-                    position = newPos;
-                }
-
-                const existingUser = await this.db.query.users.findFirst({ where: eq(schema.users.username, row.username) });
-                let userId: number;
-
-                if (!existingUser) {
-                    const [newUser] = await this.db.insert(schema.users).values({
-                        username: row.username,
-                        email: row.email ? row.email.trim() : null, // <--- SỬA DÒNG NÀY (Nếu rỗng thì đổi thành null)
-                        hashedPassword: defaultPassword,
-                        isActive: true,
-                    }).returning({ id: schema.users.id });
-                    userId = newUser.id;
-
-                    // TẠO NHÂN VIÊN GẮN VỚI TỔ CHỨC
-                    await this.db.insert(schema.employees)
-                        .values({
-                            organization_id: organizationId,
-                            userId: userId,
-                            employeeCode: row.employeeCode,
-                            fullName: row.fullName,
-                            locationId: locMap.get(row.locationCode) || null,
-                            positionId: position.id,
-                        })
-                        .onConflictDoUpdate({
-                            target: schema.employees.employeeCode, // Nếu trùng Mã nhân viên
-                            set: {
-                                fullName: row.fullName, // Cập nhật lại tên mới
-                                userId: userId,         // Gắn lại user id mới
-                                positionId: position.id,
-                                locationId: locMap.get(row.locationCode) || null,
-                                updatedAt: new Date()
-                            }
-                        });
-                    // await this.db.insert(schema.employees).values({
-                    //     organization_id: organizationId, // <--- THÊM VÀO ĐÂY
-                    //     userId: userId,
-                    //     employeeCode: row.employeeCode,
-                    //     fullName: row.fullName,
-                    //     locationId: locMap.get(row.locationCode) || null,
-                    //     positionId: position.id,
-                    // });
-                    successCount++;
-                } else {
-                    userId = existingUser.id;
-                }
-
-                if (row.role) {
-                    const roleDb = await this.db.query.roles.findFirst({ where: eq(schema.roles.name, row.role) });
-                    if (roleDb) {
-                        await this.db.insert(schema.userRoles).values({ userId: userId, roleId: roleDb.id, assignedBy: adminId }).onConflictDoNothing();
-                    }
-                }
-            }
-
-            return {
-                success: true as const,
-                message: 'Khởi tạo cấu trúc nhân sự thành công!',
-                stats: { employeesImported: successCount },
-            };
-        });
+    private async getOrCreatePosition(row: CoreEmployeeCsvRow, orgId: number, titleId: number, gradeId: number) {
+        const posCode = `POS-${row.departmentCode}-${row.gradeLevel}`;
+        let position = await this.orgRepo.findPositionByCode(posCode);
+        if (!position) {
+            position = await this.orgRepo.createPosition({
+                code: posCode,
+                name: row.positionName || row.jobTitle,
+                orgUnitId: orgId,
+                jobTitleId: titleId,
+                gradeId: gradeId,
+                headcountLimit: 10,
+            });
+        }
+        return position;
     }
 }

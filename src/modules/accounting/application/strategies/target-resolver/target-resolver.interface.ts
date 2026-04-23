@@ -11,5 +11,5 @@ export interface ITargetResolverStrategy {
     /**
      * Hàm thực hiện logic lấy tên đối tượng
      */
-    resolveTargetName(payload: any, db: NodePgDatabase<typeof schema>): Promise<string>;
+    resolveTargetName(payload: any): Promise<string>;
 }

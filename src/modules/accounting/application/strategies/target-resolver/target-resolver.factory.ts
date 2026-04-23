@@ -26,13 +26,11 @@ export class TargetResolverFactory {
     /**
      * Hàm cốt lõi: Không còn IF-ELSE. Chỉ việc lookup trong Map O(1).
      */
-    async resolve(type: string, payload: any, db: NodePgDatabase<typeof schema>): Promise<string> {
+    async resolve(type: string, payload: any): Promise<string> { // Xóa tham số db
         const strategy = this.strategies.get(type);
+        if (!strategy) return 'Đối tượng chưa xác định';
 
-        if (!strategy) {
-            return 'Đối tượng chưa xác định'; // Fallback nếu có type mới mà chưa viết class
-        }
-
-        return await strategy.resolveTargetName(payload, db);
+        return await strategy.resolveTargetName(payload); // Không truyền db vào đây nữa
     }
+
 }

@@ -8,6 +8,7 @@ import { UserImportService } from './application/services/user-import.service';
 import { UserImportController } from './infrastructure/controllers/user-import.controller';
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { UserUniquenessChecker } from './domain/services/user-uniqueness.checker';
+import { EmployeeAccountRequestedListener } from './application/listeners/employee-account-requested.listener';
 
 @Module({
   imports: [RbacModule],
@@ -16,6 +17,7 @@ import { UserUniquenessChecker } from './domain/services/user-uniqueness.checker
     UserService,
     UserImportService,
     UserUniquenessChecker,
+    EmployeeAccountRequestedListener, // Đăng ký Listener
     {
       provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,

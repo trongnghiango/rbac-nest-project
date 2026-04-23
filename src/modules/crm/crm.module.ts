@@ -21,6 +21,6 @@ import { DrizzleServiceAssignmentRepository } from './infrastructure/persistence
         { provide: IContractRepository, useClass: DrizzleContractRepository },
         { provide: IServiceAssignmentRepository, useClass: DrizzleServiceAssignmentRepository },
     ],
-    exports: [LeadWorkflowService],
+    exports: [LeadWorkflowService, IOrganizationRepository],
 })
 export class CrmModule { }

@@ -5,12 +5,11 @@ import { EmployeeController } from './infrastructure/controllers/employee.contro
 import { EmployeeService } from './application/services/employee.service';
 import { IEmployeeRepository } from './domain/repositories/employee.repository';
 import { DrizzleEmployeeRepository } from './infrastructure/persistence/drizzle-employee.repository';
-import { UserModule } from '@modules/user/user.module';
 import { RbacModule } from '@modules/rbac/rbac.module';
+import { CoreEmployeeImportedListener } from './application/listeners/core-employee-imported.listener';
 
 @Module({
     imports: [
-        UserModule,
         OrgStructureModule, // Cần import để EmployeeService dùng được IOrgStructureRepository
         RbacModule,
     ],
@@ -19,6 +18,7 @@ import { RbacModule } from '@modules/rbac/rbac.module';
     ],
     providers: [
         EmployeeService,
+        CoreEmployeeImportedListener,
         {
             provide: IEmployeeRepository,
             useClass: DrizzleEmployeeRepository, // Binding Interface với Implementation

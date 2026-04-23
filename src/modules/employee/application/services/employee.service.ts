@@ -2,10 +2,11 @@ import { Injectable, Inject, BadRequestException, NotFoundException, InternalSer
 import { IOrgStructureRepository } from '@modules/org-structure/domain/repositories/org-structure.repository';
 import { IEmployeeRepository } from '../../domain/repositories/employee.repository';
 import { CreateEmployeeDto } from '../dtos/create-employee.dto';
-import { UserService } from '@modules/user/application/services/user.service';
 import { ProvisionAccountDto } from '../dtos/provision-account.dto';
 import { CORE_ROLES } from '@modules/rbac/domain/constants/rbac.constants';
 import { User } from '@modules/user/domain/entities/user.entity';
+import { IEventBus } from '@core/shared/application/ports/event-bus.port';
+import { EmployeeAccountRequestedEvent } from '@modules/employee/domain/events/employee-account-requested.event';
 
 @Injectable()
 export class EmployeeService {
@@ -14,7 +15,7 @@ export class EmployeeService {
         // Mượn hàng xóm OrgStructure
         @Inject(IOrgStructureRepository) private orgRepo: IOrgStructureRepository,
 
-        private userService: UserService,
+        @Inject(IEventBus) private readonly eventBus: IEventBus,
     ) { }
 
     // =========================================================================
@@ -64,38 +65,22 @@ export class EmployeeService {
         // 4. Sinh password ngẫu nhiên an toàn
         const defaultPassword = 'Hrm@' + Math.floor(1000 + Math.random() * 9000);
 
-        try {
-            // 5. Gọi module User để tạo tài khoản đăng nhập (Identity)
-            const newUser = await this.userService.createUser({
-                id: undefined as any,
-                username: finalUsername,
-                password: defaultPassword,
+        // LOGIC MỚI: Bắn Event (Decoupled)
+        // Vì quy trình tạo User là Async, kết quả mật khẩu sẽ được gửi qua Email/Notification sau.
+        await this.eventBus.publish(
+            new EmployeeAccountRequestedEvent(String(employeeId), {
+                employeeId: employee.id,
                 email: dto.email,
+                username: finalUsername,
                 fullName: employee.fullName,
-            });
+                organizationId: employee.organization_id,
+            }),
+        );
 
-            // 6. Cập nhật lại hồ sơ nhân viên: Gắn ID của tài khoản vừa tạo vào hồ sơ
-            await this.employeeRepo.save({
-                id: employeeId,       // CÓ ID -> Repository sẽ hiểu đây là lệnh UPDATE
-                // userId: newUser.id,   // Gắn userId vàoo
-                userId: (newUser as { id: number }).id,
-            });
-
-            // 7. Trả về kết quả cho IT hoặc tự động gửi email cho nhân viên
-            return {
-                success: true,
-                message: 'Đã cấp tài khoản thành công',
-                credentials: {
-                    username: finalUsername,
-                    password: defaultPassword
-                }
-            };
-        } catch (error) {
-            if (error.message === 'User already exists') {
-                throw new BadRequestException(`Tên đăng nhập '${finalUsername}' đã được sử dụng. Vui lòng chọn tên khác.`);
-            }
-            throw new InternalServerErrorException('Lỗi hệ thống khi cấp tài khoản');
-        }
+        return {
+            success: true,
+            message: 'Yêu cầu cấp tài khoản đã được tiếp nhận và đang xử lý.',
+        };
     }
 
 

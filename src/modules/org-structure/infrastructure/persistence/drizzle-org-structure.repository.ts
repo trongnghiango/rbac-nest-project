@@ -1,12 +1,91 @@
 import { Injectable } from '@nestjs/common';
-import { eq, and, sql, like } from 'drizzle-orm';
+import { eq, and, sql, like, inArray } from 'drizzle-orm';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { IOrgStructureRepository, OrgUnitEntity, PositionEntity } from '../../domain/repositories/org-structure.repository';
-import { orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
+import { grades, jobTitles, locations, orgUnits, positions } from '@database/schema/hrm/org-structure.schema';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 @Injectable()
 export class DrizzleOrgStructureRepository extends DrizzleBaseRepository implements IOrgStructureRepository {
+    async upsertLocations(data: { code: string; name: string; }[]): Promise<void> {
+        if (!data.length) return;
+        await this.getDb()
+            .insert(locations)
+            .values(data)
+            .onConflictDoNothing({ target: locations.code });
+    }
+    async findLocationsByCodes(codes: string[]): Promise<{ id: number; code: string; }[]> {
+        if (!codes.length) return [];
+        return this.getDb()
+            .select({ id: locations.id, code: locations.code })
+            .from(locations)
+            .where(inArray(locations.code, codes));
+    }
+    async upsertGrades(data: { levelNumber: number; code: string; name: string; }[]): Promise<void> {
+        if (!data.length) return;
+        await this.getDb()
+            .insert(grades)
+            .values(data)
+            .onConflictDoNothing({ target: grades.code });
+
+    }
+
+    async findGradesByLevels(levels: number[]): Promise<{ id: number; levelNumber: number; }[]> {
+        if (!levels.length) return [];
+        return this.getDb()
+            .select({ id: grades.id, levelNumber: grades.levelNumber })
+            .from(grades)
+            .where(inArray(grades.levelNumber, levels));
+    }
+    async upsertJobTitles(names: string[]): Promise<void> {
+        if (!names.length) return;
+        const values = names.map(name => ({ name }));
+        await this.getDb()
+            .insert(jobTitles)
+            .values(values)
+            .onConflictDoNothing({ target: jobTitles.name });
+
+    }
+    async findJobTitlesByNames(names: string[]): Promise<{ id: number; name: string; }[]> {
+        if (!names.length) return [];
+        return this.getDb()
+            .select({ id: jobTitles.id, name: jobTitles.name })
+            .from(jobTitles)
+            .where(inArray(jobTitles.name, names));
+
+    }
+    async upsertOrgUnits(data: any[]): Promise<void> {
+        if (!data.length) return;
+        await this.getDb()
+            .insert(orgUnits)
+            .values(data)
+            .onConflictDoNothing({ target: orgUnits.code });
+    }
+
+    async findOrgUnitsByCodes(codes: string[]): Promise<{ id: number; code: string }[]> {
+        if (!codes.length) return [];
+        return this.getDb()
+            .select({ id: orgUnits.id, code: orgUnits.code })
+            .from(orgUnits)
+            .where(inArray(orgUnits.code, codes));
+    }
+
+    async findPositionByCode(code: string): Promise<PositionEntity | null> {
+        const result = await this.getDb()
+            .select()
+            .from(positions)
+            .where(eq(positions.code, code))
+            .limit(1);
+        return result[0] ? (result[0] as PositionEntity) : null;
+    }
+
+    async createPosition(data: any): Promise<PositionEntity> {
+        const [result] = await this.getDb()
+            .insert(positions)
+            .values(data)
+            .returning();
+        return result as PositionEntity;
+    }
 
     async createOrgUnit(data: Partial<OrgUnitEntity>, tx?: Transaction): Promise<OrgUnitEntity> {
         const db = this.getDb();

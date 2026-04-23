@@ -51,4 +51,15 @@ export class Money {
       throw new InvalidMoneyException('Currencies must match');
     }
   }
+
+  formatVND(): string {
+    return new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND'
+    }).format(this.amount);
+  }
+
+  toString(): string {
+    return this.amount.toString();
+  }
 }

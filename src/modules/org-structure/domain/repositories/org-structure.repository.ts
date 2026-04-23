@@ -46,4 +46,19 @@ export interface IOrgStructureRepository {
 
     // Lấy toàn bộ danh sách phòng ban (phục vụ việc vẽ cây)
     findAllActiveUnits(): Promise<OrgUnitEntity[]>;
+
+    upsertLocations(data: { code: string; name: string }[]): Promise<void>;
+    findLocationsByCodes(codes: string[]): Promise<{ id: number; code: string }[]>;
+
+    upsertGrades(data: { levelNumber: number; code: string; name: string }[]): Promise<void>;
+    findGradesByLevels(levels: number[]): Promise<{ id: number; levelNumber: number }[]>;
+
+    upsertJobTitles(names: string[]): Promise<void>;
+    findJobTitlesByNames(names: string[]): Promise<{ id: number; name: string }[]>;
+
+    upsertOrgUnits(data: any[]): Promise<void>;
+    findOrgUnitsByCodes(codes: string[]): Promise<{ id: number; code: string }[]>;
+
+    findPositionByCode(code: string): Promise<PositionEntity | null>;
+    createPosition(data: any): Promise<PositionEntity>;
 }
