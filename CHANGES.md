@@ -118,3 +118,18 @@ Nâng cấp bộ công cụ Seeding để đảm bảo tính sẵn sàng cao và
 
 ### 💡 Tổng kết triết lý Refactor:
 *"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*
+
+---
+
+## 🚀 [2026-04-24] - Documentation Harmonization: Đồng bộ hóa "Hiến pháp"
+
+Đợt tổng kiểm kê và cập nhật toàn bộ hệ thống tài liệu để khớp với kiến trúc thực tế.
+
+### 1. Đồng bộ hóa Sơ đồ thực thể (ERD)
+*   **Thay đổi:** Cập nhật file thiết kế gốc tại `docs/STAX/20260423-stax-architecture-v2.md` để phản ánh đúng cấu trúc 4 lớp của Module Kế toán (Header -> Items -> Payments -> Cash Trans).
+*   **Lý do:** Tránh việc tài liệu bị "lạc hậu" so với code, gây khó khăn cho việc mở rộng sau này.
+
+### 2. Kiện toàn Chiến lược Vận hành
+*   **Cập nhật:** Hoàn thiện `ARCHITECTURE.md` và `BACKEND_CONTEXT.md` với các khái niệm mới về **Flow-based Automation** và **Audit Mapping**.
+*   **Luận cứ:** Tài liệu chính là "mã nguồn của tư duy". Khi tư duy thông suốt, việc viết code sẽ trở nên chuẩn xác.
+

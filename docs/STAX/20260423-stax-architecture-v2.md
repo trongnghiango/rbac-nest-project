@@ -66,19 +66,31 @@ erDiagram
         string status "SIGNED | LIQUIDATED"
     }
 
-    %% TẦNG KẾ TOÁN (ACCOUNTING)
+    %% TẦNG KẾ TOÁN (ACCOUNTING - 4 LỚP CHUYÊN NGHIỆP)
     FINOTES {
         int id PK
+        string code "Số FN"
         int source_org_id FK
-        string type "INCOME | EXPENSE"
-        numeric amount "CÔNG NỢ"
-        string status "PENDING | PAID"
+        numeric total_amount "Tổng nợ"
+        string status "PENDING | PARTIAL | PAID"
+    }
+    FINOTE_ITEMS {
+        int id PK
+        int finote_id FK
+        string description "Nội dung phí"
+        numeric amount "Đơn giá"
+    }
+    CASH_TRANSACTIONS {
+        int id PK
+        string type "IN | OUT"
+        numeric amount "Tiền thật"
+        string transaction_ref "Mã ngân hàng"
     }
     FINOTE_PAYMENTS {
         int id PK
         int finote_id FK
-        numeric amount "TIỀN THẬT"
-        string payment_method "Ngân hàng/Tiền mặt"
+        int cash_transaction_id FK
+        numeric amount_mapped "Số tiền gạch nợ"
     }
 
     %% RELATIONS
@@ -86,7 +98,9 @@ erDiagram
     ORGANIZATIONS ||--o{ LEADS : "đang tư vấn"
     ORGANIZATIONS ||--o{ CONTRACTS : "ký hợp đồng"
     ORGANIZATIONS ||--o{ FINOTES : "đòi nợ / chi tiền"
-    FINOTES ||--o{ FINOTE_PAYMENTS : "được thanh toán bằng"
+    FINOTES ||--o{ FINOTE_ITEMS : "chi tiết phí"
+    FINOTES ||--o{ FINOTE_PAYMENTS : "được đối soát bởi"
+    CASH_TRANSACTIONS ||--o{ FINOTE_PAYMENTS : "phân bổ vào"
 ```
 
 ---
