@@ -181,3 +181,38 @@ sequenceDiagram
 **Phase 3: Module Bán lẻ (B2C)**
 1.  Triển khai bảng `orders` gắn vào `contacts`.
 2.  Tích hợp Payment Gateway tự động gạch nợ `Finote_Payments`.
+
+---
+
+## 7. Hồ sơ Quyết định Kiến trúc (Architectural Decisions)
+
+### 7.1. Xuất bản Repository ra ngoài Module (Exporting Repositories)
+- **Quyết định:** Export `IOrganizationRepository` và `IContactRepository` từ CRM Module.
+- **Lý do:** 
+    - Bảng `Organizations` là "Cột sống" dữ liệu chung của toàn hệ thống (Multi-tenancy). Các module Kế toán, HRM cần truy cập thông tin định danh khách hàng thường xuyên.
+    - Tránh việc viết quá nhiều hàm "pass-through" (lấy dữ liệu hộ) trong Service gây phình to mã nguồn không cần thiết.
+- **Rủi ro & Giải pháp:** Có thể gây rò rỉ chi tiết dữ liệu. Trong tương lai, khi module phình to, sẽ chuyển các thực thể lõi này vào một `SharedDomainModule` riêng biệt.
+
+---
+
+## 8. Lộ trình Phát triển Tiếp theo (Future Roadmap)
+
+### 8.1. Intelligent Lead Intake Phase 2
+- **AI-Powered Parsing:** Tích hợp AI để tự động đọc nội dung chat từ Zalo/Email và điền vào form Intake.
+- **Auto-Deduplication:** Nâng cấp thuật toán check trùng khách hàng không chỉ qua SĐT mà còn qua MST cá nhân, Email hoặc Tên không dấu gần giống.
+
+### 8.2. Hệ thống Activity Timeline (UX Hoàn hảo)
+- **Xây dựng:** Một hệ thống theo dõi mọi thay đổi và tương tác với khách hàng.
+- **Chi tiết:** Khi Sales gọi điện, khi Ops duyệt Finote, hệ thống tự động ghi lại thành một dòng thời gian (Feed). Giúp bất kỳ ai nhảy vào cũng nắm được lịch sử của khách hàng trong 10 giây.
+
+### 8.3. Check-list Nghiệp vụ Đặc thù (Workflow-based Tasks)
+- **Thành lập Doanh nghiệp:** Tự động sinh danh mục giấy tờ cần thu thập (CCCD, Hợp đồng thuê nhà).
+- **Kế toán Thuế:** Tự động nhắc nhở nhân viên thu thập hóa đơn đầu vào/đầu ra vào ngày 25 hàng tháng.
+
+### 8.4. Master Dashboard cho Sếp STAX
+- Thống kê tỷ lệ chuyển đổi từ Lead sang Hợp đồng (Conversion Rate).
+- Biểu đồ dòng tiền thực tế so với công nợ chưa thu (Cash Flow vs. Receivables).
+- Báo cáo năng suất nhân viên dựa trên số lượng Task và Finote được xử lý.
+
+---
+*Tài liệu được cập nhật ngày 24/04/2026 theo chiến lược Clean Architecture & Domain-Driven Design.*

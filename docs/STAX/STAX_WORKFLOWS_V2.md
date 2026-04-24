@@ -4,7 +4,34 @@ Bản tài liệu này định nghĩa cách STAX vận hành một cách tối g
 
 ---
 
-## 1. Luồng Onboarding & Chuyển đổi (Lead-to-Client)
+## 1. Luồng Tiếp nhận Thông minh (Intelligent Intake)
+**Mục tiêu:** Giảm 80% thời gian nhập liệu, tăng độ chính xác dữ liệu khách hàng.
+
+### [Workflow]
+1.  **Quick-Capture:** Nhân viên dán snippet chat/email vào ô "Ghi chú nhanh".
+2.  **Auto-Matching:** 
+    - Nếu SĐT đã có trong hệ thống -> Tự động gắn Lead vào **Organization** hiện tại.
+    - Nếu SĐT mới -> Tự động khởi tạo bộ 3: **Contact** + **Organization (Prospect)** + **Lead**.
+3.  **Source Tracking:** Tự động gắn nhãn nguồn (Zalo, Ads, Người quen giới thiệu) để đo lường hiệu quả Sales.
+
+---
+
+## 2. Phân luồng Nghiệp vụ Đặc thù (Specialized Workflows)
+**Mục tiêu:** Mỗi loại dịch vụ có một cách phục vụ khác nhau, không cào bằng.
+
+### [Workflow A: Thành lập Doanh nghiệp]
+- Tập trung vào tính **Tốc độ**.
+- **Check-list:** Chứng minh thư, Tên công ty mong muốn, Địa chỉ.
+- **Action:** Tự động sinh báo giá và danh mục hồ sơ pháp lý cần chuẩn bị.
+
+### [Workflow B: Kế toán & Thuế định kỳ]
+- Tập trung vào tính **Dài hạn & Quy mô**.
+- **Check-list:** Ngành nghề, Số lượng hóa đơn/tháng, Tình trạng sổ sách cũ.
+- **Action:** Lên lịch khảo sát thực tế tại văn phòng khách hàng trước khi ký Hợp đồng trọn gói (Retainer).
+
+---
+
+## 3. Luồng Onboarding & Chuyển đổi (Lead-to-Client)
 **Mục tiêu:** Giúp Sales chốt deal nhanh và đẩy việc cho Ops mà không cần gửi email/chat rườm rà.
 
 ### [Workflow]
