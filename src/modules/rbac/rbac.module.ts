@@ -17,6 +17,8 @@ import {
   IPermissionRepository,
   IUserRoleRepository,
 } from './domain/repositories/rbac.repository';
+import { IRbacManageService } from './domain/ports/rbac-manage.service.port';
+import { RbacManageService } from './application/services/rbac-manage.service';
 
 @Module({
   imports: [
@@ -28,6 +30,7 @@ import {
     RoleService,
     PermissionGuard,
     RbacManagerService,
+    { provide: IRbacManageService, useClass: RbacManageService },
     { provide: IRoleRepository, useClass: DrizzleRoleRepository },
     { provide: IPermissionRepository, useClass: DrizzlePermissionRepository },
     { provide: IUserRoleRepository, useClass: DrizzleUserRoleRepository },
@@ -39,6 +42,7 @@ import {
     IRoleRepository,
     IUserRoleRepository,
     RbacManagerService,
+    IRbacManageService,
   ],
 })
 export class RbacModule { }

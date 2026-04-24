@@ -4,13 +4,10 @@ import { ITransactionManager } from '@core/shared/application/ports/transaction-
 import { IFileParser } from '@core/shared/application/ports/file-parser.port';
 import { PasswordUtil } from '@core/shared/utils/password.util';
 import { IOrgStructureRepository } from '../../domain/repositories/org-structure.repository';
-import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
-import { IEmployeeRepository } from '@modules/employee/domain/repositories/employee.repository';
-import { IRoleRepository, IUserRoleRepository } from '@modules/rbac/domain/repositories/rbac.repository';
-import { User } from '@modules/user/domain/entities/user.entity';
-import { UserRole } from '@modules/rbac/domain/entities/user-role.entity';
 import { IEventBus } from '@core/shared/application/ports/event-bus.port';
 import { CoreEmployeeImportedEvent } from '@modules/org-structure/domain/events/core-employee-imported.event';
+import { IUserAccountService } from '@modules/user/domain/ports/user-account.service.port';
+import { IRbacManageService } from '@modules/rbac/domain/ports/rbac-manage.service.port';
 
 export type CoreEmployeeCsvRow = {
     username: string;
@@ -34,9 +31,8 @@ export class CompanyImportService {
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
         @Inject(IFileParser) private readonly fileParser: IFileParser,
         @Inject(IOrgStructureRepository) private readonly orgRepo: IOrgStructureRepository,
-        @Inject(IUserRepository) private readonly userRepo: IUserRepository,
-        @Inject(IRoleRepository) private readonly roleRepo: IRoleRepository,
-        @Inject(IUserRoleRepository) private readonly userRoleRepo: IUserRoleRepository,
+        @Inject(IUserAccountService) private readonly userAccountService: IUserAccountService,
+        @Inject(IRbacManageService) private readonly rbacManageService: IRbacManageService,
         @Inject(IEventBus) private readonly eventBus: IEventBus,
     ) { }
 
@@ -77,21 +73,20 @@ export class CompanyImportService {
                 // Xử lý Vị trí (Position)
                 const position = await this.getOrCreatePosition(row, orgId, titleId, gradeId);
 
-                // Xử lý Tài khoản (User)
-                let user = await this.userRepo.findByUsername(row.username);
+                // Xử lý Tài khoản (User) qua Port Service
+                let user = await this.userAccountService.findByUsername(row.username);
                 let userId: number;
 
                 if (!user) {
-                    const newUser = new User({
+                    const savedUser = await this.userAccountService.provisionAccount({
                         username: row.username,
                         email: row.email?.trim() || undefined,
                         hashedPassword: defaultPassword,
-                        isActive: true,
+                        fullName: row.fullName,
                     });
-                    const savedUser = await this.userRepo.save(newUser);
                     userId = savedUser.id!;
 
-                    // Tạo/Cập nhật Hồ sơ nhân viên (Employee)
+                    // Bắn event hồ sơ nhân sự (Vẫn giữ nguyên luồng event cho Side-effects)
                     await this.eventBus.publish(
                         new CoreEmployeeImportedEvent(row.employeeCode, {
                             userId: userId,
@@ -103,22 +98,14 @@ export class CompanyImportService {
                         })
                     );
 
-
                     successCount++;
                 } else {
                     userId = user.id!;
                 }
 
-                // Gán quyền (Role)
+                // Gán quyền (Role) qua Port Service
                 if (row.role) {
-                    const role = await this.roleRepo.findByName(row.role);
-                    if (role) {
-                        await this.userRoleRepo.save(new UserRole({
-                            userId,
-                            roleId: role.id!,
-                            assignedBy: adminId
-                        }));
-                    }
+                    await this.rbacManageService.assignRoleToUser(userId, row.role, adminId);
                 }
             }
 

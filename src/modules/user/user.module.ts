@@ -9,6 +9,8 @@ import { UserImportController } from './infrastructure/controllers/user-import.c
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { UserUniquenessChecker } from './domain/services/user-uniqueness.checker';
 import { EmployeeAccountRequestedListener } from './application/listeners/employee-account-requested.listener';
+import { IUserAccountService } from './domain/ports/user-account.service.port';
+import { UserAccountService } from './application/services/user-account.service';
 
 @Module({
   imports: [RbacModule],
@@ -17,12 +19,16 @@ import { EmployeeAccountRequestedListener } from './application/listeners/employ
     UserService,
     UserImportService,
     UserUniquenessChecker,
-    EmployeeAccountRequestedListener, // Đăng ký Listener
+    EmployeeAccountRequestedListener, 
+    {
+      provide: IUserAccountService,
+      useClass: UserAccountService,
+    },
     {
       provide: IUserRepository, // FIX: Dùng Symbol
       useClass: DrizzleUserRepository,
     },
   ],
-  exports: [UserService, IUserRepository, UserUniquenessChecker], // FIX: Export Symbol
+  exports: [UserService, IUserAccountService, IUserRepository, UserUniquenessChecker], // FIX: Export Symbol
 })
 export class UserModule { }

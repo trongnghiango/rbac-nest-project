@@ -1,0 +1,32 @@
+// src/modules/rbac/application/services/rbac-manage.service.ts
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { IRbacManageService } from '../../domain/ports/rbac-manage.service.port';
+import { IRoleRepository, IUserRoleRepository } from '../../domain/repositories/rbac.repository';
+import { UserRole } from '../../domain/entities/user-role.entity';
+
+@Injectable()
+export class RbacManageService implements IRbacManageService {
+    constructor(
+        @Inject(IRoleRepository) private readonly roleRepo: IRoleRepository,
+        @Inject(IUserRoleRepository) private readonly userRoleRepo: IUserRoleRepository,
+    ) { }
+
+    async assignRoleToUser(userId: number, roleName: string, assignedBy: number): Promise<void> {
+        const role = await this.roleRepo.findByName(roleName);
+        if (!role) {
+            throw new NotFoundException(`Role ${roleName} not found`);
+        }
+
+        const userRole = new UserRole({
+            userId,
+            roleId: role.id!,
+            assignedBy,
+        });
+
+        await this.userRoleRepo.save(userRole);
+    }
+
+    async findRoleByName(name: string): Promise<any> {
+        return this.roleRepo.findByName(name);
+    }
+}
