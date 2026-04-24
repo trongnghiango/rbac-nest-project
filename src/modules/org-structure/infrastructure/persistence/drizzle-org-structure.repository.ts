@@ -14,6 +14,7 @@ import {
   positions,
 } from '@database/schema/hrm/org-structure.schema';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { OrgStructureMapper } from './mappers/org-structure.mapper';
 
 @Injectable()
 export class DrizzleOrgStructureRepository
@@ -96,15 +97,15 @@ export class DrizzleOrgStructureRepository
       .from(positions)
       .where(eq(positions.code, code))
       .limit(1);
-    return result[0] ? (result[0] as PositionEntity) : null;
+    return result[0] ? OrgStructureMapper.toDomainPosition(result[0]) : null;
   }
 
-  async createPosition(data: any): Promise<PositionEntity> {
+  async createPosition(data: Partial<PositionEntity>): Promise<PositionEntity> {
     const [result] = await this.getDb()
       .insert(positions)
-      .values(data)
+      .values(data as any)
       .returning();
-    return result as PositionEntity;
+    return OrgStructureMapper.toDomainPosition(result);
   }
 
   async createOrgUnit(data: Partial<OrgUnitEntity>): Promise<OrgUnitEntity> {
@@ -113,7 +114,7 @@ export class DrizzleOrgStructureRepository
       .insert(orgUnits)
       .values(data as any)
       .returning();
-    return result as OrgUnitEntity;
+    return OrgStructureMapper.toDomainOrgUnit(result);
   }
 
   async updateOrgUnit(
@@ -126,7 +127,7 @@ export class DrizzleOrgStructureRepository
       .set({ ...data, updatedAt: new Date() })
       .where(eq(orgUnits.id, id))
       .returning();
-    return result ? (result as OrgUnitEntity) : null;
+    return result ? OrgStructureMapper.toDomainOrgUnit(result) : null;
   }
 
   // 🚀 MAGIC Ở ĐÂY: Update Path hàng loạt cho nhánh con bằng SQL REPLACE
@@ -150,16 +151,17 @@ export class DrizzleOrgStructureRepository
       .from(orgUnits)
       .where(eq(orgUnits.code, code))
       .limit(1);
-    return result[0] ? (result[0] as OrgUnitEntity) : null;
+    return result[0] ? OrgStructureMapper.toDomainOrgUnit(result[0]) : null;
   }
 
   // 🚀 LẤY TOÀN BỘ CÂY CON CỰC NHANH VỚI MỆNH ĐỀ LIKE
   async findDescendantsByPath(path: string): Promise<OrgUnitEntity[]> {
     const db = this.getDb();
-    return await db
+    const results = await db
       .select()
       .from(orgUnits)
       .where(like(orgUnits.path, `${path}%`));
+    return results.map(OrgStructureMapper.toDomainOrgUnit);
   }
 
   async deleteOrgUnit(id: number): Promise<boolean> {
@@ -180,7 +182,7 @@ export class DrizzleOrgStructureRepository
       .from(orgUnits)
       .where(eq(orgUnits.id, id))
       .limit(1);
-    return result[0] ? (result[0] as OrgUnitEntity) : null;
+    return result[0] ? OrgStructureMapper.toDomainOrgUnit(result[0]) : null;
   }
 
   async findPositionById(id: number): Promise<PositionEntity | null> {
@@ -191,11 +193,12 @@ export class DrizzleOrgStructureRepository
       .where(eq(positions.id, id))
       .limit(1);
 
-    return result[0] ? (result[0] as PositionEntity) : null;
+    return result[0] ? OrgStructureMapper.toDomainPosition(result[0]) : null;
   }
 
   async findAllActiveUnits(): Promise<OrgUnitEntity[]> {
     const db = this.getDb();
-    return await db.select().from(orgUnits).where(eq(orgUnits.isActive, true));
+    const results = await db.select().from(orgUnits).where(eq(orgUnits.isActive, true));
+    return results.map(OrgStructureMapper.toDomainOrgUnit);
   }
 }

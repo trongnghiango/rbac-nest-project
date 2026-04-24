@@ -11,6 +11,7 @@ export interface OrgUnitEntity {
     code: string;
     name: string;
     isActive: boolean | null;
+    managerId?: number | null;
 
     createdAt?: Date;
     updatedAt?: Date;
@@ -26,6 +27,8 @@ export interface PositionEntity {
     gradeId: number;
     headcountLimit: number | null;
     isActive: boolean | null;
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 export interface IOrgStructureRepository {
@@ -56,9 +59,9 @@ export interface IOrgStructureRepository {
     upsertJobTitles(names: string[]): Promise<void>;
     findJobTitlesByNames(names: string[]): Promise<{ id: number; name: string }[]>;
 
-    upsertOrgUnits(data: any[]): Promise<void>;
+    upsertOrgUnits(data: Partial<OrgUnitEntity>[]): Promise<void>;
     findOrgUnitsByCodes(codes: string[]): Promise<{ id: number; code: string }[]>;
 
     findPositionByCode(code: string): Promise<PositionEntity | null>;
-    createPosition(data: any): Promise<PositionEntity>;
+    createPosition(data: Partial<PositionEntity>): Promise<PositionEntity>;
 }
