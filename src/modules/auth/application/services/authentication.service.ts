@@ -193,10 +193,10 @@ export class AuthenticationService {
 
   async validateUser(
     payload: JwtPayload,
-  ): Promise<ReturnType<User['toJSON']> | null> {
+  ): Promise<User | null> {
     const user = await this.userRepository.findById(payload.sub);
     if (!user || !user.isActive) return null;
-    return user.toJSON();
+    return user;
   }
 
   async register(data: RegisterDto): Promise<AuthResponse> {
