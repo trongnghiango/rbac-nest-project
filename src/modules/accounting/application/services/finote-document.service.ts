@@ -4,6 +4,7 @@ import { IDocumentGenerator } from '../ports/document-generator.port';
 import { IFileStorage } from '../ports/file-storage.port';
 import { IFinoteRepository } from '../../domain/repositories/finote.repository';
 import { TargetResolverFactory } from '../strategies/target-resolver/target-resolver.factory';
+import { FinoteAttachment } from '../../domain/entities/finote-attachment.entity';
 
 @Injectable()
 export class FinoteDocumentService {
@@ -35,13 +36,15 @@ export class FinoteDocumentService {
         const fileName = `finote_${finote.code}_${Date.now()}.pdf`;
         const fileUrl = await this.fileStorage.uploadBuffer(fileName, pdfBuffer, 'application/pdf');
 
-        await this.finoteRepo.addAttachment({
-            finote_id: finoteId,
-            file_name: fileName,
-            google_drive_id: `SYS-GEN-${Date.now()}`,
-            web_view_link: fileUrl,
-            mime_type: 'application/pdf',
-            file_size: pdfBuffer.length,
+        const attachment = new FinoteAttachment({
+            finoteId: finoteId,
+            fileName: fileName,
+            googleDriveId: `SYS-GEN-${Date.now()}`,
+            webViewLink: fileUrl,
+            mimeType: 'application/pdf',
+            fileSize: pdfBuffer.length,
         });
+
+        await this.finoteRepo.addAttachment(attachment);
     }
 }

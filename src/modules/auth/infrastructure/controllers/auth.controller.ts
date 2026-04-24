@@ -69,8 +69,7 @@ export class AuthController {
   // @UseGuards(JwtAuthGuard, PermissionGuard)
   @Get('profile')
   async getProfile(@CurrentUser() user: User) {
-    // SMELL: Controller không được gọi toJSON() của Entity.
-    return user.toJSON();
+    return UserResponseDto.fromDomain(user);
   }
 
   @ApiBearerAuth()

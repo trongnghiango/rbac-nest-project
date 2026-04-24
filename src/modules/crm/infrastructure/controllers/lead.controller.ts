@@ -2,7 +2,7 @@
 import { Controller, Post, Body, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody, ApiParam } from '@nestjs/swagger';
 import { LeadWorkflowService } from '../../application/services/lead-workflow.service';
-import { CloseLeadDto } from '../../application/dtos/close-lead.dto';
+import { CloseLeadRequestDto } from '../dtos/close-lead.request.dto';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 
@@ -19,12 +19,12 @@ export class LeadController {
         description: 'Nút bấm thần thánh: Chuyển trạng thái Lead thành WON, nâng cấp danh tính khách hàng thành ENTERPRISE, tạo Hợp đồng và gán Team phục vụ trong cùng 1 Transaction.'
     })
     @ApiParam({ name: 'id', description: 'ID của Lead cần chốt', example: 1 })
-    @ApiBody({ type: CloseLeadDto })
+    @ApiBody({ type: CloseLeadRequestDto })
     @ApiResponse({ status: 201, description: 'Chốt hợp đồng thành công.' })
     @ApiResponse({ status: 400, description: 'Lỗi logic: Lead đã WON hoặc không tìm thấy.' })
     async closeLead(
         @Param('id', ParseIntPipe) leadId: number,
-        @Body() dto: CloseLeadDto
+        @Body() dto: CloseLeadRequestDto
     ) {
         // Gọi thẳng vào Use Case Orchestrator mà ta đã định nghĩa
         return this.leadWorkflowService.closeLeadAsWon({

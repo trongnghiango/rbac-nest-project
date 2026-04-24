@@ -2,44 +2,42 @@
 
 File này ghi lại các quyết định quan trọng về kiến trúc và các đợt Refactor mã nguồn để đảm bảo hệ thống tuân thủ "Hiến pháp" backend.
 
+---
+
 ## [2026-04-24] - Refactor Cơ chế Giao tiếp Cross-Module (Smell #6)
 
 ### 🚀 Thay đổi chính
-1.  **Cập nhật BACKEND_CONTEXT.md:** Định nghĩa rõ ràng cơ chế **SYNC (Orchestration)** và **ASYNC (Choreography)**.
+1.  **Cập nhật ARCHITECTURE.md & BACKEND_CONTEXT.md:** Định nghĩa rõ ràng cơ chế **SYNC (Orchestration)** và **ASYNC (Choreography)**.
 2.  **Xây dựng Domain Ports:** Tạo ra các Interface Service (`IUserAccountService`, `IRbacManageService`) tại tầng Domain của Module đích.
 3.  **Refactor `CompanyImportService`:** Chuyển từ việc truy cập Repository trực tiếp sang gọi thông qua các Port Service.
 
----
-
-### 🔍 Chi tiết kỹ thuật & Pattern áp dụng
-
-#### 1. Pattern: Inter-Module Domain Service Port (Sync Orchestration)
-Khi Module A (ví dụ: `OrgStructure`) cần thực hiện một luồng nghiệp vụ phức tạp liên quan đến Module B (ví dụ: `User`), thay vì Module A "thọc tay" vào Database của Module B, nó sẽ gọi qua một "Cổng" (Port) được Module B cung cấp.
-
-*   **So sánh với cách cũ (Direct Repository):**
-    *   **Cách cũ:** `OrgStructure` Inject `UserRepository`. 
-        *   *Hệ quả:* Module Org biết quá nhiều về cấu trúc bảng của User. Nếu DB của User đổi từ SQL sang MongoDB, module Org bị vỡ.
-    *   **Cách mới:** `OrgStructure` Inject `IUserAccountService`.
-        *   *Lợi ích:* Module Org chỉ cần biết "Tôi muốn tạo tài khoản cho nhân viên này". Việc tạo như thế nào, lưu vào đâu là việc của Module User. Đây là tính **Encapsulation (Đóng gói)** tuyệt đối.
-
-#### 2. Phân loại Task: Sync vs Async
-Chúng ta đã giải quyết bài toán "Làm sao biết Task thành công nếu dùng Event?" bằng cách phân loại:
-
-*   **SYNC (Trọng yếu):** Dùng cho việc tạo User trong lúc Import. 
-    *   *Tại sao:* Vì chúng ta cần lấy `userId` ngay lập tức để gán Role ở dòng code tiếp theo. Việc này được thực hiện đồng bộ và chạy chung **Atomic Transaction (ALS)**. Nếu tạo User thất bại, toàn bộ quá trình Import OrgUnit sẽ Rollback tự động.
-*   **ASYNC (Phụ trợ):** Dùng cho việc bắn Event `CoreEmployeeImported`.
-    *   *Tại sao:* Việc khởi tạo hồ sơ nhân sự chi tiết có thể để các Listener xử lý sau, không cần chặn luồng Import chính.
+### 🔍 Chi tiết kỹ thuật & Pattern áp dụng:
+*   **Pattern: Inter-Module Domain Service Port:** Giúp tách biệt hoàn toàn Logic giữa 2 module. Module A chỉ gọi Port (Cổng) của Module B mà không cần biết Module B dùng DB gì (Drizzle, Prisma hay MongoDB).
+*   **Lợi ích:** Tránh lỗi Circular Dependency (Vòng lặp phụ thuộc) và giúp Unit Test dễ dàng hơn.
 
 ---
 
-### 💡 Tại sao cách này tối ưu nhất?
+## 🚀 [2026-04-24] - Final Cleanup: Nâng Cấp Chuẩn Premium
 
-1.  **Bảo vệ toàn vẹn dữ liệu:** Nhờ sử dụng **ALS (Async Local Storage)**, dù gọi xuyên Module qua Port Service, tất cả vẫn nằm trong cùng một Transaction ID. Nếu một khâu lỗi, tất cả sẽ Rollback.
-2.  **Tránh Circular Dependency:** Việc giao tiếp qua Interface giúp NestJS giải quyết các lỗi tham chiếu vòng một cách dễ dàng hơn nhiều so với việc Inject trực tiếp các Class Implementation.
-3.  **Dễ Unit Test:** Bạn có thể dễ dàng Mock `IUserAccountService` khi viết test cho `CompanyImportService` mà không cần quan tâm đến logic phức tạp của module User.
+Đây là đợt dọn dẹp cuối cùng để chuẩn hóa toàn bộ dự án theo luật kiến trúc mới.
+
+### 1. "Quét rác" Swagger khỏi tầng Nghiệp vụ (Clean Application Layer)
+*   **Thay đổi:** Di chuyển Decorator `@ApiProperty` sang tầng `infrastructure`.
+*   **Lý do:** Tầng Nghiệp vụ (Application/Domain) là bộ não, cần "sạch" và không được phụ thuộc vào công cụ bên ngoài (Swagger). Nếu sau này bỏ Swagger, logic nghiệp vụ vẫn giữ nguyên không phải sửa.
+
+### 2. Cấm rò rỉ dữ liệu thô (Standardized Response Mapping)
+*   **Thay đổi:** Thay `.toJSON()` bằng `UserResponseDto.fromDomain(user)`.
+*   **Lý do:** Đây là nguyên tắc **Security by Design**. Cần có "Bộ lọc" (DTO) để chỉ định rõ ràng trường nào được phép gửi ra ngoài (ví dụ: giấu password, các trường nội bộ).
+
+### 3. Chuẩn hóa Data Flow bằng Entity
+*   **Thay đổi:** Dùng [FinoteAttachment Entity] thay cho `any`.
+*   **Lý do:** Ép kiểu chặt chẽ ngay từ tầng Domain. Repository luôn biết chính xác nó đang lưu cái gì, giúp code tự giải thích (Self-documenting) và giảm thiểu bug runtime.
+
+### 4. Quản lý Transaction "Tàng hình" (ALS Transaction)
+*   **Thay đổi:** Chuyển sang dùng **Async Local Storage (ALS)**.
+*   **Lý do:** Loại bỏ việc truyền tham số `tx` thủ công xuyên suốt các hàm. Giúp Interface cực kỳ sạch sẽ và lập trình viên không lo quên truyền transaction context.
 
 ---
 
-### ✅ Trạng thái Smell #6: ĐÃ XỬ LÝ (RESOLVED)
-*   Tầng Application không còn rò rỉ việc truy cập Repository của module khác.
-*   Cơ chế giao tiếp đồng bộ đã có "hợp đồng" (Interface) rõ ràng.
+### 💡 Tổng kết triết lý Refactor:
+*"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*

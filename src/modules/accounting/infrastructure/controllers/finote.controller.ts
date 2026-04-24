@@ -3,6 +3,7 @@ import { Controller, Post, Body, UseGuards, BadRequestException } from '@nestjs/
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { FinoteService } from '../../application/services/finote.service';
 import { CreateFinoteDto } from '../../application/dtos/create-finote.dto';
+import { CreateFinoteRequestDto } from '../dtos/create-finote.request.dto';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
@@ -23,10 +24,10 @@ export class FinoteController {
         summary: 'Tạo phiếu Thu/Chi (Finote) mới',
         description: 'API tạo phiếu thu (INCOME) hoặc chi (EXPENSE). Sau khi tạo thành công, hệ thống sẽ trigger Event để tự động sinh file PDF.'
     })
-    @ApiBody({ type: CreateFinoteDto })
+    @ApiBody({ type: CreateFinoteRequestDto })
     @ApiResponse({ status: 201, description: 'Tạo phiếu thành công', type: FinoteResponseDto })
     async createFinote(
-        @Body() dto: CreateFinoteDto,
+        @Body() dto: CreateFinoteRequestDto,
         @CurrentUser() user: User
     ): Promise<FinoteResponseDto> {
         if (!user.id) {
