@@ -62,6 +62,6 @@ uploads
 .env.production
 telegram-data/
 
-database/
+/database/
 
 docs/STAX/tools

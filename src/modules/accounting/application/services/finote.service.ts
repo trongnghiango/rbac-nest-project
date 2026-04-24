@@ -28,7 +28,7 @@ export class FinoteService {
                 code: finoteCode,
                 type: dto.type,
                 title: dto.title,
-                amount: new Money(dto.amount), // <-- Sử dụng VO Money
+                totalAmount: new Money(dto.amount), // <-- Sử dụng VO Money
                 // currency: dto,
                 currency: 'VND',
                 category: dto.category,
@@ -47,7 +47,7 @@ export class FinoteService {
                     code: savedFinote.code,
                     type: savedFinote.type,
                     title: savedFinote.title,
-                    amount: savedFinote.amount.getAmount().toString(),
+                    amount: savedFinote.totalAmount.getAmount().toString(),
                     creatorId: savedFinote.requestedById,
                     orgId: savedFinote.sourceOrgId,
                 })

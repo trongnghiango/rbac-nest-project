@@ -48,11 +48,11 @@ export class FinoteResponseDto {
 
         // ĐÂY LÀ SỰ LỢI HẠI CỦA DTO: 
         // Bóc Value Object 'Money' thành primitive type cho API
-        dto.amount = entity.amount.getAmount();
-        dto.currency = entity.amount.getCurrency();
+        dto.amount = entity.totalAmount.getAmount();
+        dto.currency = entity.totalAmount.getCurrency();
         dto.paidAmount = entity.paidAmount.getAmount();
 
-        dto.category = entity.category;
+        dto.category = entity.category || '';
         dto.description = entity.description;
         dto.status = entity.status;
         dto.deadlineAt = entity.deadlineAt;

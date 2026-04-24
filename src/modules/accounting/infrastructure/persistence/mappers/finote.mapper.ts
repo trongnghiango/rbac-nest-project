@@ -14,13 +14,15 @@ export class FinoteMapper {
             requestedById: raw.requested_by_id,
             reviewerId: raw.reviewer_id,
             title: raw.title,
-            // Vấn đề 4: Chuyển đổi sang Value Object Money
-            amount: new Money(Math.round(Number(raw.amount))),
+            // Sử dụng totalAmount thay cho amount cũ
+            totalAmount: new Money(Math.round(Number(raw.total_amount || 0))),
+            totalVat: new Money(Math.round(Number(raw.total_vat || 0))),
             currency: raw.currency || 'VND',
             category: raw.category,
             description: raw.description,
             status: raw.status,
             deadlineAt: new Date(raw.deadline_at),
+            // Hệ thống mới gạch nợ qua payments, nhưng ta vẫn giữ paidAmount để tương thích
             paidAmount: new Money(Math.round(Number(raw.paid_amount || 0))),
             createdAt: raw.created_at,
             updatedAt: raw.updated_at,
@@ -28,7 +30,6 @@ export class FinoteMapper {
     }
 
     static toPersistence(domain: Finote): any {
-        // Khởi tạo object base không có trường id
         const data: any = {
             code: domain.code,
             type: domain.type,
@@ -36,17 +37,16 @@ export class FinoteMapper {
             requested_by_id: domain.requestedById,
             reviewer_id: domain.reviewerId,
             title: domain.title,
-            amount: domain.amount.getAmount().toString(),
-            currency: domain.amount.getCurrency(),
+            total_amount: domain.totalAmount.getAmount().toString(),
+            total_vat: domain.totalVat.getAmount().toString(),
+            currency: domain.totalAmount.getCurrency(),
             category: domain.category,
             description: domain.description,
             status: domain.status,
             deadline_at: domain.deadlineAt,
-            paid_amount: domain.paidAmount.getAmount().toString(),
             updated_at: new Date(),
         };
 
-        // Chỉ gán id nếu tồn tại
         if (domain.id) {
             data.id = domain.id;
         }

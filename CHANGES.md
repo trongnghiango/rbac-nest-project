@@ -86,5 +86,35 @@ Triển khai Unit Test cho `CompanyImportService` - Orchestrator phức tạp nh
 
 ---
 
+## 🚀 [2026-04-24] - Seed Data Hardening: Công cụ "Xưởng hạt giống"
+
+Nâng cấp bộ công cụ Seeding để đảm bảo tính sẵn sàng cao và độc lập dữ liệu.
+
+### 1. Refactor `seed-data-transformer.ts`
+*   **Thay đổi:** Nhúng trực tiếp dữ liệu thô (`RAW_DATA`) vào mã nguồn của tool.
+*   **Lý do:** Loại bỏ sự phụ thuộc vào file Excel (`.xlsx`) bên ngoài vốn dễ bị mất hoặc lỗi định dạng. Giúp bất kỳ ai trong team cũng có thể tạo lại bộ Seed chuẩn chỉ bằng 1 câu lệnh.
+*   **Luận cứ:** Tính tự đóng gói (Self-contained) là yếu tố tiên quyết cho môi trường phát triển (Local Development) ổn định.
+
+---
+
+## 🚀 [2026-04-24] - Accounting Overhaul: Kiến trúc Kế toán 4 lớp
+
+Đây là bước ngoặt lớn về mặt nghiệp vụ để hệ thống STAX có thể xử lý các luồng tài chính phức tạp, chống thất thoát.
+
+### 1. Phân tách Hóa đơn & Dòng tiền (Accrual vs Cash Flow)
+*   **Thay đổi:** Thêm bảng `cash_transactions` (Sổ Quỹ) và `finote_items` (Chi tiết hóa đơn).
+*   **Lý do:** Giải quyết bài toán một hóa đơn có nhiều loại phí (phí kế toán + phí phát sinh) và một lần khách trả tiền có thể gạch nợ cho nhiều hóa đơn khác nhau.
+*   **Chi tiết kiến trúc:**
+    -   **Lớp 1 (Header):** `finotes` quản lý tổng nợ.
+    -   **Lớp 2 (Items):** `finote_items` quản lý chi tiết các dịch vụ.
+    -   **Lớp 3 (Cash Flow):** `cash_transactions` quản lý tiền thực tế vào/ra.
+    -   **Lớp 4 (Automation):** `billing_templates` quản lý thu phí định kỳ hằng tháng.
+
+### 2. Sửa lỗi "Tàng hình" mã nguồn (.gitignore Fix)
+*   **Thay đổi:** Sửa `database/` thành `/database/` trong file `.gitignore`.
+*   **Lý do:** Phát hiện quy tắc cũ đang làm Git bỏ qua toàn bộ thư mục `src/database/` (chứa toàn bộ Schema). Việc này cực kỳ nguy hiểm vì làm mất dấu vết các thay đổi kiến trúc quan trọng trên Git.
+
+---
+
 ### 💡 Tổng kết triết lý Refactor:
 *"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*
