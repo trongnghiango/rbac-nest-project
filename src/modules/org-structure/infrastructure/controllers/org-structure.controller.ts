@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
 import { OrgStructureService } from '../../application/services/org-structure.service';
-import { CreateOrgUnitDto, UpdateOrgUnitDto } from '../../application/dtos/org-unit.dto';
+import { CreateOrgUnitRequestDto, UpdateOrgUnitRequestDto } from '../dtos/org-unit.request.dto';
 import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
 import { ORG_PERMISSIONS } from '@modules/org-structure/domain/constants/org.permissions';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
@@ -64,12 +64,12 @@ export class OrgStructureController {
         summary: 'Tạo mới một Đơn vị/Phòng ban',
         description: 'Thêm một phòng ban hoặc chi nhánh mới vào sơ đồ tổ chức. Truyền `parentId` nếu nó trực thuộc một phòng ban khác.'
     })
-    @ApiBody({ type: CreateOrgUnitDto }) // Liên kết với DTO
+    @ApiBody({ type: CreateOrgUnitRequestDto }) // Liên kết với DTO
     @ApiResponse({ status: 201, description: 'Phòng ban được tạo thành công.' })
     @ApiResponse({ status: 400, description: 'Dữ liệu đầu vào không hợp lệ (Validation Error).' })
     @ApiResponse({ status: 404, description: 'Phòng ban cha (parentId) không tồn tại.' })
     async createUnit(
-        @Body() dto: CreateOrgUnitDto,
+        @Body() dto: CreateOrgUnitRequestDto,
         @CurrentUser() user: User,
     ) {
         // Tự động lấy ID Công ty của người tạo truyền xuống Service
@@ -89,10 +89,10 @@ export class OrgStructureController {
     @Permissions(ORG_PERMISSIONS.UPDATE) // @Permissions('org:update')
     @ApiOperation({ summary: 'Cập nhật thông tin Phòng ban' })
     @ApiParam({ name: 'id', description: 'ID của phòng ban cần cập nhật', example: 2 })
-    @ApiBody({ type: UpdateOrgUnitDto })
+    @ApiBody({ type: UpdateOrgUnitRequestDto })
     @ApiResponse({ status: 200, description: 'Cập nhật thành công.' })
     @ApiResponse({ status: 404, description: 'Không tìm thấy phòng ban với ID cung cấp.' })
-    async updateUnit(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateOrgUnitDto) {
+    async updateUnit(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateOrgUnitRequestDto) {
         return this.orgService.updateUnit(id, dto);
     }
 

@@ -2,8 +2,8 @@
 import { Controller, Post, Get, Body, UseGuards, Param, ParseIntPipe, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { EmployeeService } from '../../application/services/employee.service';
-import { CreateEmployeeDto } from '../../application/dtos/create-employee.dto';
-import { ProvisionAccountDto } from '@modules/employee/application/dtos/provision-account.dto';
+import { CreateEmployeeRequestDto } from '../dtos/create-employee.request.dto';
+import { ProvisionAccountRequestDto } from '../dtos/provision-account.request.dto';
 import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
 import { User } from '@modules/user/domain/entities/user.entity';
 import { Permissions } from '@modules/rbac/infrastructure/decorators/permission.decorator';
@@ -23,7 +23,7 @@ export class EmployeeController {
     @ApiResponse({ status: 201, description: 'Tiếp nhận thành công', type: EmployeeResponseDto })
     @ApiResponse({ status: 400, description: 'Vị trí bổ nhiệm không hợp lệ' })
     async onboardEmployee(
-        @Body() dto: CreateEmployeeDto,
+        @Body() dto: CreateEmployeeRequestDto,
         @CurrentUser() user: User
     ): Promise<EmployeeResponseDto> {
         const orgId = user.profileContext?.employee?.organization_id || 1;
@@ -42,7 +42,7 @@ export class EmployeeController {
     @ApiResponse({ status: 400, description: 'Trùng username hoặc nhân viên đã có tài khoản.' })
     async provisionAccount(
         @Param('id', ParseIntPipe) id: number,
-        @Body() dto: ProvisionAccountDto
+        @Body() dto: ProvisionAccountRequestDto
     ) {
         return this.employeeService.provisionUserAccount(id, dto);
     }
