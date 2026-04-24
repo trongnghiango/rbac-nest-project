@@ -108,24 +108,5 @@ export class Organization {
         this._updatedAt = new Date();
     }
 
-    /**
-     * Chuyển đổi về Plain Object để Mapper hoặc Response sử dụng
-     */
-    toJSON() {
-        return {
-            id: this._id,
-            companyName: this._companyName,
-            taxCode: this._taxCode,
-            type: this._type,
-            status: this._status,
-            isInternal: this._isInternal,
-            industry: this._industry,
-            website: this._website,
-            address: this._address,
-            note: this._note,
-            createdAt: this._createdAt,
-            updatedAt: this._updatedAt,
-        };
-    }
 }
 

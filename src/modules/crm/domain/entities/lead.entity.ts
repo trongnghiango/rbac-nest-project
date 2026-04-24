@@ -77,6 +77,12 @@ export class Lead {
     get expectedCloseDate() { return this._expectedCloseDate; }
     get closedAt() { return this._closedAt; } // Đã sửa từ closeAt -> closedAt cho đúng chuẩn
     get lostReason() { return this._lostReason; }
+    get createdById() { return this._createdById }
+    get serviceNeed() { return this._serviceNeed }
+    get source() { return this._source }
+    get createdAt() { return this._createdAt }
+    get updatedAt() { return this._updatedAt }
+
 
     // --- HELPER METHODS (Kiểm tra trạng thái - Giúp Service cực sạch) ---
     isWon(): boolean { return this._stage === LeadStage.WON; }
@@ -164,25 +170,4 @@ export class Lead {
         this._updatedAt = new Date();
     }
 
-    // Chuyển đổi sang Plain Object để lưu DB hoặc trả về API
-    toJSON() {
-        return {
-            id: this._id,
-            organizationId: this._organizationId,
-            contactId: this._contactId,
-            assignedToId: this._assignedToId,
-            createdById: this._createdById,
-            title: this._title,
-            serviceNeed: this._serviceNeed,
-            stage: this._stage,
-            source: this._source,
-            estimatedValue: this._estimatedValue,
-            note: this._note,
-            expectedCloseDate: this._expectedCloseDate,
-            closedAt: this._closedAt,
-            lostReason: this._lostReason,
-            createdAt: this._createdAt,
-            updatedAt: this._updatedAt,
-        };
-    }
 }

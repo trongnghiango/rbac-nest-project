@@ -1,8 +1,10 @@
+// src/modules/employee/domain/repositories/employee.repository.ts
+import { Employee } from '../entities/employee.entity';
+
 export const IEmployeeRepository = Symbol('IEmployeeRepository');
 
 export interface IEmployeeRepository {
-    save(employeeData: any): Promise<any>;
-    findById(id: number): Promise<any>;
-    // findAll(): Promise<any[]>;
-    findAll(options?: { orgPath?: string }): Promise<any[]>;
+    save(employee: Employee): Promise<Employee>;
+    findById(id: number): Promise<Employee | null>;
+    findAll(options?: { orgPath?: string }): Promise<Employee[]>;
 }

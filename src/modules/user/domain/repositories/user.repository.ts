@@ -17,7 +17,6 @@ export interface IUserRepository {
   findAll(): Promise<User[]>;
 
   save(user: User): Promise<User>;
-  update(id: number, data: Partial<User>): Promise<User>;
   delete(id: number): Promise<void>;
   exists(id: number): Promise<boolean>;
   count(): Promise<number>;

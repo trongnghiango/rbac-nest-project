@@ -5,6 +5,6 @@ export const IOrganizationRepository = Symbol('IOrganizationRepository');
 
 export interface IOrganizationRepository {
     findById(id: number): Promise<Organization | null>;
-    save(org: Organization): Promise<Organization>;
-    update(id: number, data: Partial<Organization>): Promise<void>;
+    save(org: Organization): Promise<Organization>; //create and update
+    // update(id: number, data: Partial<Organization>): Promise<void>;
 }

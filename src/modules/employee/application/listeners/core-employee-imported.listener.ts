@@ -1,11 +1,10 @@
 // src/modules/employee/application/listeners/core-employee-imported.listener.ts
-
 import { ILogger, LOGGER_TOKEN } from "@core/shared/application/ports/logger.port";
 import { EventHandler } from "@core/shared/infrastructure/event-bus/decorators/event-handler.decorator";
 import { IEmployeeRepository } from "@modules/employee/domain/repositories/employee.repository";
 import { CoreEmployeeImportedEvent } from "@modules/org-structure/domain/events/core-employee-imported.event";
 import { Inject, Injectable } from "@nestjs/common";
-
+import { Employee } from "../../domain/entities/employee.entity";
 
 @Injectable()
 export class CoreEmployeeImportedListener {
@@ -18,8 +17,9 @@ export class CoreEmployeeImportedListener {
     async handle(event: CoreEmployeeImportedEvent) {
         const { payload } = event;
 
-        await this.employeeRepo.save({
-            organization_id: payload.organizationId,
+        // Khởi tạo Entity
+        const employee = new Employee({
+            organizationId: payload.organizationId,
             userId: payload.userId,
             employeeCode: payload.employeeCode,
             fullName: payload.fullName,
@@ -27,6 +27,8 @@ export class CoreEmployeeImportedListener {
             positionId: payload.positionId,
         });
 
-        this.logger.info(`Đã khởi tạo hồ sơ nhân sự cho: ${payload.fullName}`);
+        await this.employeeRepo.save(employee);
+        this.logger.info(`✅ Đã khởi tạo hồ sơ nhân sự cho: ${payload.fullName}`);
     }
 }
+

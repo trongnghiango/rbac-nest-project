@@ -28,15 +28,15 @@ export class FinoteMapper {
     }
 
     static toPersistence(domain: Finote): any {
-        return {
-            id: domain.id,
+        // Khởi tạo object base không có trường id
+        const data: any = {
             code: domain.code,
             type: domain.type,
             source_org_id: domain.sourceOrgId,
             requested_by_id: domain.requestedById,
             reviewer_id: domain.reviewerId,
             title: domain.title,
-            amount: domain.amount.getAmount().toString(), // Lưu dạng string để khớp numeric(15,2)
+            amount: domain.amount.getAmount().toString(),
             currency: domain.amount.getCurrency(),
             category: domain.category,
             description: domain.description,
@@ -45,5 +45,12 @@ export class FinoteMapper {
             paid_amount: domain.paidAmount.getAmount().toString(),
             updated_at: new Date(),
         };
+
+        // Chỉ gán id nếu tồn tại
+        if (domain.id) {
+            data.id = domain.id;
+        }
+
+        return data;
     }
 }

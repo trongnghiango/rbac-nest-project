@@ -12,7 +12,6 @@ import { Notification } from '../../domain/entities/notification.entity';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { notifications } from '@database/schema';
 import { NotificationMapper } from './mappers/notification.mapper';
-import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
 
 // 2. Định nghĩa kiểu trả về từ DB để tránh 'any'
 type NotificationRecord = InferSelectModel<typeof notifications>;
@@ -30,7 +29,6 @@ export class DrizzleNotificationRepository
 
   async save(
     notification: Notification,
-    tx?: Transaction,
   ): Promise<Notification> {
     const db = this.getDb();
     const data = NotificationMapper.toPersistence(notification);

@@ -7,20 +7,21 @@ import { DRIZZLE } from '@database/drizzle.provider';
 import * as schema from '@database/schema';
 import { UserMapper } from './mappers/user.mapper';
 import { Transaction } from '@core/shared/application/ports/transaction-manager.port';
+import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 
 @Injectable()
-export class DrizzleUserRepository implements IUserRepository {
-  constructor(
-    @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
-  ) { }
+export class DrizzleUserRepository extends DrizzleBaseRepository implements IUserRepository {
 
-  private getDb(tx?: Transaction) {
-    return tx ? (tx as unknown as NodePgDatabase<typeof schema>) : this.db;
+  constructor(
+    @Inject(DRIZZLE) db: NodePgDatabase<typeof schema>,
+  ) {
+    // Gọi super(db) để truyền kết nối DB lên class cha (DrizzleBaseRepository)
+    super(db);
   }
 
   // 🚀 1. Lấy đầy đủ nhất (Dùng cho Profile/Auth)
-  async findById(id: number, tx?: Transaction): Promise<User | null> {
-    const db = this.getDb(tx);
+  async findById(id: number): Promise<User | null> {
+    const db = this.getDb();
     const result = await db.query.users.findFirst({
       where: eq(schema.users.id, id),
       with: {
@@ -29,7 +30,7 @@ export class DrizzleUserRepository implements IUserRepository {
         employeeProfile: {
           with: {
             location: true,
-            position: { with: { orgUnit: true, jobTitle: true } }
+            position: { with: { orgUnit: true, jobTitle: true } },
           },
         },
         organizationProfile: true,
@@ -39,8 +40,8 @@ export class DrizzleUserRepository implements IUserRepository {
   }
 
   // ⚡ 2. Tìm nhanh (Dùng cho Login)
-  async findByUsername(username: string, tx?: Transaction): Promise<User | null> {
-    const db = this.getDb(tx);
+  async findByUsername(username: string): Promise<User | null> {
+    const db = this.getDb();
     const result = await db.query.users.findFirst({
       where: eq(schema.users.username, username),
       with: {
@@ -51,8 +52,8 @@ export class DrizzleUserRepository implements IUserRepository {
     return UserMapper.toDomain(result);
   }
 
-  async findByEmail(email: string, tx?: Transaction): Promise<User | null> {
-    const db = this.getDb(tx);
+  async findByEmail(email: string): Promise<User | null> {
+    const db = this.getDb();
     const result = await db.query.users.findFirst({
       where: eq(schema.users.email, email),
       with: {
@@ -87,59 +88,65 @@ export class DrizzleUserRepository implements IUserRepository {
       .filter((u): u is User => u !== null);
   }
 
-  async save(user: User, tx?: Transaction): Promise<User> {
-    const db = this.getDb(tx);
+  async save(user: User): Promise<User> {
+    const db = this.getDb();
     const data = UserMapper.toPersistence(user);
 
     let result;
     if (data.id) {
-      const res = await db.update(schema.users)
+      // Update
+      const res = await db
+        .update(schema.users)
         .set(data)
         .where(eq(schema.users.id, data.id))
         .returning();
       result = res[0];
     } else {
-      const res = await db.insert(schema.users)
-        .values(data as typeof schema.users.$inferInsert)
-        .returning();
+      // Insert: Truyền thẳng data vào .values() không cần bóc tách
+      const res = await db.insert(schema.users).values(data).returning();
       result = res[0];
     }
-
-    // Sau khi save user core, ta return domain (chưa join metadata nhưng giữ data hiện có)
     return UserMapper.toDomain({ ...result, userRoles: [] })!;
   }
 
   // ✅ Các phương thức khác giữ nguyên logic cũ nhưng cập nhật query nếu cần...
 
-  async delete(id: number, tx?: Transaction): Promise<void> {
-    const db = this.getDb(tx);
-    await db.update(schema.users)
+  async delete(id: number): Promise<void> {
+    const db = this.getDb();
+    await db
+      .update(schema.users)
       .set({ isActive: false, deletedAt: new Date() })
       .where(eq(schema.users.id, id));
   }
 
-  async findExistingUsernamesOrEmails(identifiers: string[], tx?: Transaction) {
+  async findExistingUsernamesOrEmails(identifiers: string[]) {
     if (!identifiers || identifiers.length === 0) return [];
-    const db = this.getDb(tx);
-    return await db.select({ username: schema.users.username, email: schema.users.email })
+    const db = this.getDb();
+    return await db
+      .select({ username: schema.users.username, email: schema.users.email })
       .from(schema.users)
-      .where(or(
-        inArray(schema.users.username, identifiers),
-        inArray(schema.users.email, identifiers)
-      ));
+      .where(
+        or(
+          inArray(schema.users.username, identifiers),
+          inArray(schema.users.email, identifiers),
+        ),
+      );
   }
 
-  async saveMany(users: User[], tx?: Transaction): Promise<User[]> {
+  async saveMany(users: User[]): Promise<User[]> {
     if (!users || users.length === 0) return [];
-    const db = this.getDb(tx);
-    const dataToInsert = users.map(user => {
-      const data = UserMapper.toPersistence(user);
-      delete (data as any).id;
-      return data;
-    });
 
-    const results = await db.insert(schema.users).values(dataToInsert).returning();
-    return results.map(r => UserMapper.toDomain({ ...r, userRoles: [] })!);
+    const db = this.getDb();
+
+    // Ánh xạ thẳng qua Mapper, không cần dùng delete nữa
+    const dataToInsert = users.map((user) => UserMapper.toPersistence(user));
+
+    const results = await db
+      .insert(schema.users)
+      .values(dataToInsert)
+      .returning();
+
+    return results.map((r) => UserMapper.toDomain({ ...r, userRoles: [] })!);
   }
 
   async findAllActive(): Promise<User[]> {
@@ -150,47 +157,41 @@ export class DrizzleUserRepository implements IUserRepository {
         userRoles: { with: { role: true } },
       },
     });
-    return results.map(u => UserMapper.toDomain(u)).filter((u): u is User => u !== null);
+    return results
+      .map((u) => UserMapper.toDomain(u))
+      .filter((u): u is User => u !== null);
   }
 
   // ✅ Thêm hàm này
-  async updateTelegramId(userId: string | number, telegramId: string): Promise<void> {
-    await this.db.update(schema.users)
+  async updateTelegramId(
+    userId: string | number,
+    telegramId: string,
+  ): Promise<void> {
+    await this.db
+      .update(schema.users)
       .set({ telegramId })
       .where(eq(schema.users.id, Number(userId)));
   }
 
   // ✅ Thêm hàm này
   async removeTelegramId(telegramId: string): Promise<void> {
-    await this.db.update(schema.users)
+    await this.db
+      .update(schema.users)
       .set({ telegramId: null })
       .where(eq(schema.users.telegramId, telegramId));
   }
 
   // ✅ Thêm hàm này
   async count(): Promise<number> {
-    const result = await this.db.execute(sql`SELECT COUNT(*) as count FROM users`);
+    const result = await this.db.execute(
+      sql`SELECT COUNT(*) as count FROM users`,
+    );
     return Number((result.rows[0] as any).count);
   }
 
-  // ✅ Thêm hàm update (Dùng cho logic UserService)
-  async update(id: number, data: Partial<User>): Promise<User> {
-    const updatePayload: any = {};
-    if (data.username) updatePayload.username = data.username;
-    if (data.isActive !== undefined) updatePayload.isActive = data.isActive;
-    // ... map các trường khác nếu cần
 
-    const result = await this.db.update(schema.users)
-      .set({ ...updatePayload, updatedAt: new Date() })
-      .where(eq(schema.users.id, id))
-      .returning();
-
-    // Re-fetch để có đầy đủ relations sau khi update
-    return this.findById(id) as Promise<User>;
-  }
-
-  async exists(id: number, tx?: Transaction): Promise<boolean> {
-    const db = this.getDb(tx);
+  async exists(id: number): Promise<boolean> {
+    const db = this.getDb();
     const result = await db
       .select({ id: schema.users.id })
       .from(schema.users)

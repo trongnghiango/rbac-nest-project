@@ -32,24 +32,23 @@ export class LeadMapper {
      * Chuyển từ Domain Entity sang Database Row (snake_case)
      */
     static toPersistence(domain: Lead): any {
-        const json = domain.toJSON();
         return {
-            id: json.id,
-            organization_id: json.organizationId,
-            contact_id: json.contactId,
-            assigned_to_id: json.assignedToId,
-            created_by_id: json.createdById,
-            title: json.title,
-            service_need: json.serviceNeed,
-            stage: json.stage,
-            source: json.source,
-            estimated_value: json.estimatedValue,
-            note: json.note,
-            expected_close_date: json.expectedCloseDate,
-            closed_at: json.closedAt,
-            lost_reason: json.lostReason,
-            created_at: json.createdAt,
-            updated_at: json.updatedAt,
+            id: domain.id,
+            organization_id: domain.organizationId,
+            contact_id: domain.contactId,
+            assigned_to_id: domain.assignedToId,
+            created_by_id: domain.createdById,
+            title: domain.title,
+            service_need: domain.serviceNeed,
+            stage: domain.stage,
+            source: domain.source,
+            estimated_value: domain.estimatedValue,
+            note: domain.note,
+            expected_close_date: domain.expectedCloseDate,
+            closed_at: domain.closedAt,
+            lost_reason: domain.lostReason,
+            created_at: domain.createdAt,
+            updated_at: domain.updatedAt,
         };
     }
 }

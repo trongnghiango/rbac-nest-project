@@ -80,8 +80,8 @@ export class UserMapper {
   }
 
   static toPersistence(domain: User): UserInsert {
-    return {
-      id: domain.id,
+    // Khởi tạo object data không có trường id
+    const data: UserInsert = {
       username: domain.username,
       email: domain.email || null,
       hashedPassword: domain.hashedPassword || null,
@@ -90,5 +90,12 @@ export class UserMapper {
       createdAt: domain.createdAt || new Date(),
       updatedAt: domain.updatedAt || new Date(),
     };
+
+    // Chỉ gán ID vào object nếu domain.id thực sự tồn tại
+    if (domain.id) {
+      data.id = domain.id;
+    }
+
+    return data;
   }
 }

@@ -28,7 +28,7 @@ import { UserUniquenessChecker } from '@modules/user/domain/services/user-unique
 export type AuthResponse = {
   accessToken: string;
   refreshToken: string;
-  user: ReturnType<User['toJSON']>;
+  user: User;
 };
 
 @Injectable()
@@ -115,7 +115,7 @@ export class AuthenticationService {
     return {
       accessToken,
       refreshToken,
-      user: user.toJSON()
+      user
     };
   }
 
@@ -282,7 +282,7 @@ export class AuthenticationService {
     return {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
-      user: result.savedUser.toJSON()
+      user: result.savedUser
     };
   }
 

@@ -61,18 +61,4 @@ export class Contract {
 
     activate() { this.status = ContractStatus.ACTIVE; }
 
-    toJSON() {
-        return {
-            id: this.id,
-            organizationId: this.organizationId,
-            leadId: this.leadId,
-            contractNumber: this.contractNumber,
-            title: this.title,
-            contractType: this.contractType,
-            status: this.status,
-            value: this.value,
-            currency: this.currency,
-            signedAt: this.signedAt,
-        };
-    }
 }

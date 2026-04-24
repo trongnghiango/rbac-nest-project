@@ -1,6 +1,4 @@
 // src/modules/accounting/application/strategies/target-resolver/target-resolver.interface.ts
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
 
 export interface ITargetResolverStrategy {
     /**

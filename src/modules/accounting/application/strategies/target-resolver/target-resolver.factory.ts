@@ -3,8 +3,6 @@ import { Injectable } from '@nestjs/common';
 import { ITargetResolverStrategy } from './target-resolver.interface';
 import { IncomeTargetStrategy } from './income-target.strategy';
 import { ExpenseTargetStrategy } from './expense-target.strategy';
-import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import * as schema from '@database/schema';
 
 @Injectable()
 export class TargetResolverFactory {

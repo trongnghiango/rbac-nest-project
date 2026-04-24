@@ -1,8 +1,10 @@
 // src/modules/accounting/domain/repositories/finote.repository.ts
+import { Finote } from '../entities/finote.entity';
+
 export const IFinoteRepository = Symbol('IFinoteRepository');
 
 export interface IFinoteRepository {
-    save(data: any): Promise<any>;
-    findById(id: number): Promise<any>;
-    addAttachment(data: any): Promise<void>;
+  findById(id: number): Promise<Finote | null>;
+  save(finote: Finote): Promise<Finote>;
+  addAttachment(attachment: any): Promise<void>;
 }

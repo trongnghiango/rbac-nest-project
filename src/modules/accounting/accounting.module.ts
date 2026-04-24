@@ -20,12 +20,14 @@ import { FinoteController } from './infrastructure/controllers/finote.controller
 import { RbacModule } from '@modules/rbac/rbac.module';
 import { CrmModule } from '@modules/crm/crm.module';
 import { EmployeeModule } from '@modules/employee/employee.module';
+import { FinoteDocumentService } from './application/services/finote-document.service';
 
 @Module({
     imports: [RbacModule, CrmModule, EmployeeModule],
     controllers: [FinoteController],
     providers: [
         FinoteService,
+        FinoteDocumentService,
         { provide: IFinoteRepository, useClass: DrizzleFinoteRepository },
         SequenceGeneratorService,
         { provide: ISequenceRepository, useClass: DrizzleSequenceRepository },

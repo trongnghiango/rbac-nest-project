@@ -14,6 +14,7 @@ import { User } from '../../domain/entities/user.entity';
 import { UpdateProfileDto } from '../dtos/update-profile.dto';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PermissionService } from '@modules/rbac/application/services/permission.service';
+import { UserResponseDto } from '../dtos/user-response.dto';
 
 @ApiBearerAuth()
 @Controller('users')
@@ -24,11 +25,19 @@ export class UserController {
     private permissionService: PermissionService
   ) { }
 
+
   @Get('profile')
-  async getProfile(@CurrentUser() user: User) {
-    // FIX: User từ Token chắc chắn phải có ID
-    if (!user.id) throw new BadRequestException('Invalid User Context');
-    return this.userService.getUserById(user.id);
+  async getProfile(@CurrentUser() currentUser: User) {
+    if (!currentUser.id) throw new BadRequestException('Invalid User Context');
+
+    const userEntity = await this.userService.getUserById(currentUser.id);
+    return UserResponseDto.fromDomain(userEntity); // Map tại đây
+  }
+
+  @Get(':id')
+  async getUserById(@Param('id') id: number) {
+    const userEntity = await this.userService.getUserById(id);
+    return UserResponseDto.fromDomain(userEntity); // Map tại đây
   }
 
   @Put('profile')
@@ -41,10 +50,6 @@ export class UserController {
     return this.userService.updateUserProfile(user.id, profileData);
   }
 
-  @Get(':id')
-  async getUserById(@Param('id') id: number) {
-    return this.userService.getUserById(id);
-  }
 
   @Get('me/permissions')
   @ApiOperation({ summary: 'Lấy danh sách quyền của người dùng hiện tại' })

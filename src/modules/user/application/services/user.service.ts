@@ -25,7 +25,7 @@ export class UserService {
 
   async createUser(
     data: CreateUserParams,
-  ): Promise<ReturnType<User['toJSON']>> {
+  ): Promise<User> {
     const existing = await this.userRepository.findByUsername(data.username);
     if (existing) throw new BadRequestException('User already exists');
 
@@ -50,7 +50,7 @@ export class UserService {
     });
 
     const user = await this.userRepository.save(newUser);
-    return user.toJSON();
+    return user;
   }
 
   async validateCredentials(
@@ -63,22 +63,22 @@ export class UserService {
     return isValid ? user : null;
   }
 
-  async getUserById(id: number): Promise<ReturnType<User['toJSON']>> {
+  async getUserById(id: number): Promise<User> {
     const user = await this.userRepository.findById(id);
     if (!user) throw new NotFoundException('User not found');
-    return user.toJSON();
+    return user;
   }
 
   async updateUserProfile(
     userId: number,
     profileData: UserProfile,
-  ): Promise<ReturnType<User['toJSON']>> {
+  ): Promise<User> {
     const user = await this.userRepository.findById(userId);
     if (!user) throw new NotFoundException('User not found');
 
     user.updatePersonalInfo(profileData);
     const updated = await this.userRepository.save(user);
-    return updated.toJSON();
+    return updated;
   }
 
   async deactivateUser(userId: number): Promise<void> {

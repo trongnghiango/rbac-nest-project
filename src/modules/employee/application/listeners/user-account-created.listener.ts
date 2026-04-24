@@ -1,5 +1,4 @@
 // src/modules/employee/application/listeners/user-account-created.listener.ts
-
 import { ILogger, LOGGER_TOKEN } from "@core/shared/application/ports/logger.port";
 import { EventHandler } from "@core/shared/infrastructure/event-bus/decorators/event-handler.decorator";
 import { IEmployeeRepository } from "@modules/employee/domain/repositories/employee.repository";
@@ -20,11 +19,12 @@ export class UserAccountCreatedListener {
 
         if (!employeeId) return;
 
-        await this.employeeRepo.save({
-            id: employeeId,
-            userId: userId,
-        });
-
-        this.logger.info(`Đã liên kết thành công UserId ${userId} cho EmployeeId ${employeeId}`);
+        // QUY TRÌNH CHUẨN DDD: Lấy ra -> Gọi hàm nghiệp vụ -> Lưu lại
+        const employee = await this.employeeRepo.findById(employeeId);
+        if (employee) {
+            employee.linkUserAccount(userId); // <-- Gọi hàm nghiệp vụ có sẵn trong Entity
+            await this.employeeRepo.save(employee);
+            this.logger.info(`✅ Đã liên kết thành công UserId ${userId} cho EmployeeId ${employeeId}`);
+        }
     }
 }

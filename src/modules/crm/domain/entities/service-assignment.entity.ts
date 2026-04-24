@@ -7,13 +7,4 @@ export class ServiceAssignment {
         public readonly assignedAt: Date,
     ) { }
 
-    toJSON() {
-        return {
-            id: this.id,
-            organizationId: this.organizationId,
-            employeeId: this.employeeId,
-            role: this.role,
-            assignedAt: this.assignedAt,
-        };
-    }
 }

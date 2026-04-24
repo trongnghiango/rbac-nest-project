@@ -6,6 +6,8 @@ import { CreateFinoteDto } from '../dtos/create-finote.dto';
 import { IEventBus } from '@core/shared/application/ports/event-bus.port';
 import { FinoteCreatedEvent } from '@modules/accounting/domain/events/finote-created.event';
 import { IFinoteRepository } from '../../domain/repositories/finote.repository';
+import { Finote } from '../../domain/entities/finote.entity';
+import { Money } from '@core/shared/domain/value-objects/money.vo';
 
 @Injectable()
 export class FinoteService {
@@ -19,39 +21,38 @@ export class FinoteService {
     async createFinote(dto: CreateFinoteDto, creatorId: number) {
         return this.txManager.runInTransaction(async () => {
             const prefix = dto.type === 'INCOME' ? 'INC' : 'EXP';
-            const finoteCode = await this.sequenceService.generateCode(prefix, {
-                padLength: 4,
-                resetYearly: true
-            });
+            const finoteCode = await this.sequenceService.generateCode(prefix, { padLength: 4, resetYearly: true });
 
-            const newFinoteData = {
+            // Khởi tạo Entity bằng VO Money, không tạo Raw DB Object nữa!
+            const newFinote = new Finote({
                 code: finoteCode,
                 type: dto.type,
                 title: dto.title,
-                amount: dto.amount.toString(),
+                amount: new Money(dto.amount), // <-- Sử dụng VO Money
+                // currency: dto,
+                currency: 'VND',
                 category: dto.category,
                 description: dto.description,
-                source_org_id: dto.organizationId || null,
-                requested_by_id: creatorId,
+                sourceOrgId: dto.organizationId,
+                requestedById: creatorId,
                 status: 'PENDING',
-                deadline_at: new Date(dto.deadlineAt),
-            };
+                deadlineAt: new Date(dto.deadlineAt),
+            });
 
-            const savedFinote = await this.finoteRepo.save(newFinoteData);
+            const savedFinote = await this.finoteRepo.save(newFinote);
 
-            if (savedFinote) {
-                this.eventBus.publish(
-                    new FinoteCreatedEvent(savedFinote.id.toString(), {
-                        finoteId: savedFinote.id,
-                        code: savedFinote.code,
-                        type: savedFinote.type,
-                        title: savedFinote.title,
-                        amount: savedFinote.amount,
-                        creatorId: savedFinote.requested_by_id,
-                        orgId: savedFinote.source_org_id,
-                    })
-                );
-            }
+            this.eventBus.publish(
+                new FinoteCreatedEvent(savedFinote.id!.toString(), {
+                    finoteId: savedFinote.id!,
+                    code: savedFinote.code,
+                    type: savedFinote.type,
+                    title: savedFinote.title,
+                    amount: savedFinote.amount.getAmount().toString(),
+                    creatorId: savedFinote.requestedById,
+                    orgId: savedFinote.sourceOrgId,
+                })
+            );
+
             return savedFinote;
         });
     }
