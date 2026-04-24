@@ -55,5 +55,21 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 🚀 [2026-04-24] - Testing Foundation: Chiến lược và Unit Test mẫu
+
+Thiết lập nền tảng cho việc kiểm thử tự động để bảo vệ các thành quả Refactor.
+
+### 1. Ban hành tài liệu [TEST_STRATEGY.md]
+*   **Thay đổi:** Xây dựng bộ quy tắc kiểm thử theo mô hình Kim tự tháp (Unit -> Integration -> E2E).
+*   **Lý do:** Khi hệ thống ngày càng lớn, việc kiểm tra thủ công là không thể. Cần có "hàng rào bảo vệ" bằng code để phát hiện lỗi ngay lập tức.
+*   **Luận cứ:** Test giúp code của chúng ta trở thành "Tài liệu sống", giúp các thành viên mới hiểu nghiệp vụ nhanh hơn thông qua việc đọc các kịch bản test.
+
+### 2. Triển khai Unit Test mẫu cho `UserAccountService`
+*   **Thay đổi:** Viết file [user-account.service.spec.ts] hoàn chỉnh.
+*   **Kỹ thuật:** Sử dụng **Mocking** để giả lập Repository. Áp dụng **Data-Driven Testing** (truyền một danh sách đầu vào) để kiểm tra nhiều trường hợp dữ liệu chỉ trong 1 đoạn code.
+*   **Lợi ích:** Đây là ví dụ mẫu (Template) để team có thể sao chép và áp dụng cho các module khác.
+
+---
+
 ### 💡 Tổng kết triết lý Refactor:
 *"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*
