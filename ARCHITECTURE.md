@@ -25,10 +25,9 @@ Chúng ta chia các Module trong hệ thống thành 3 cấp độ (Tiers). Lậ
 ### 🟡 Tier 2: Cấp độ Trung bình (Logic-Driven / Standard Business)
 * **Đặc điểm:** Các module có logic kiểm tra (Validation), xử lý quan hệ (Relations), nhưng trạng thái dữ liệu (State) không thay đổi quá phức tạp.
 * **Quy tắc thiết kế:**
-  * Cần có `Interface Repository` (Port) để giấu đi thư viện ORM.
-  * Logic gom vào `Service`.
-  * Có thể dùng `Entity` nhưng dưới dạng Anemic Model (Chỉ là Interface định nghĩa cấu trúc dữ liệu, không chứa hàm xử lý logic).
-  * Không bắt buộc phải có Mapper chặt chẽ.
+  * Cần có `Interface Repository` (Port).
+  * **Bắt buộc có `Mapper`** để tách biệt DB Record và Application Logic (Tránh rò rỉ field DB lên tầng trên).
+  * Có thể dùng `Entity` dưới dạng Anemic Model (Chứa data, có thể có vài hàm logic đơn giản).
 * **Module ví dụ trong dự án:** `OrgStructureModule`, `EmployeeModule`.
 * **Cấu trúc thư mục chuẩn (Tier 2):**
   ```text
@@ -81,19 +80,37 @@ Dù Module của bạn linh hoạt ở Tier 1, 2 hay 3, bạn **BẮT BUỘC** p
 * **Cấm:** Controller không được phép biết dự án đang dùng PostgreSQL hay Drizzle. Không truyền object của Drizzle (`eq`, `desc`) từ Controller xuống.
 * **Bắt buộc:** Controller chỉ làm 3 việc: Nhận Request $\rightarrow$ Validate DTO $\rightarrow$ Gọi Service $\rightarrow$ Trả Response.
 
-### Quy tắc 3: Quản lý Transaction tập trung
-* **Cấm:** Không được phép gọi `db.transaction()` trực tiếp bên trong Service.
-* **Bắt buộc:** Mọi nghiệp vụ cần Transaction (ghi nhiều bảng cùng lúc) phải được bọc trong `ITransactionManager.runInTransaction(...)`. Trạng thái của Transaction (`tx`) được truyền xuống Repository dưới dạng tham số tùy chọn.
-* *Lý do:* Giữ cho Service không bị ô nhiễm bởi thư viện DB.
+### Quy tắc 3: Quản lý Transaction bằng ALS (Async Local Storage)
+* **Cấm:** Không truyền tham số `tx` hoặc `transaction` xuyên suốt các hàm của Service/Repository.
+* **Bắt buộc:** Sử dụng `ITransactionManager.runInTransaction(...)` tại Service. Tầng Infrastructure tự động lấy context transaction qua ALS.
+* *Lý do:* Giữ cho Interface/Port "sạch", không bị ô nhiễm bởi khái niệm của thư viện DB.
 
 ### Quy tắc 4: Cross-Module Communication (Giao tiếp chéo)
-Khi Module A cần dữ liệu của Module B:
-* **Cho phép:** `EmployeeService` được phép Inject `IOrgStructureRepository` (Mượn Repository của hàng xóm để chỉ đọc dữ liệu).
-* **Khuyến khích:** Sử dụng `EventBus` (Publish/Subscribe) để giao tiếp bất đồng bộ nếu hành động đó không cần kết quả ngay lập tức (Ví dụ: Tạo User xong bắn Event để NotificationModule gửi Email).
+Khi Module A cần tương tác với Module B:
+1. **SYNC (Orchestration):** Module A Inject **Service Port (Interface)** của Module B. Chỉ dùng khi cần kết quả trả về ngay hoặc cần đảm bảo Atomic Transaction chéo module. (Chỉ cho phép từ Module Level Cao gọi xuống Module Level Thấp).
+2. **ASYNC (Choreography):** Module A bắn Event qua `EventBus`. Module B tự xử lý. Dùng cho các Side-effects (Gửi thông báo, thống kê).
 
 ---
 
-## 3. TỔNG QUAN BẢN ĐỒ DỰ ÁN (PROJECT ROADMAP)
+## 3. PHÂN CẤP MODULE (MODULE HIERARCHY)
+
+Để tránh **Circular Dependency (Vòng lặp phụ thuộc)**, hệ thống được phân lớp rõ ràng. Quy tắc vàng: **Level Cao được gọi đồng bộ (Sync) Level Thấp. Level Thấp chỉ được trả lời Level Cao qua Event (Async).**
+
+### 🏗️ Sơ đồ phân vị (Top-Down):
+1.  **L0: Infrastructure/Shared (Lõi cứng):** `Core`, `Database`, `Config`. (Nền tảng của mọi module).
+2.  **L1: Identity Layer (Định danh):** `Auth`, `User`, `RBAC`. (Cung cấp context về "Ai đang làm gì").
+3.  **L2: Domain Business (Nghiệp vụ):** `CRM`, `Accounting`, `Employee`. (Dữ liệu kinh doanh thực tế).
+4.  **L3: Orchestration (Điều phối):** `Import`, `CompanySetup`, `Reporting`. (Tổng hợp dữ liệu từ nhiều module).
+
+### ❓ Làm sao để xác định Level của một Module?
+Hãy đặt các câu hỏi sau:
+*   **Q1 (Phụ thuộc):** Module này có thể tồn tại nếu Module X biến mất không? (Nếu User biến mất, CRM chết -> User ở Level thấp hơn CRM).
+*   **Q2 (Tần suất thay đổi):** Dữ liệu của module này là Master Data (Ít đổi) hay Transaction Data (Đổi liên tục)? (Master Data thường ở Level thấp).
+*   **Q3 (Nghiệp vụ):** Đây là module "Cung cấp công cụ" (Identity) hay "Thực hiện hành động" (Workflow)? (Cung cấp công cụ luôn thấp hơn).
+
+---
+
+## 4. TỔNG QUAN BẢN ĐỒ DỰ ÁN (PROJECT ROADMAP)
 
 Bảng dưới đây cung cấp cái nhìn tổng quan cho team về cách hệ thống đang được vận hành:
 
