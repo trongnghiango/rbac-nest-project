@@ -3,6 +3,7 @@ export enum OrganizationStatus {
     PROSPECT = 'PROSPECT',
     ACTIVE = 'ACTIVE',
     INACTIVE = 'INACTIVE',
+    CHURNED = 'CHURNED',
 }
 
 export enum OrganizationType {

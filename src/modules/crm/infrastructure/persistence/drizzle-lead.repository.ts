@@ -1,11 +1,10 @@
-
 import { Injectable, Inject } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DRIZZLE } from '@database/drizzle.provider';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '@database/schema';
 import { ILeadRepository } from '../../domain/repositories/lead.repository';
-import { Lead } from '../../domain/entities/lead.entity';
+import { Lead, LeadStage } from '../../domain/entities/lead.entity';
 import { LeadMapper } from '../mappers/lead.mapper';
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 
@@ -29,9 +28,9 @@ export class DrizzleLeadRepository extends DrizzleBaseRepository implements ILea
         return LeadMapper.toDomain(result);
     }
 
-    async updateStage(id: number, stage: string): Promise<void> {
+    async updateStage(id: number, stage: LeadStage): Promise<void> {
         await this.getDb().update(schema.leads)
-            .set({ stage, updated_at: new Date() })
+            .set({ stage: stage as any, updated_at: new Date() })
             .where(eq(schema.leads.id, id));
     }
 }

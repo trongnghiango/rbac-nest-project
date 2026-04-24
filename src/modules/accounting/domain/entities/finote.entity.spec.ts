@@ -1,5 +1,5 @@
 // src/modules/accounting/domain/entities/finote.entity.spec.ts
-import { Finote, FinoteItem } from './finote.entity';
+import { Finote, FinoteItem, FinoteType, FinoteStatus } from './finote.entity';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 
 describe('Finote Entity', () => {
@@ -22,12 +22,12 @@ describe('Finote Entity', () => {
 
         const finote = new Finote({
             code: 'FN-TEST-001',
-            type: 'INCOME',
+            type: FinoteType.INCOME,
             title: 'Hóa đơn tháng 04',
             totalAmount: new Money(0), // Sẽ được tính lại
             currency: 'VND',
             requestedById: 1,
-            status: 'PENDING',
+            status: FinoteStatus.PENDING,
             deadlineAt: new Date(),
             items: [item1, item2]
         });
@@ -43,22 +43,22 @@ describe('Finote Entity', () => {
     it('nên cập nhật trạng thái thanh toán chính xác (PAID / PARTIALLY_PAID)', () => {
         const finote = new Finote({
             code: 'FN-TEST-002',
-            type: 'INCOME',
+            type: FinoteType.INCOME,
             title: 'Hợp đồng trọn gói',
             totalAmount: new Money(10000000),
             currency: 'VND',
             requestedById: 1,
-            status: 'PENDING',
+            status: FinoteStatus.PENDING,
             deadlineAt: new Date(),
         });
 
         // 1. Trả một phần (3 triệu)
         finote.recordPayment(new Money(3000000));
-        expect(finote.status).toBe('PARTIALLY_PAID');
+        expect(finote.status).toBe(FinoteStatus.PARTIALLY_PAID);
         expect(finote.paidAmount.getAmount()).toBe(3000000);
 
         // 2. Trả nốt phần còn lại (7 triệu)
         finote.recordPayment(new Money(7000000));
-        expect(finote.status).toBe('PAID');
+        expect(finote.status).toBe(FinoteStatus.PAID);
     });
 });

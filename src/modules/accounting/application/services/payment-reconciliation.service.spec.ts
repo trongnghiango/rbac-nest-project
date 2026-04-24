@@ -2,7 +2,7 @@
 import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { IAccountingRepository } from '../../domain/repositories/accounting.repository';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
-import { Finote } from '../../domain/entities/finote.entity';
+import { Finote, FinoteType, FinoteStatus } from '../../domain/entities/finote.entity';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 import { BadRequestException } from '@nestjs/common';
 
@@ -29,15 +29,15 @@ describe('PaymentReconciliationService', () => {
     it('nên gạch nợ thành công một dòng tiền cho nhiều hóa đơn', async () => {
         // Giả lập 2 hóa đơn đang nợ
         const finote1 = new Finote({
-            id: 101, code: 'FN1', type: 'INCOME', title: 'HĐ 1',
+            id: 101, code: 'FN1', type: FinoteType.INCOME, title: 'HĐ 1',
             totalAmount: new Money(10000000), currency: 'VND',
-            requestedById: 1, deadlineAt: new Date(), status: 'PENDING'
+            requestedById: 1, deadlineAt: new Date(), status: FinoteStatus.PENDING
         });
 
         const finote2 = new Finote({
-            id: 102, code: 'FN2', type: 'INCOME', title: 'HĐ 2',
+            id: 102, code: 'FN2', type: FinoteType.INCOME, title: 'HĐ 2',
             totalAmount: new Money(5000000), currency: 'VND',
-            requestedById: 1, deadlineAt: new Date(), status: 'PENDING'
+            requestedById: 1, deadlineAt: new Date(), status: FinoteStatus.PENDING
         });
 
         mockRepo.findFinoteById.mockImplementation(async (id) => {
@@ -65,8 +65,8 @@ describe('PaymentReconciliationService', () => {
 
         // KIỂM TRA
         expect(result.cashTransactionId).toBe(999);
-        expect(finote1.status).toBe('PAID');
-        expect(finote2.status).toBe('PAID');
+        expect(finote1.status).toBe(FinoteStatus.PAID);
+        expect(finote2.status).toBe(FinoteStatus.PAID);
         expect(mockRepo.linkPayment).toHaveBeenCalledTimes(2);
     });
 

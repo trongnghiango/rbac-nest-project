@@ -7,22 +7,16 @@ import {
     timestamp,
     date,
     index,
+    pgEnum,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './organizations.schema';
 import { employees } from '../hrm/employees.schema';
 import { leads } from './leads.schema';
 
-/**
- * CONTRACTS — Hợp đồng khách hàng
- *
- * Luồng status:
- *   DRAFT → ACTIVE → EXPIRED → CANCELLED
- *
- * Cronjob chạy hàng ngày:
- *   Tìm các contract có end_date - NOW() <= 7 ngày
- *   → Đổi status = 'EXPIRING_SOON' hoặc bắn Notification
- */
+export const contractStatusEnum = pgEnum('contract_status', ['DRAFT', 'PENDING_SIGN', 'ACTIVE', 'EXPIRING_SOON', 'EXPIRED', 'CANCELLED']);
+export const contractTypeEnum = pgEnum('contract_type', ['RETAINER', 'ONE_OFF']);
+
 export const contracts = pgTable(
     'contracts',
     {
@@ -32,38 +26,28 @@ export const contracts = pgTable(
             .notNull()
             .references(() => organizations.id, { onDelete: 'restrict' }),
 
-        // Lead dẫn đến hợp đồng này (nullable — có thể tạo thẳng không qua lead)
-        lead_id: integer('lead_id'),
+        lead_id: integer('lead_id').references(() => leads.id, { onDelete: 'set null' }),
 
-        // Nhân viên phụ trách / ký kết
         managed_by_id: integer('managed_by_id').references(() => employees.id, {
             onDelete: 'set null',
         }),
 
-        contract_number: text('contract_number').notNull().unique(), // VD: HD-2026-001
+        contract_number: text('contract_number').notNull().unique(),
         title: text('title').notNull(),
         description: text('description'),
 
-        // Loai HD
-        contract_type: text('contract_type').default('RETAINER').notNull(),
-        // Trạng thái hợp đồng
-        status: text('status').default('PENDING_SIGN').notNull(),
-        // DRAFT | ACTIVE | EXPIRING_SOON | EXPIRED | CANCELLED
+        contract_type: contractTypeEnum('contract_type').default('RETAINER').notNull(),
+        status: contractStatusEnum('status').default('PENDING_SIGN').notNull(),
 
-        // Giá trị hợp đồng
         value: numeric('value', { precision: 15, scale: 2 }),
         currency: text('currency').default('VND'),
 
-        // Thời hạn
         start_date: date('start_date'),
-        end_date: date('end_date'),   // Cronjob theo dõi trường này
+        end_date: date('end_date'),
         signed_at: timestamp('signed_at', { withTimezone: true }),
 
-        // File đính kèm (Link Google Drive)
         file_url: text('file_url'),
         google_drive_id: text('google_drive_id'),
-
-        // Ghi chú
         note: text('note'),
 
         created_at: timestamp('created_at').defaultNow().notNull(),
@@ -77,7 +61,6 @@ export const contracts = pgTable(
     }),
 );
 
-// --- RELATIONS ---
 export const contractsRelations = relations(contracts, ({ one }) => ({
     organization: one(organizations, {
         fields: [contracts.organization_id],

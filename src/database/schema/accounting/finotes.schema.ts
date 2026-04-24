@@ -8,10 +8,15 @@ import {
     timestamp,
     index,
     boolean,
+    pgEnum,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { employees } from '../hrm/employees.schema';
 import { organizations } from '../crm/organizations.schema';
+
+export const finoteStatusEnum = pgEnum('finote_status', ['PENDING', 'APPROVED', 'PAID', 'PARTIALLY_PAID', 'CANCELLED', 'REJECTED']);
+export const finoteTypeEnum = pgEnum('finote_type', ['INCOME', 'EXPENSE']);
+export const cashTransactionTypeEnum = pgEnum('cash_transaction_type', ['IN', 'OUT']);
 
 /**
  * FINOTES — Phiếu Kế toán (Header)
@@ -20,8 +25,8 @@ export const finotes = pgTable(
     'finotes',
     {
         id: serial('id').primaryKey(),
-        code: varchar('code', { length: 50 }).notNull().unique(), // FN260106050
-        type: varchar('type', { length: 20 }).default('INCOME').notNull(), // INCOME | EXPENSE
+        code: varchar('code', { length: 50 }).notNull().unique(),
+        type: finoteTypeEnum('type').default('INCOME').notNull(),
         
         source_org_id: integer('source_org_id').references(() => organizations.id, {
             onDelete: 'set null',
@@ -39,9 +44,9 @@ export const finotes = pgTable(
         total_amount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
         total_vat: numeric('total_vat', { precision: 15, scale: 2 }).default('0'),
         currency: text('currency').default('VND'),
-        category: text('category'), // Trả lại category để không break data cũ
-        description: text('description'), // Trả lại description
-        status: text('status').default('PENDING').notNull(), 
+        category: text('category'),
+        description: text('description'),
+        status: finoteStatusEnum('status').default('PENDING').notNull(), 
 
         deadline_at: timestamp('deadline_at', { withTimezone: true }).notNull(),
         paid_at: timestamp('paid_at', { withTimezone: true }),
@@ -68,7 +73,7 @@ export const finoteItems = pgTable('finote_items', {
  */
 export const cashTransactions = pgTable('cash_transactions', {
     id: serial('id').primaryKey(),
-    type: varchar('type', { length: 10 }).notNull(), // IN | OUT
+    type: cashTransactionTypeEnum('type').notNull(),
     amount: numeric('amount', { precision: 15, scale: 2 }).notNull(),
     transaction_date: timestamp('transaction_date', { withTimezone: true }).defaultNow().notNull(),
     payment_method: varchar('payment_method', { length: 50 }),

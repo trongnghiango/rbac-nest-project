@@ -6,7 +6,7 @@ import { CreateFinoteDto } from '../dtos/create-finote.dto';
 import { IEventBus } from '@core/shared/application/ports/event-bus.port';
 import { FinoteCreatedEvent } from '@modules/accounting/domain/events/finote-created.event';
 import { IFinoteRepository } from '../../domain/repositories/finote.repository';
-import { Finote } from '../../domain/entities/finote.entity';
+import { Finote, FinoteType, FinoteStatus } from '../../domain/entities/finote.entity';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 
 @Injectable()
@@ -20,13 +20,13 @@ export class FinoteService {
 
     async createFinote(dto: CreateFinoteDto, creatorId: number) {
         return this.txManager.runInTransaction(async () => {
-            const prefix = dto.type === 'INCOME' ? 'INC' : 'EXP';
+            const prefix = dto.type === FinoteType.INCOME ? 'INC' : 'EXP';
             const finoteCode = await this.sequenceService.generateCode(prefix, { padLength: 4, resetYearly: true });
 
             // Khởi tạo Entity bằng VO Money, không tạo Raw DB Object nữa!
             const newFinote = new Finote({
                 code: finoteCode,
-                type: dto.type,
+                type: dto.type as FinoteType,
                 title: dto.title,
                 totalAmount: new Money(dto.amount), // <-- Sử dụng VO Money
                 // currency: dto,
@@ -35,7 +35,7 @@ export class FinoteService {
                 description: dto.description,
                 sourceOrgId: dto.organizationId,
                 requestedById: creatorId,
-                status: 'PENDING',
+                status: FinoteStatus.PENDING,
                 deadlineAt: new Date(dto.deadlineAt),
             });
 

@@ -1,8 +1,11 @@
 // src/modules/crm/domain/entities/contract.entity.ts
 export enum ContractStatus {
-    PENDING = 'PENDING',
+    DRAFT = 'DRAFT',
+    PENDING_SIGN = 'PENDING_SIGN',
     ACTIVE = 'ACTIVE',
-    LIQUIDATED = 'LIQUIDATED',
+    EXPIRING_SOON = 'EXPIRING_SOON',
+    EXPIRED = 'EXPIRED',
+    CANCELLED = 'CANCELLED',
 }
 
 export enum ContractType {
@@ -60,5 +63,4 @@ export class Contract {
     }
 
     activate() { this.status = ContractStatus.ACTIVE; }
-
 }

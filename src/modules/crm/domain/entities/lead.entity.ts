@@ -1,4 +1,5 @@
 import { LeadStage } from '../enums/lead-stage.enum';
+export { LeadStage };
 
 export interface LeadProps {
     id?: number;

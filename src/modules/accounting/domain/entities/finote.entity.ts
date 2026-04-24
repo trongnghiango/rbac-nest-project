@@ -1,6 +1,20 @@
 // src/modules/accounting/domain/entities/finote.entity.ts
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 
+export enum FinoteType {
+    INCOME = 'INCOME',
+    EXPENSE = 'EXPENSE',
+}
+
+export enum FinoteStatus {
+    PENDING = 'PENDING',
+    APPROVED = 'APPROVED',
+    PAID = 'PAID',
+    PARTIALLY_PAID = 'PARTIALLY_PAID',
+    CANCELLED = 'CANCELLED',
+    REJECTED = 'REJECTED',
+}
+
 export interface FinoteItemProps {
     id?: number;
     description: string;
@@ -17,7 +31,7 @@ export class FinoteItem {
 export interface FinoteProps {
     id?: number;
     code: string;
-    type: string; // INCOME | EXPENSE
+    type: FinoteType;
     sourceOrgId?: number;
     requestedById: number;
     reviewerId?: number;
@@ -27,7 +41,7 @@ export interface FinoteProps {
     currency: string;
     category?: string; 
     description?: string; 
-    status: string;
+    status: FinoteStatus;
     deadlineAt: Date;
     items?: FinoteItem[];
     paidAmount?: Money;
@@ -38,16 +52,16 @@ export interface FinoteProps {
 export class Finote {
     public readonly id?: number;
     public readonly code: string;
-    public readonly type: string;
+    public readonly type: FinoteType;
     public readonly sourceOrgId?: number;
     public readonly requestedById: number;
     public reviewerId?: number;
     public title: string;
     public totalAmount: Money;
     public totalVat: Money;
-    public category?: string; // Khai báo property ở đây
-    public description?: string; // Khai báo property ở đây
-    public status: string;
+    public category?: string;
+    public description?: string;
+    public status: FinoteStatus;
     public deadlineAt: Date;
     public items: FinoteItem[];
     public paidAmount: Money;
@@ -66,7 +80,7 @@ export class Finote {
         this.totalVat = props.totalVat || new Money(0);
         this.category = props.category;
         this.description = props.description;
-        this.status = props.status || 'PENDING';
+        this.status = props.status || FinoteStatus.PENDING;
         this.deadlineAt = props.deadlineAt;
         this.items = props.items || [];
         this.paidAmount = props.paidAmount || new Money(0);
@@ -74,14 +88,10 @@ export class Finote {
         this.updatedAt = props.updatedAt;
     }
 
-    /**
-     * Getter cho 'amount' để tương thích với code cũ
-     */
     get amount(): Money {
         return this.totalAmount;
     }
 
-    // Logic nghiệp vụ: Tính toán lại tổng tiền từ danh sách items
     recalculateTotals() {
         let total = 0;
         let vat = 0;
@@ -93,13 +103,12 @@ export class Finote {
         this.totalVat = new Money(vat);
     }
 
-    // Xác nhận gạch nợ
     recordPayment(paymentAmount: Money) {
         this.paidAmount = this.paidAmount.add(paymentAmount);
         if (this.paidAmount.getAmount() >= this.totalAmount.getAmount()) {
-            this.status = 'PAID';
+            this.status = FinoteStatus.PAID;
         } else if (this.paidAmount.getAmount() > 0) {
-            this.status = 'PARTIALLY_PAID';
+            this.status = FinoteStatus.PARTIALLY_PAID;
         }
         this.updatedAt = new Date();
     }

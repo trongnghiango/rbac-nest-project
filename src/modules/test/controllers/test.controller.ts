@@ -136,7 +136,7 @@ export class TestController {
           tax_code: dto.taxCode,
           industry: dto.industry,
           address: dto.address,
-          status: dto.status || 'CUSTOMER',
+          status: (dto.status || 'ACTIVE') as any,
           is_internal: false // Chắc chắn đây là khách ngoài
         }).returning();
 
@@ -174,14 +174,14 @@ export class TestController {
     // 1. Tạo 1 Organization nháp
     const [org] = await this.db.insert(schema.organizations).values({
       company_name: 'Anh Long (Chưa có cty)',
-      status: 'PROSPECT'
+      status: 'PROSPECT' as any
     }).returning();
 
     // 2. Tạo 1 Lead gắn vào Org đó
     const [lead] = await this.db.insert(schema.leads).values({
       organization_id: org.id,
       title: 'Tư vấn thành lập công ty',
-      stage: 'NEW'
+      stage: 'NEW' as any
     }).returning();
 
     return { message: 'Tạo Lead nháp thành công', leadId: lead.id, orgId: org.id };
