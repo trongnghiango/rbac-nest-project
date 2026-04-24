@@ -39,5 +39,21 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 🚀 [2026-04-24] - Architecture Hardening: Mapper & Global Cleanup
+
+Đợt nâng cấp cuối cùng nhằm thực thi triệt để các quy tắc Tier 2 và làm sạch hoàn toàn tầng Application.
+
+### 1. Thực thi Tier 2 Mapper cho Module `OrgStructure`
+*   **Thay đổi:** Xây dựng [OrgStructureMapper] và cập nhật Repository để map dữ liệu Drizzle sang Domain Entity.
+*   **Lý do:** Theo luật mới, Tier 2 không được phép ép kiểu trực tiếp (`as any`) từ DB Record. Phải có Mapper để đảm bảo tầng Domain không bị "vỡ" khi Database thay đổi cấu trúc bảng.
+*   **Luận cứ:** Việc này giúp tách biệt hoàn toàn sự phụ thuộc (Decoupling). Entity của bạn giờ đây là "nguyên bản", không bị lẫn lộn với các field thừa của Database schema.
+
+### 2. Tổng vệ sinh Swagger DTO (Module `Employee` & `OrgStructure`)
+*   **Thay đổi:** Di chuyển `@ApiProperty` sang `infrastructure/dtos` cho tất cả các module còn lại.
+*   **Lý do:** Đảm bảo toàn bộ dự án đồng nhất về mặt kiến trúc. Tầng Application giờ đây hoàn toàn "sạch" bóng dáng của thư viện bên ngoài.
+*   **Luận cứ:** Tính nhất quán (Consistency) giúp các lập trình viên mới vào dự án dễ dàng nắm bắt quy tắc và không bị nhầm lẫn khi code các module khác nhau.
+
+---
+
 ### 💡 Tổng kết triết lý Refactor:
 *"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*
