@@ -71,5 +71,20 @@ Thiết lập nền tảng cho việc kiểm thử tự động để bảo vệ
 
 ---
 
+## 🚀 [2026-04-24] - Advanced Testing: Quy trình Import phức tạp
+
+Triển khai Unit Test cho `CompanyImportService` - Orchestrator phức tạp nhất dự án.
+
+### 1. Kỹ thuật Mocking đa tầng (Multi-Dependency Mocking)
+*   **Thay đổi:** Giả lập cùng lúc 5 Port/Repository (`IOrgStructureRepository`, `IUserAccountService`, `IEmployeeRepository`, v.v.).
+*   **Lý do:** Giúp test cô lập hoàn toàn logic của quy trình Import mà không cần quan tâm đến lỗi từ DB hay các module khác.
+*   **Chi tiết:** Sử dụng `jest.fn()` để kiểm soát giá trị trả về của các hàm tìm kiếm và lưu trữ, cho phép giả định các kịch bản (ví dụ: tạo phòng ban cha thành công rồi mới tìm thấy con).
+
+### 2. Kiểm chứng luồng nghiệp vụ (Workflow Validation)
+*   **Thay đổi:** Viết test cover cả trường hợp dữ liệu CSV thiếu thông tin hoặc sai định dạng.
+*   **Lợi ích:** Đảm bảo hệ thống có khả năng tự phục hồi hoặc bỏ qua dữ liệu lỗi một cách an toàn (Graceful handling) thay vì treo toàn bộ tiến trình.
+
+---
+
 ### 💡 Tổng kết triết lý Refactor:
 *"Chúng ta không viết code để máy chạy, chúng ta viết code để con người (chính chúng ta sau 6 tháng nữa) có thể đọc và hiểu được. Một hệ thống tốt là hệ thống mà khi bạn thay đổi một module, bạn không sợ làm hỏng cả thế giới còn lại."*
