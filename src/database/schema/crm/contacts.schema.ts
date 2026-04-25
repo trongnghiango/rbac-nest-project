@@ -1,5 +1,5 @@
 // src/database/schema/crm/contacts.schema.ts
-import { pgTable, serial, integer, text, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, text, timestamp, boolean, index, jsonb } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './organizations.schema';
 import { users } from '../core/users.schema';
@@ -21,6 +21,7 @@ export const contacts = pgTable('contacts', {
 
     job_title: text('job_title'), // Ví dụ: Giám đốc, Kế toán trưởng
     is_primary: boolean('is_primary').default(false), // Người liên hệ chính của công ty?
+    metadata: jsonb('metadata'),
 
     created_at: timestamp('created_at').defaultNow().notNull(),
     updated_at: timestamp('updated_at').defaultNow().notNull(),

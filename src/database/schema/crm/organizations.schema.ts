@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, bigint, boolean, index, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, timestamp, bigint, boolean, index, pgEnum, jsonb } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from '../core/users.schema';
 import { leads } from './leads.schema';
@@ -30,6 +30,7 @@ export const organizations = pgTable(
 
         status: organizationStatusEnum('status').default('PROSPECT').notNull(),
         note: text('note'),
+        metadata: jsonb('metadata'),
         created_at: timestamp('created_at').defaultNow().notNull(),
         updated_at: timestamp('updated_at').defaultNow().notNull(),
     },

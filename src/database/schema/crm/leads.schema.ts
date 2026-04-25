@@ -7,6 +7,7 @@ import {
     timestamp,
     index,
     pgEnum,
+    jsonb,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './organizations.schema';
@@ -47,6 +48,7 @@ export const leads = pgTable(
         expected_close_date: timestamp('expected_close_date', { withTimezone: true }),
         closed_at: timestamp('closed_at', { withTimezone: true }),
         lost_reason: text('lost_reason'),
+        metadata: jsonb('metadata'),
 
         created_at: timestamp('created_at').defaultNow().notNull(),
         updated_at: timestamp('updated_at').defaultNow().notNull(),

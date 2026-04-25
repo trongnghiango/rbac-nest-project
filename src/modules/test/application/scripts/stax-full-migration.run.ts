@@ -37,25 +37,26 @@ async function bootstrap() {
         const fileContent = fs.readFileSync(csvPath, 'utf-8');
 
         const records = parse(fileContent, {
-            columns: true, // Tự động lấy header
+            columns: false,
+            from_line: 4,
             skip_empty_lines: true,
             trim: true
         });
 
-        // 3. Chuẩn hóa dữ liệu sang format script hiểu (maNv, phongBan, chucVu, capBac...)
+        // 3. Chuẩn hóa dữ liệu sang format script hiểu
         const mappedRecords = records.map((r: any) => ({
-            maNv: r['Mã NV'],
-            ten: r['Tên'],
-            phongBan: r['Phòng ban'],
-            chucVu: r['Chức vụ'],
-            capBac: parseInt(r['Stt.'] || '1'), // Giả định cấp bậc dựa trên STT hoặc giá trị khác nếu có
-            sdt: r['SĐT'],
-            email: r['Email'],
-            tinhTrang: r['Tình trạng'],
-            start: r['Start'],
-            ghiChu: r['Ghi chú'],
-            raw: r // Giữ toàn bộ dữ liệu gốc
-        }));
+            maNv: r[1],
+            ten: r[2],
+            phongBan: r[3],
+            chucVu: r[4],
+            capBac: parseInt(r[0] || '1'),
+            sdt: r[14],
+            email: r[15],
+            tinhTrang: r[6],
+            start: r[7],
+            ghiChu: r[27], // Tạm lấy cột xa xa
+            raw: r
+        })).filter((r: any) => r.maNv && r.ten);
 
         // 4. Khai hỏa di cư
         const result = await migrationService.migrateEmployees(mappedRecords, staxOrg.id);
