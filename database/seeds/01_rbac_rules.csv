@@ -19,4 +19,11 @@ STAFF,booking,update,*,Cập nhật đơn
 IT_ADMIN,rbac,manage,*,Phân quyền hệ thống
 IT_ADMIN,user,manage,*,Reset mật khẩu
 QA_AUDITOR,audit,view,*,Xem log hệ thống
-QA_AUDITOR,report,export,*,Xuất báo cáo chất lượng
+QA_AUDITOR,report,export,*,Xuất báo cáo chất lượngMANAGER,lead,manage,*,Quản lý Lead của team
+MANAGER,contract,manage,*,Quản lý hợp đồng
+MANAGER,finote,read,*,Theo dõi công nợ khách hàng
+STAFF,lead,manage,*,Tiếp nhận và chăm sóc Lead
+STAFF,contract,read,*,Xem thông tin hợp đồng
+ACCOUNTANT,finote,manage,*,Quản lý hóa đơn (Finote)
+ACCOUNTANT,cash_transaction,manage,*,Quản lý dòng tiền & gạch nợ
+ACCOUNTANT,report,manage,*,Báo cáo tài chính

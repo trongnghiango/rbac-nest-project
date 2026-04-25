@@ -1,9 +1,18 @@
-import { pgTable, serial, text, integer, date, timestamp, bigint, numeric } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, integer, date, timestamp, bigint, numeric, pgEnum, jsonb } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from '../core/users.schema';
 import { locations, positions } from './org-structure.schema';
 import { leads } from '../crm/leads.schema';
 import { organizations } from '../crm/organizations.schema';
+
+// 👉 THÊM: Enum trạng thái nhân viên
+export const employeeStatusEnum = pgEnum('employee_status', [
+    'ACTIVE',      // Đang làm việc
+    'PROBATION',   // Thử việc
+    'SUSPENDED',   // Tạm đình chỉ
+    'RESIGNED',    // Đã nghỉ việc
+    'OTHER'
+]);
 
 // 1. Hồ sơ Nhân viên
 export const employees = pgTable('employees', {
@@ -27,7 +36,12 @@ export const employees = pgTable('employees', {
 
     managerId: integer('manager_id'), // Người quản lý trực tiếp
 
+    status: employeeStatusEnum('status').default('ACTIVE'), // Tình trạng
     joinDate: date('join_date'),
+
+    metadata: jsonb('metadata'), // Lưu trữ dữ liệu tham lam (TG làm việc, Now...)
+    remarks: text('remarks'),    // Ghi chú từ Excel
+
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
 });
