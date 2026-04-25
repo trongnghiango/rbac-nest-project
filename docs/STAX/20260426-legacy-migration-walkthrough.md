@@ -44,9 +44,14 @@ Quét file `2026.STAX.CRM.Clients.csv`
 - **Tồn Tại:** `1` record (Hệ thống bảo vệ không đè rác).
 - **Lỗi Bị Văng:** `9` record. *(Do file CSV lạm dụng copy-paste email `haidangdo.lvg...` gây vi phạm luật `UNIQUE` của `contacts.email`. 202 công ty sạch đã vào an toàn).*
 
-### BƯỚC 2: Di Cư Leads (Cơ Hội Khách Hàng) - Chuẩn bị bóp cò
+### BƯỚC 2: Di Cư Leads (Cơ Hội Khách Hàng) - Hoàn Thành
 Sử dụng file `2026.STAX.CRM.Lead.csv`.
-- Logic: Dò tìm chéo SĐT/Email để liên kết Lead với `Organizations` của Bước 1. Gắn tự động nhân sự (`PIC`) từ Giai đoạn 1 làm tổ trưởng phụ trách.
+- Logic Schema: Nhúng thành công cột `metadata: jsonb('metadata')` vào bảng `leads`.
+- Map Dữ liệu: Phố hợp dò chéo (Lookup) tự động `employees` thông qua cột consultant (Nick name nhân viên trong Legacy) để gán cho cột `assigned_to_id`.
+- Tăng tỷ lệ Map Khách Hàng: Dò `phone` từ `contacts` để trích xuất ngược lại `organization_id` nếu Lead có khả năng map thành Client cũ.
+- **Kết Quả (Ngày 26/04/2026):**
+  - **Dòng quét thành công:** `1172` Leads.
+  - **Tỷ lệ lỗi:** `0` lỗi. (Hoàn hảo 100%).
 
 ### BƯỚC 3 & 4: Hợp Đồng (Contracts) & Hóa Đơn (Finotes)
 Sử dụng `04_.STAX.CRM.FN.2026.csv`.

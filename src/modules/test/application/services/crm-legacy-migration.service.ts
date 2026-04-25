@@ -119,4 +119,98 @@ export class CrmLegacyMigrationService {
 
         return statistics;
     }
+
+    async migrateLeads(rawData: any[]) {
+        this.logger.log(`🚀 Bắt đầu di cư ${rawData.length} Leads (Cơ hội khách hàng)...`);
+        let statistics = { success: 0, failed: 0 };
+
+        for (const r of rawData) {
+            try {
+                // R[1] Ngày, R[2] Nick name, R[3] Tên khách hàng, R[4] Điện thoại, R[5] Nguồn
+                const dateStr = r[1]?.trim();
+                const nickName = r[2]?.trim();
+                const customerName = r[3]?.trim();
+                const phone = r[4]?.replace(/[^0-9]/g, ''); // Extract only digits
+                const rawSource = r[5]?.trim() || '';
+                const consultant = r[6]?.trim() || '';
+                const rawStatus = r[7]?.trim() || '';
+                const serviceNeed = r[8]?.trim() || '';
+                const note = r[9]?.trim() || '';
+
+                if (!nickName && !customerName && !phone) continue;
+
+                // 1. Stage Mapping
+                let stage: 'NEW' | 'CONSULTING' | 'NEGOTIATING' | 'WON' | 'LOST' = 'NEW';
+                const s = rawStatus.toLowerCase();
+                if (s.includes('từ chối') || s.includes('fail')) stage = 'LOST';
+                else if (s.includes('chốt')) stage = 'WON';
+                else if (s.includes('đã báo giá') || s.includes('đang tư vấn')) stage = 'CONSULTING';
+
+                // 2. Source Mapping
+                let source: 'REFERRAL' | 'WEBSITE' | 'COLD_CALL' | 'EVENT' | 'SOCIAL' | 'DIRECT' | 'ZALO' | 'OTHER' = 'OTHER';
+                const src = rawSource.toLowerCase();
+                if (src.includes('facebook') || src.includes('social')) source = 'SOCIAL';
+                else if (src.includes('zalo')) source = 'ZALO';
+                else if (src.includes('google')) source = 'WEBSITE';
+                else if (src.includes('relationship') || src.includes('hội')) source = 'REFERRAL';
+
+                await this.db.transaction(async (tx) => {
+                    // Try to link with existing Contact / Organization by Phone
+                    let orgId = null;
+                    let contactId = null;
+                    
+                    if (phone && phone.length > 5) {
+                        const existingContact = await tx.query.contacts.findFirst({
+                            where: eq(schema.contacts.phone, phone)
+                        });
+                        if (existingContact) {
+                            contactId = existingContact.id;
+                            orgId = existingContact.organization_id;
+                        }
+                    }
+
+                    // Try to guess Employee ID by Consultant Name
+                    let assigneeId = null;
+                    if (consultant) {
+                         const employees = await tx.query.employees.findMany();
+                         const matched = employees.find(e => {
+                             const meta = e.metadata as any;
+                             const fullNameStr = e.full_name as string;
+                             const lastName = fullNameStr ? fullNameStr.split(' ').pop() : '';
+                             return (fullNameStr && fullNameStr.includes(consultant)) || 
+                                    (meta?.nicknames && meta.nicknames.includes(consultant)) || 
+                                    (lastName && consultant.includes(lastName));
+                         });
+                         if (matched) assigneeId = matched.id;
+                    }
+
+                    const title = customerName || nickName || `Khách hàng ${phone || 'Không tên'}`;
+
+                    await tx.insert(schema.leads).values({
+                        title: title,
+                        organization_id: orgId,
+                        contact_id: contactId,
+                        assigned_to_id: assigneeId,
+                        service_need: serviceNeed,
+                        stage: stage,
+                        source: source,
+                        note: note,
+                        metadata: {
+                            legacy_date: dateStr,
+                            original_status: rawStatus,
+                            original_consultant: consultant,
+                            raw_phone: r[4]
+                        }
+                    });
+                });
+                
+                statistics.success++;
+            } catch (e) {
+                this.logger.error(`Lỗi dòng Lead (Phone: ${r[4]}): ${e.message}`);
+                statistics.failed++;
+            }
+        }
+        this.logger.log(`✅ Migration Leads xong: ${statistics.success} tạo mới, ${statistics.failed} lỗi.`);
+        return statistics;
+    }
 }
