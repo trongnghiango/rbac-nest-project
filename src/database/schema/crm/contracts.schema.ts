@@ -8,6 +8,7 @@ import {
     date,
     index,
     pgEnum,
+    jsonb,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { organizations } from './organizations.schema';
@@ -49,6 +50,7 @@ export const contracts = pgTable(
         file_url: text('file_url'),
         google_drive_id: text('google_drive_id'),
         note: text('note'),
+        metadata: jsonb('metadata'),
 
         created_at: timestamp('created_at').defaultNow().notNull(),
         updated_at: timestamp('updated_at').defaultNow().notNull(),
