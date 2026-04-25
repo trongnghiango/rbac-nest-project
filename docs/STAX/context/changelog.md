@@ -4,6 +4,28 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 🚀 [2026-04-25] - System Hardening & Knowledge Management
+
+Một đợt nâng cấp toàn diện nhằm đảm bảo tính ổn định của dữ liệu lõi và chuẩn hóa tài liệu dự án.
+
+### 1. Triển khai Strict Enum (Data Integrity)
+*   **Thay đổi:** Chuyển đổi toàn bộ các trường `status` và `type` từ string sang `pgEnum` (Postgres) và TypeScript Enum.
+*   **Lý do:** Loại bỏ hoàn toàn lỗi dữ liệu lỏng lẻo, đảm bảo báo cáo Business luôn chính xác 100%. Áp dụng cho: Organization, Lead, Contract, Finote.
+
+### 2. Tối ưu Lead Intake & Payment Logic
+*   **Lead Intake:** Sửa lỗi logic khi gặp khách lẻ đã tồn tại nhưng chưa có hồ sơ Doanh nghiệp (Organization). Hệ thống giờ đây tự động khởi tạo và móc nối chính xác.
+*   **Payment Reconciliation:** Thêm lớp bảo vệ (Validation) chặn tuyệt đối việc gạch nợ vào các hóa đơn đã được thanh toán hoàn tất (PAID).
+
+### 3. "Xanh hóa" hệ thống bài Test (Unit Testing)
+*   **Hành động:** Hoàn thiện bộ Test Suite cho `LeadIntakeService` và `PaymentReconciliationService`.
+*   **Kết quả:** Bao phủ toàn bộ các kịch bản thực tế và các trường hợp biên (Edge Cases) nguy hiểm.
+
+### 4. Quy hoạch Trung tâm Tri thức (Knowledge Management)
+*   **Hành động:** Thiết lập thư mục `docs/STAX/context/` làm "Bộ não" của dự án. 
+*   **Dọn dẹp:** Gom toàn bộ tài liệu rải rác ở thư mục gốc (ARCHITECTURE.md, BACKEND.md...) vào trung tâm tri thức để dễ dàng quản lý và bàn giao.
+
+---
+
 ## [2026-04-24] - Refactor Cơ chế Giao tiếp Cross-Module (Smell #6)
 
 ### 🚀 Thay đổi chính
