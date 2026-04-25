@@ -279,4 +279,133 @@ export class CrmLegacyMigrationService {
         this.logger.log(`✅ Tổng hợp Contracts xong: ${statistics.success} tạo mới, ${statistics.existing} trùng lặp, ${statistics.failed} lỗi.`);
         return statistics;
     }
+
+    async migrateFinotes(rawData: any[]) {
+        this.logger.log(`🚀 Bắt đầu di cư ${rawData.length} dòng Finotes...`);
+        let statistics = { success: 0, failed: 0, existing: 0 };
+
+        // 1. Lấy STAX system employee (ID nhỏ nhất) làm mặc định requested_by
+        const allEmployees = await this.db.query.employees.findMany();
+        const defaultEmployee = allEmployees.reduce((min, e) => 
+            (e.id as number) < (min.id as number) ? e : min, allEmployees[0]);
+        
+        if (!defaultEmployee) {
+            this.logger.error('Không tìm thấy nhân viên nào trong hệ thống! Dừng migration Finotes.');
+            return statistics;
+        }
+        this.logger.log(`Dùng nhân viên mặc định: ${defaultEmployee.full_name} (ID: ${defaultEmployee.id})`);
+
+        // 2. Group các dòng theo Số FN (col index 3)
+        const fnGroups = new Map<string, any[]>();
+        for (const r of rawData) {
+            const fnCode = r[3]?.trim();
+            if (!fnCode) continue;
+            if (!fnGroups.has(fnCode)) fnGroups.set(fnCode, []);
+            fnGroups.get(fnCode)!.push(r);
+        }
+        this.logger.log(`Đã nhóm thành ${fnGroups.size} nhóm Finotes riêng biệt.`);
+
+        // 3. Xử lý từng nhóm FN
+        for (const [fnCode, rows] of fnGroups) {
+            try {
+                const firstRow = rows[0];
+                const taxCode = firstRow[1]?.trim();
+                const companyName = firstRow[2]?.trim();
+                const fnDateStr = firstRow[4]?.trim();
+                
+                // Parse ngày (format: DD/MM/YYYY)
+                let fnDate = new Date();
+                if (fnDateStr) {
+                    const [d, m, y] = fnDateStr.split('/');
+                    if (d && m && y) fnDate = new Date(`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`);
+                }
+
+                // Parse status từ cột 12 (Tình trạng thanh toán)
+                const rawPayStatus = firstRow[12]?.trim() || '';
+                let fnStatus: 'PENDING' | 'PAID' | 'PARTIALLY_PAID' | 'CANCELLED' = 'PENDING';
+                if (rawPayStatus.includes('Đã thanh toán')) fnStatus = 'PAID';
+                else if (rawPayStatus.includes('Thanh toán từng phần')) fnStatus = 'PARTIALLY_PAID';
+                else if (rawPayStatus.includes('FN Hủy')) fnStatus = 'CANCELLED';
+
+                // Tổng hợp tất cả items trong nhóm
+                const items = rows.map(r => {
+                    const cleanNum = (s: string) => parseFloat(s?.replace(/[^0-9.]/g, '') || '0') || 0;
+                    const amount = cleanNum(r[9]);
+                    const vat = cleanNum(r[10]);
+                    const total = cleanNum(r[11]);
+                    return {
+                        description: r[8]?.trim() || 'Dịch vụ',
+                        amount: amount.toString(),
+                        vat_rate: amount > 0 && vat > 0 ? Math.round(vat / amount * 100) : 0,
+                        vat_amount: vat.toString(),
+                        total_amount: (total || amount + vat).toString(),
+                    };
+                }).filter(item => parseFloat(item.total_amount) > 0);
+
+                if (items.length === 0) {
+                    this.logger.warn(`Bỏ qua FN ${fnCode} — tất cả items có tổng = 0 (FN Hủy?).`);
+                    continue;
+                }
+
+                const totalAmount = items.reduce((acc, i) => acc + parseFloat(i.total_amount), 0);
+                const totalVat = items.reduce((acc, i) => acc + parseFloat(i.vat_amount), 0);
+                const serviceType = firstRow[7]?.trim() || 'Dịch vụ kế toán';
+
+                await this.db.transaction(async (tx) => {
+                    // Check duplicate
+                    const existing = await tx.query.finotes.findFirst({
+                        where: eq(schema.finotes.code, fnCode)
+                    });
+                    if (existing) {
+                        statistics.existing++;
+                        return;
+                    }
+
+                    // Match Organization by MST
+                    let orgId: number | null = null;
+                    if (taxCode && taxCode.length > 5) {
+                        const org = await tx.query.organizations.findFirst({
+                            where: eq(schema.organizations.tax_code, taxCode)
+                        });
+                        if (org) orgId = org.id as number;
+                    }
+                    if (!orgId && companyName) {
+                        const org = await tx.query.organizations.findFirst({
+                            where: eq(schema.organizations.company_name, companyName)
+                        });
+                        if (org) orgId = org.id as number;
+                    }
+
+                    // Insert Finote header
+                    const [newFinote] = await tx.insert(schema.finotes).values({
+                        code: fnCode,
+                        type: 'INCOME',
+                        source_org_id: orgId,
+                        requested_by_id: defaultEmployee.id as number,
+                        title: `${serviceType} - ${companyName || 'Khách hàng'}`.substring(0, 255),
+                        total_amount: totalAmount.toString(),
+                        total_vat: totalVat.toString(),
+                        category: serviceType,
+                        status: fnStatus,
+                        deadline_at: fnDate,
+                        paid_at: fnStatus === 'PAID' ? fnDate : null,
+                    }).returning({ id: schema.finotes.id });
+
+                    // Insert Finote Items
+                    if (items.length > 0) {
+                        await tx.insert(schema.finoteItems).values(
+                            items.map(item => ({ finote_id: newFinote.id as number, ...item }))
+                        );
+                    }
+                    statistics.success++;
+                });
+            } catch (e) {
+                this.logger.error(`Lỗi FN ${fnCode}: ${e.message}`);
+                statistics.failed++;
+            }
+        }
+
+        this.logger.log(`✅ Migration Finotes xong: ${statistics.success} tạo mới, ${statistics.existing} trùng lặp, ${statistics.failed} lỗi.`);
+        return statistics;
+    }
 }
