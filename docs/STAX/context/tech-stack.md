@@ -17,5 +17,13 @@ Tài liệu này liệt kê các công nghệ cốt lõi được sử dụng đ
 *   **Next.js (App Router):** Xây dựng giao diện hướng người dùng.
 *   **Swagger/OpenAPI:** Tự động hóa tài liệu API, đảm bảo Frontend luôn nắm bắt được Schema mới nhất từ Backend.
 
+## 5. Migration Tooling (26/04/2026)
+
+Để di cư dữ liệu CRM legacy (CSV/XLSX) sang hệ thống mới, sử dụng:
+
+*   **`csv-parse`**: Parse file CSV legacy có header vỡ, multi-line, relax_quotes. Mapping theo chỉ số cột thay vì tên cột.
+*   **`ts-node` standalone scripts**: Các script di cư chạy độc lập, tái sử dụng NestJS DI context nhưng không khởi chạy HTTP server.
+*   **Hybrid Storage (JSONB)**: Cột `metadata JSONB` trên các bảng chính để lưu dữ liệu legacy không có cột riêng. Chi tiết xem **ADR 003** trong `architecture.md`.
+
 ---
-*Cập nhật ngày 25/04/2026.*
+*Cập nhật ngày 26/04/2026.*

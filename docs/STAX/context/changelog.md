@@ -4,6 +4,34 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 🗄️ [2026-04-26] - Legacy CRM Data Migration: Hoàn thành Phase 1→4
+
+Thực thi toàn bộ pipeline di cư dữ liệu từ file CSV/XLSX sang STAX DB. Môi trường: Dev/Test.
+
+### Schema Changes
+*   **`organizations`**: Thêm cột `metadata JSONB` (Hybrid Storage Pattern - ADR 003)
+*   **`contacts`**: Thêm cột `metadata JSONB`
+*   **`leads`**: Thêm cột `metadata JSONB` + enum `ZALO` vào `leadSourceEnum`
+*   **`contracts`**: Thêm cột `metadata JSONB`
+
+### Migration Scripts (mới)
+*   `crm-legacy-migration.service.ts` — Service tổng hợp 4 phase: migrateClients, migrateLeads, synthesizeContracts, migrateFinotes
+*   `crm-migration.run.ts` — Phase 1: 202 Organizations + 202 Contacts
+*   `crm-leads-migration.run.ts` — Phase 2: 1,172 Leads (0 lỗi)
+*   `crm-contracts-migration.run.ts` — Phase 3: 158 Contracts (tổng hợp từ Org.metadata)
+*   `crm-finotes-migration.run.ts` — Phase 4: 363 Finotes + multi-items (0 lỗi)
+
+### Kết quả
+| Bảng | Records | Tỷ lệ lỗi |
+|------|---------|------------|
+| organizations | 202 | 4.3% (dup email constraint) |
+| contacts | 202 | 4.3% (dup email) |
+| leads | 1,172 | 0% |
+| contracts | 158 | 0% |
+| finotes | 363 | 0% |
+
+---
+
 ## 🚀 [2026-04-25] - System Hardening & Knowledge Management
 
 Một đợt nâng cấp toàn diện nhằm đảm bảo tính ổn định của dữ liệu lõi và chuẩn hóa tài liệu dự án.

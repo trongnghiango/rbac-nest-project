@@ -191,6 +191,7 @@ sequenceDiagram
 - [x] **Clean Architecture Refactor:** Chuyển đổi CRM & Accounting sang kiến trúc 4 lớp.
 - [x] **Intelligent Intake:** Hệ thống tiếp nhận Lead thông minh với khả năng chống trùng (Deduplication).
 - [x] **Strict Enum Hardening:** (ADR 002) Gia cố toàn bộ trạng thái hệ thống bằng Enum cứng tại DB và Domain.
+- [x] **Legacy Data Migration:** (ADR 003) Di cư toàn bộ dữ liệu CRM legacy (Clients, Leads, Contracts, Finotes) vào hệ thống mới. **363 Finotes + 158 Contracts + 1,172 Leads + 202 Orgs đã vào thành công.**
 - [ ] **Unit Testing:** Đảm bảo coverage cho các service lõi (Lead Intake, Payment Reconciliation).
 
 ### Phase 2: Operational Intelligence (Tư duy Bánh đà - Đang thực hiện)
@@ -215,5 +216,10 @@ sequenceDiagram
 *   **Lý do:** Đảm bảo báo cáo kinh doanh và tài chính chính xác tuyệt đối. Loại bỏ lỗi " Won" (có dấu cách) hoặc "won" (chữ thường) gây sai lệch dữ liệu.
 *   **Áp dụng:** Organization, Lead, Contract, Finote.
 
+### ADR 003: Hybrid Storage Pattern (JSONB cho dữ liệu legacy không chuẩn)
+*   **Quyết định:** Thêm cột `metadata JSONB` vào các bảng `organizations`, `contacts`, `leads`, `contracts` để lưu dữ liệu legacy không có cột tương ứng trong schema quan hệ.
+*   **Lý do:** File CSV/Excel legacy của STAX chứa hàng chục trường "greedy" (Nick name, Ghi chú nội bộ, Thời hạn tạm ngưng...) không phù hợp mô hình quan hệ nhưng không thể bỏ. Thêm cột thật vào schema sẽ gây bloat và vi phạm Single Responsibility. JSONB cho phép preserve 100% dữ liệu lịch sử và query linh hoạt khi cần.
+*   **Áp dụng:** Organizations, Contacts, Leads, Contracts (26/04/2026).
+
 ---
-*Tài liệu được cập nhật ngày 25/04/2026 bởi Antigravity AI.*
+*Tài liệu được cập nhật ngày 26/04/2026 bởi Antigravity AI.*
