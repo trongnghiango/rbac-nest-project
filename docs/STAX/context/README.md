@@ -12,7 +12,8 @@ Chào mừng bạn đến với trung tâm tri thức của STAX. Đây là nơi
 | **[philosophy.md](./philosophy.md)** | Tư duy Pháo đài, Security by Design và triết lý lập trình hướng doanh nghiệp. | 25/04/2026 |
 | **[workflows.md](./workflows.md)** | Chi tiết các luồng nghiệp vụ Core (Lead Intake, Contract Won, Payment). | 24/04/2026 |
 | [changelog.md](./changelog.md) | Nhật ký thay đổi và lịch sử Refactor quan trọng của dự án. | 25/04/2026 |
-| **[migration-plan.md](https://www.google.com/url?sa=E&source=gmail&q=./migration-plan.md)** | Kế hoạch di cư dữ liệu lịch sử từ Excel (Client, Lead, Finote, Nhân sự). | 25/04/2026 |
+| **[migration-plan.md](./migration-plan.md)** | Kế hoạch di cư dữ liệu lịch sử từ Excel (Client, Lead, Finote, Nhân sự). | 25/04/2026 |
+| **[legacy-migration-execution.md](./legacy-migration-execution.md)** | Ghi chép chi tiết kết quả thực thi Di Cư (Clients, Leads, Hybrid Storage). | 26/04/2026 |
 
 ## 🚀 Nguyên tắc cập nhật
 Sau mỗi phiên làm việc (Session) có thay đổi về **Logic nghiệp vụ** hoặc **Kiến trúc dữ liệu**, Model AI và Developer có nhiệm vụ:
