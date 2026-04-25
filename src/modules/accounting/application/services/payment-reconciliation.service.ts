@@ -4,6 +4,7 @@ import { IAccountingRepository } from '../../domain/repositories/accounting.repo
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 import { CashTransaction } from '../../domain/entities/cash-transaction.entity';
+import { FinoteStatus } from '../../domain/entities/finote.entity';
 
 export interface PaymentAllocation {
     finoteId: number;
@@ -59,6 +60,10 @@ export class PaymentReconciliationService {
                 const finote = await this.accountingRepo.findFinoteById(allocation.finoteId);
                 if (!finote) {
                     throw new NotFoundException(`Không tìm thấy hóa đơn ID: ${allocation.finoteId}`);
+                }
+
+                if (finote.status === FinoteStatus.PAID) {
+                    throw new BadRequestException(`Hóa đơn ${finote.code} đã được thanh toán hoàn tất (PAID). Không thể gạch nợ thêm.`);
                 }
 
                 // Cập nhật số tiền đã trả trong Entity

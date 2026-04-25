@@ -79,4 +79,19 @@ describe('PaymentReconciliationService', () => {
             ]
         )).rejects.toThrow(BadRequestException);
     });
+
+    it('nên báo lỗi nếu cố tình gạch nợ vào hóa đơn đã hoàn thành (PAID)', async () => {
+        const finotePaid = new Finote({
+            id: 200, code: 'FN_PAID', type: FinoteType.INCOME, title: 'HĐ Đã Trả',
+            totalAmount: new Money(1000000), currency: 'VND',
+            requestedById: 1, deadlineAt: new Date(), status: FinoteStatus.PAID
+        });
+
+        mockRepo.findFinoteById.mockResolvedValue(finotePaid);
+
+        await expect(service.registerAndAllocatePayment(
+            { amount: 1000000, method: 'CASH', date: new Date(), recordedBy: 1 },
+            [{ finoteId: 200, amount: 1000000 }]
+        )).rejects.toThrow(BadRequestException);
+    });
 });

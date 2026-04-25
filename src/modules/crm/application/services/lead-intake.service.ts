@@ -40,14 +40,16 @@ export class LeadIntakeService {
 
             this.logger.debug(`[${trackingId}] Bước 1: Kiểm tra khách hàng hiện hữu qua SĐT: ${dto.phone}`);
             const existingContact = await this.contactRepo.findByPhone(dto.phone);
+            let isNewOrgCreated = false;
 
-            if (existingContact) {
+            if (existingContact && existingContact.organizationId) {
                 organizationId = existingContact.organizationId;
                 contactId = existingContact.id;
                 this.logger.debug(`[${trackingId}] Kết quả: Tìm thấy khách hàng cũ (OrgId: ${organizationId}). Tái sử dụng hồ sơ.`);
             } else {
-                this.logger.debug(`[${trackingId}] Kết quả: Khách hàng mới. Bắt đầu khởi tạo bộ hồ sơ (Org + Contact).`);
-                
+                this.logger.debug(`[${trackingId}] Kết quả: Cần tạo Organization mới (Khách mới hoặc khách lẻ chưa có hồ sơ cty).`);
+                isNewOrgCreated = true;
+
                 const newOrg = new Organization({
                     companyName: dto.fullName, 
                     status: OrganizationStatus.PROSPECT,
@@ -59,16 +61,29 @@ export class LeadIntakeService {
                 organizationId = savedOrg.id!;
                 this.logger.debug(`[${trackingId}] -> Đã tạo Organization mới (ID: ${organizationId})`);
 
-                const newContact = new Contact({
-                    organizationId: organizationId,
-                    fullName: dto.fullName,
-                    phone: dto.phone,
-                    email: dto.email,
-                    isMain: true,
-                });
-                const savedContact = await this.contactRepo.save(newContact);
-                contactId = savedContact.id;
-                this.logger.debug(`[${trackingId}] -> Đã tạo Contact liên hệ chính (ID: ${contactId})`);
+                if (existingContact) {
+                    // Cập nhật Contact cũ để gắn vào Org mới
+                    contactId = existingContact.id;
+                    // Note: Here we assume our entity or mapper handles updating. 
+                    // In real DDD, we might have a method contact.assignToOrganization(id)
+                    const updatedContact = new Contact({
+                        ...existingContact,
+                        organizationId: organizationId,
+                    });
+                    await this.contactRepo.save(updatedContact);
+                    this.logger.debug(`[${trackingId}] -> Đã cập nhật Contact cũ (ID: ${contactId}) vào Org mới.`);
+                } else {
+                    const newContact = new Contact({
+                        organizationId: organizationId,
+                        fullName: dto.fullName,
+                        phone: dto.phone,
+                        email: dto.email,
+                        isMain: true,
+                    });
+                    const savedContact = await this.contactRepo.save(newContact);
+                    contactId = savedContact.id;
+                    this.logger.debug(`[${trackingId}] -> Đã tạo Contact liên hệ chính (ID: ${contactId})`);
+                }
             }
 
             this.logger.debug(`[${trackingId}] Bước 2: Khởi tạo thực thể Lead cho nhu cầu: ${dto.serviceDemand}`);
@@ -89,7 +104,7 @@ export class LeadIntakeService {
             return {
                 leadId: savedLead.id,
                 organizationId: organizationId,
-                isNewCustomer: !existingContact
+                isNewCustomer: isNewOrgCreated
             };
         });
     }

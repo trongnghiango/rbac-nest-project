@@ -83,4 +83,28 @@ describe('LeadIntakeService', () => {
         expect(result.isNewCustomer).toBe(false);
         expect(result.organizationId).toBe(99);
     });
+
+    it('should create NEW Organization if existing Contact has NO organizationId', async () => {
+        const dto: IntelligentIntakeDto = {
+            fullName: 'Khách Lẻ Sang Sâm',
+            phone: '0888888888',
+            serviceDemand: 'Tư vấn thành lập cty',
+        };
+
+        // Giả lập tìm thấy khách lẻ chưa gắn Org
+        mockContactRepo.findByPhone.mockResolvedValue({
+            id: 20,
+            organizationId: null,
+            fullName: 'Khách Lẻ',
+        });
+
+        const result = await service.intelligentIntake(dto);
+
+        // Kiểm tra logic: Phải tạo Org mới và cập nhật Contact
+        expect(mockOrgRepo.save).toHaveBeenCalled();
+        expect(mockContactRepo.save).toHaveBeenCalled(); // Cần cập nhật để gắn org_id
+        
+        expect(result.isNewCustomer).toBe(true);
+        expect(result.organizationId).toBe(50); // ID từ mockOrgRepo
+    });
 });

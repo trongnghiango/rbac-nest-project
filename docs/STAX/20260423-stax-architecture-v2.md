@@ -169,50 +169,33 @@ sequenceDiagram
 
 ## 6. LỘ TRÌNH THỰC THI (ROADMAP)
 
-**Phase 1: Chuẩn hóa Domain DB (Đang diễn ra)**
-1.  Tách biệt `Contacts` và `Organizations`.
-2.  Refactor `Contracts` (Type: Retainer/One-off, Status: Signed/Liquidated).
-3.  Refactor Kế toán: Tách bạch `Finotes` (Công nợ) và `Finote_Payments` (Dòng tiền).
+### Phase 1: Core Foundation & Hardening (Đã hoàn thành 90%)
+- [x] **Clean Architecture Refactor:** Chuyển đổi CRM & Accounting sang kiến trúc 4 lớp.
+- [x] **Intelligent Intake:** Hệ thống tiếp nhận Lead thông minh với khả năng chống trùng (Deduplication).
+- [x] **Strict Enum Hardening:** (ADR 002) Gia cố toàn bộ trạng thái hệ thống bằng Enum cứng tại DB và Domain.
+- [ ] **Unit Testing:** Đảm bảo coverage cho các service lõi (Lead Intake, Payment Reconciliation).
 
-**Phase 2: Áp dụng Message & Task Queue (Kế tiếp)**
-1.  Kích hoạt `RabbitMQEventBusAdapter` thay thế in-memory.
-2.  Đưa quy trình sinh PDF của Finote vào `BullMQ` (Background Job).
+### Phase 2: Operational Intelligence (Tư duy Bánh đà - Đang thực hiện)
+- [ ] **Omnichannel Activity Feed:** Xây dựng dòng thời gian tương tác hội tụ tại Organization (God-view).
+- [ ] **Unified Onboarding:** Tự động hóa việc bàn giao hồ sơ từ Sales sang Operations (Contract -> Task Checklist).
+- [ ] **AI-Powered Parsing:** Tự động đọc nội dung chat Zalo/Email và điền vào form Intake.
 
-**Phase 3: Module Bán lẻ (B2C)**
-1.  Triển khai bảng `orders` gắn vào `contacts`.
-2.  Tích hợp Payment Gateway tự động gạch nợ `Finote_Payments`.
-
----
-
-## 7. Hồ sơ Quyết định Kiến trúc (Architectural Decisions)
-
-### 7.1. Xuất bản Repository ra ngoài Module (Exporting Repositories)
-- **Quyết định:** Export `IOrganizationRepository` và `IContactRepository` từ CRM Module.
-- **Lý do:** 
-    - Bảng `Organizations` là "Cột sống" dữ liệu chung của toàn hệ thống (Multi-tenancy). Các module Kế toán, HRM cần truy cập thông tin định danh khách hàng thường xuyên.
-    - Tránh việc viết quá nhiều hàm "pass-through" (lấy dữ liệu hộ) trong Service gây phình to mã nguồn không cần thiết.
-- **Rủi ro & Giải pháp:** Có thể gây rò rỉ chi tiết dữ liệu. Trong tương lai, khi module phình to, sẽ chuyển các thực thể lõi này vào một `SharedDomainModule` riêng biệt.
+### Phase 3: Financial Ops & Strategic Reporting
+- [ ] **Automated Billing:** Tự động tạo Finote hàng tháng dựa trên biểu phí hợp đồng.
+- [ ] **Master Dashboard:** Báo cáo tỷ lệ chuyển đổi (Conversion Rate) và dòng tiền thực (Cashflow ROI).
 
 ---
 
-## 8. Lộ trình Phát triển Tiếp theo (Future Roadmap)
+## 7. HỒ SƠ QUYẾT ĐỊNH KIẾN TRÚC (ADR)
 
-### 8.1. Intelligent Lead Intake Phase 2
-- **AI-Powered Parsing:** Tích hợp AI để tự động đọc nội dung chat từ Zalo/Email và điền vào form Intake.
-- **Auto-Deduplication:** Nâng cấp thuật toán check trùng khách hàng không chỉ qua SĐT mà còn qua MST cá nhân, Email hoặc Tên không dấu gần giống.
+### ADR 001: Export Repository trực tiếp từ CRM Module
+*   **Quyết định:** Export `IOrganizationRepository` và `IContactRepository`.
+*   **Lý do:** Bảng `Organizations` là "Cột sống" dữ liệu chung. Các module Kế toán, HRM cần truy cập trực tiếp thông tin định danh khách hàng mà không cần qua tầng Service trung gian.
 
-### 8.2. Hệ thống Activity Timeline (UX Hoàn hảo)
-- **Xây dựng:** Một hệ thống theo dõi mọi thay đổi và tương tác với khách hàng.
-- **Chi tiết:** Khi Sales gọi điện, khi Ops duyệt Finote, hệ thống tự động ghi lại thành một dòng thời gian (Feed). Giúp bất kỳ ai nhảy vào cũng nắm được lịch sử của khách hàng trong 10 giây.
-
-### 8.3. Check-list Nghiệp vụ Đặc thù (Workflow-based Tasks)
-- **Thành lập Doanh nghiệp:** Tự động sinh danh mục giấy tờ cần thu thập (CCCD, Hợp đồng thuê nhà).
-- **Kế toán Thuế:** Tự động nhắc nhở nhân viên thu thập hóa đơn đầu vào/đầu ra vào ngày 25 hàng tháng.
-
-### 8.4. Master Dashboard cho Sếp STAX
-- Thống kê tỷ lệ chuyển đổi từ Lead sang Hợp đồng (Conversion Rate).
-- Biểu đồ dòng tiền thực tế so với công nợ chưa thu (Cash Flow vs. Receivables).
-- Báo cáo năng suất nhân viên dựa trên số lượng Task và Finote được xử lý.
+### ADR 002: Triển khai Strict Enum (Gia cố kiểu dữ liệu)
+*   **Quyết định:** Thay thế toàn bộ trường `text` status/type bằng `pgEnum` (Drizzle) và TypeScript Enums.
+*   **Lý do:** Đảm bảo báo cáo kinh doanh và tài chính chính xác tuyệt đối. Loại bỏ lỗi " Won" (có dấu cách) hoặc "won" (chữ thường) gây sai lệch dữ liệu.
+*   **Áp dụng:** Organization, Lead, Contract, Finote.
 
 ---
-*Tài liệu được cập nhật ngày 24/04/2026 theo chiến lược Clean Architecture & Domain-Driven Design.*
+*Tài liệu được cập nhật ngày 25/04/2026 bởi Antigravity AI.*
