@@ -14,7 +14,25 @@ Hệ thống được thiết kế dựa trên 4 trụ cột kiến trúc, đả
 
 ---
 
-## 2. NGÔN NGỮ NGHIỆP VỤ & QUY CHUẨN ĐẶT TÊN (UBIQUITOUS LANGUAGE)
+## 2. HỆ THỐNG PHÂN TẦNG MODULE (TIER SYSTEM)
+Để quản lý độ phức tạp và ranh giới trách nhiệm, hệ thống phân loại module theo 3 cấp độ:
+
+| Cấp độ | Đặc điểm | Ví dụ Module |
+| :--- | :--- | :--- |
+| **Tier 1 (Foundation)** | Không có nghiệp vụ. Chỉ cung cấp hạ tầng dùng chung cho toàn hệ thống. | `Rbac`, `Notification`, `AuditLog`, `Storage` |
+| **Tier 2 (Domain Core)** | Chứa các thực thể DNA và quy trình vận hành xương sống của doanh nghiệp. | `Employee`, `OrgStructure`, `Office`, `Kpi` |
+| **Tier 3 (Process Flow)** | Các module quản lý dòng chảy nghiệp vụ (Flow) và tiền bạc. Phụ thuộc vào Tier 2. | `CRM (Leads)`, `Accounting (Finotes)`, `Contracts` |
+
+### Nguyên tắc cô lập (Isolation Rules):
+1.  **Tier 1** không được biết về sự tồn tại của bất kỳ module nào khác.
+2.  **Tier 2** không được phụ thuộc vào Tier 3.
+3.  **Cross-Module Communication:** Các module không được gọi trực tiếp Repository của nhau (trừ các trường hợp ADR đặc biệt). Giao tiếp phải thông qua:
+    *   **SYNC:** Giao tiếp qua `Domain Service Port` (Interface).
+    *   **ASYNC:** Giao tiếp qua `EventBus` (Message Queue).
+
+---
+
+## 3. NGÔN NGỮ NGHIỆP VỤ & QUY CHUẨN ĐẶT TÊN (UBIQUITOUS LANGUAGE)
 
 Trong Domain-Driven Design (DDD), việc thống nhất ngôn ngữ giữa Đội Lập trình (Dev) và Đội Kinh doanh (Biz) là yếu tố sống còn. 
 
