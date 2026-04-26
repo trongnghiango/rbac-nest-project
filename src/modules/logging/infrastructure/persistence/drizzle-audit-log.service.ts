@@ -6,6 +6,8 @@ import { IAuditLogService, AuditLogEntry } from '@core/shared/application/ports/
 import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/drizzle-base.repository';
 import { and, eq } from 'drizzle-orm';
 
+import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
+
 @Injectable()
 export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAuditLogService {
     constructor(
@@ -14,23 +16,36 @@ export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAu
         super(db);
     }
 
-    async log(entry: AuditLogEntry): Promise<void> {
-        const db = this.getDb();
+    log(entry: AuditLogEntry): void {
+        // Capture context immediately
+        const context = RequestContextService.getContext();
+        const requestId = entry.requestId || context?.requestId || 'sys-' + process.pid;
+        const actorId = entry.actorId || context?.userId;
+        const actorName = entry.actorName || context?.userName;
+        const ipAddress = entry.ipAddress || context?.ip;
+        const userAgent = entry.userAgent || context?.userAgent;
         
-        await db.insert(schema.auditLogs).values({
-            action: entry.action,
-            resource: entry.resource,
-            resourceId: entry.resourceId,
-            organizationId: entry.organizationId,
-            actorId: entry.actorId ? Number(entry.actorId) : null,
-            actorName: entry.actorName,
-            before: entry.before,
-            after: entry.after,
-            metadata: entry.metadata,
-            severity: (entry.severity as any) || 'INFO',
-            actorIp: entry.ipAddress,
-            userAgent: entry.userAgent,
-            requestId: entry.requestId
+        // Sử dụng this.db thay vì getDb() để đảm bảo thoát khỏi transaction context hiện tại
+        setImmediate(async () => {
+            try {
+                await this.db.insert(schema.auditLogs).values({
+                    action: entry.action,
+                    resource: entry.resource,
+                    resourceId: entry.resourceId,
+                    organizationId: entry.organizationId,
+                    actorId: actorId ? Number(actorId) : null,
+                    actorName: actorName,
+                    before: entry.before,
+                    after: entry.after,
+                    metadata: entry.metadata,
+                    severity: (entry.severity as any) || 'INFO',
+                    actorIp: ipAddress,
+                    userAgent: userAgent,
+                    requestId: requestId
+                });
+            } catch (error) {
+                console.error('[AuditLog Async Error]: Ghi log thất bại', error);
+            }
         });
     }
 

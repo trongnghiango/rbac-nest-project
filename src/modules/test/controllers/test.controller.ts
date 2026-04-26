@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/infrastructure/guards/jwt-auth.guard';
+import { VerifyAuditLogScript } from '../application/scripts/verify-audit-log';
 import { PermissionGuard } from '../../rbac/infrastructure/guards/permission.guard';
 import { Permissions } from '../../rbac/infrastructure/decorators/permission.decorator';
 import { Public } from '../../auth/infrastructure/decorators/public.decorator';
@@ -19,8 +20,14 @@ export class TestController {
   constructor(
     @Inject(LOGGER_TOKEN) private readonly logger: ILogger,
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
-
+    private readonly verifyAuditLog: VerifyAuditLogScript,
   ) { }
+
+  @Public()
+  @Get('verify-audit')
+  async runAuditVerification() {
+    return await this.verifyAuditLog.run();
+  }
 
   @Public()
   @Get('health')

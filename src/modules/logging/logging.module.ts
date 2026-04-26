@@ -7,6 +7,7 @@ import { DrizzleInteractionNoteService } from './infrastructure/persistence/driz
 import { DrizzleActivityFeedService } from './infrastructure/persistence/drizzle-activity-feed.service';
 import { ActivityFeedController } from './infrastructure/controllers/activity-feed.controller';
 import { InteractionNoteController } from './infrastructure/controllers/interaction-note.controller';
+import { AuditDomainEventHandler } from './application/handlers/audit-domain-event.handler';
 
 // Import Token
 import { LOGGER_TOKEN } from '@core/shared/application/ports/logger.port';
@@ -44,6 +45,7 @@ import { ACTIVITY_FEED_PORT } from '@core/shared/application/ports/activity-feed
       provide: ACTIVITY_FEED_PORT,
       useClass: DrizzleActivityFeedService,
     },
+    AuditDomainEventHandler,
   ],
   exports: [
     LOGGER_TOKEN, 

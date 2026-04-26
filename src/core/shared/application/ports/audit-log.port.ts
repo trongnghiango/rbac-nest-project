@@ -24,7 +24,7 @@ export interface AuditLogEntry {
 }
 
 export interface IAuditLogService {
-    log(entry: AuditLogEntry): Promise<void>;
+    log(entry: AuditLogEntry): void;
     // Added for test script compatibility
     query?(filter: { action?: string; resource?: string; resourceId?: string }): Promise<any[]>;
 }

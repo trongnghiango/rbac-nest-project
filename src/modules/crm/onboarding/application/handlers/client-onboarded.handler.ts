@@ -24,7 +24,7 @@ export class ClientOnboardedHandler implements OnModuleInit {
         // Giả lập các bước Automation
         try {
             // Bước 1: Khởi tạo Billing (Ghi log để vết)
-            await this.auditLog.log({
+            this.auditLog.log({
                 action: 'ONBOARDING.BILLING_INIT',
                 resource: 'organizations',
                 resourceId: orgId.toString(),
@@ -37,7 +37,7 @@ export class ClientOnboardedHandler implements OnModuleInit {
             this.logger.debug(`-> Đã gửi thông báo cho đội ngũ triển khai dự án.`);
 
             // Bước 3: Hoàn tất
-            await this.auditLog.log({
+            this.auditLog.log({
                 action: 'ONBOARDING.COMPLETED',
                 resource: 'organizations',
                 resourceId: orgId.toString(),

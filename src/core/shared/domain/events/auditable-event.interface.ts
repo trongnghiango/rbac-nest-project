@@ -40,6 +40,7 @@ export interface AuditEntryPayload {
     action: string;           // e.g. 'LEAD.STAGE_CHANGED'
     resource: string;         // table/entity name
     resourceId?: string;     // entity PK as string
+    organizationId?: number;  // optional org context
     before?: Record<string, any> | null;
     after?: Record<string, any> | null;
     severity?: 'INFO' | 'WARN' | 'CRITICAL';

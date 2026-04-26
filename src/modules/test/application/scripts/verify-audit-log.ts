@@ -24,8 +24,11 @@ export class VerifyAuditLogScript {
             metadata: { note: 'Đây là log kiểm chứng hệ thống' }
         });
 
-        // 2. Truy vấn lại (sử dụng method query mới thêm)
+        // 2. Truy vấn lại (Cần đợi một chút vì log là async/fire-and-forget)
         if (this.auditService.query) {
+            this.logger.log('⏳ Đang đợi log được ghi vào DB (Async)...');
+            await new Promise(resolve => setTimeout(resolve, 500)); // Đợi 500ms
+
             const results = await this.auditService.query({ action: testAction });
             
             if (results.length > 0 && results[0].action === testAction) {

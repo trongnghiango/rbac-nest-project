@@ -22,7 +22,12 @@ export class RequestLoggingMiddleware implements NestMiddleware {
     res.setHeader('x-request-id', requestId);
 
     // QUAN TRỌNG: Bọc next() trong RequestContextService.run
-    const context = new RequestContext(requestId, req.originalUrl);
+    const context = new RequestContext(
+      requestId, 
+      req.originalUrl,
+      req.ip,
+      req.headers['user-agent']
+    );
 
     RequestContextService.run(context, () => {
       // Log lúc bắt đầu (bên trong context)

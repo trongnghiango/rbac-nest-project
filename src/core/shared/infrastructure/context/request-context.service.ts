@@ -5,6 +5,10 @@ export class RequestContext {
   constructor(
     public readonly requestId: string,
     public readonly url: string,
+    public readonly ip?: string,
+    public readonly userAgent?: string,
+    public userId?: string | number,
+    public userName?: string,
   ) {}
 }
 
@@ -19,10 +23,18 @@ export class RequestContextService {
 
   static getRequestId(): string {
     const store = this.als.getStore();
-    return store?.requestId || 'sys-' + process.pid; // Fallback nếu không có request (VD: Cronjob)
+    return store?.requestId || 'sys-' + process.pid;
   }
 
   static getContext(): RequestContext | undefined {
     return this.als.getStore();
+  }
+
+  static setUserId(userId: string | number, userName?: string) {
+    const store = this.als.getStore();
+    if (store) {
+      (store as any).userId = userId;
+      if (userName) (store as any).userName = userName;
+    }
   }
 }

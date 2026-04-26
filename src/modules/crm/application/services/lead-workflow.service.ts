@@ -87,23 +87,6 @@ export class LeadWorkflowService {
                 }
             ));
 
-            // 7. Ghi Audit Log (Standardized with camelCase)
-            this.auditLog.log({
-                action: 'LEAD.CLOSE_WON',
-                resource: 'leads',
-                resourceId: lead.id?.toString(),
-                organizationId: org.id,
-                actorId: command.actorId?.toString() || 'SYSTEM',
-                actorName: command.actorName || 'System Process',
-                before: { stage: 'INTERACTIVE' },
-                after: { stage: 'WON', contractId: savedContract.id },
-                metadata: {
-                    contractNumber: savedContract.contractNumber,
-                    orgId: org.id
-                },
-                severity: AuditLogSeverity.INFO
-            });
-
             this.logger.log(`[${trackingId}] HOÀN TẤT: Chốt Lead thành công (ContractId: ${savedContract.id}).`);
 
             return {
