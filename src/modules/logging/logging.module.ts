@@ -1,4 +1,4 @@
-import { Module, DynamicModule, Global } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { WinstonFactory } from './infrastructure/winston/winston.factory';
 import { WinstonLoggerAdapter } from './infrastructure/winston/winston-logger.adapter';
@@ -15,46 +15,45 @@ import { INTERACTION_NOTE_PORT } from '@core/shared/application/ports/interactio
 import { ACTIVITY_FEED_PORT } from '@core/shared/application/ports/activity-feed.port';
 
 @Global()
-@Module({})
+@Module({
+  imports: [ConfigModule],
+  controllers: [
+    ActivityFeedController,
+    InteractionNoteController,
+  ],
+  providers: [
+    WinstonFactory,
+    {
+      provide: 'WINSTON_LOGGER',
+      useFactory: (factory: WinstonFactory) => factory.createLogger(),
+      inject: [WinstonFactory],
+    },
+    {
+      provide: LOGGER_TOKEN,
+      useClass: WinstonLoggerAdapter,
+    },
+    {
+      provide: AUDIT_LOG_PORT,
+      useClass: DrizzleAuditLogService,
+    },
+    {
+      provide: INTERACTION_NOTE_PORT,
+      useClass: DrizzleInteractionNoteService,
+    },
+    {
+      provide: ACTIVITY_FEED_PORT,
+      useClass: DrizzleActivityFeedService,
+    },
+  ],
+  exports: [
+    LOGGER_TOKEN, 
+    AUDIT_LOG_PORT, 
+    INTERACTION_NOTE_PORT, 
+    ACTIVITY_FEED_PORT
+  ],
+})
 export class LoggingModule {
-  static forRootAsync(): DynamicModule {
-    return {
-      module: LoggingModule,
-      imports: [ConfigModule],
-      controllers: [
-        ActivityFeedController,
-        InteractionNoteController,
-      ],
-      providers: [
-        WinstonFactory,
-        {
-          provide: 'WINSTON_LOGGER',
-          useFactory: (factory: WinstonFactory) => factory.createLogger(),
-          inject: [WinstonFactory],
-        },
-        {
-          provide: LOGGER_TOKEN,
-          useClass: WinstonLoggerAdapter,
-        },
-        {
-          provide: AUDIT_LOG_PORT,
-          useClass: DrizzleAuditLogService,
-        },
-        {
-          provide: INTERACTION_NOTE_PORT,
-          useClass: DrizzleInteractionNoteService,
-        },
-        {
-          provide: ACTIVITY_FEED_PORT,
-          useClass: DrizzleActivityFeedService,
-        },
-      ],
-      exports: [
-        LOGGER_TOKEN, 
-        AUDIT_LOG_PORT, 
-        INTERACTION_NOTE_PORT, 
-        ACTIVITY_FEED_PORT
-      ],
-    };
+  constructor() {
+    console.log('✅ LoggingModule initialized');
   }
 }

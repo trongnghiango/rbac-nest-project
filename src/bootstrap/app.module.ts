@@ -17,6 +17,8 @@ import { DrizzleModule } from '@database/drizzle.module';
 import { LoggingModule } from '@modules/logging/logging.module';
 import { RedisCacheModule } from '@core/shared/infrastructure/cache/redis-cache.module';
 import { RequestLoggingMiddleware } from '@api/middleware/request-logging.middleware';
+import { ActivityFeedController } from '@modules/logging/infrastructure/controllers/activity-feed.controller';
+import { InteractionNoteController } from '@modules/logging/infrastructure/controllers/interaction-note.controller';
 
 import { UserModule } from '@modules/user/user.module';
 import { AuthModule } from '@modules/auth/auth.module';
@@ -73,7 +75,7 @@ import { CrmModule } from '@modules/crm/crm.module';
     CoreModule,
     SharedModule,
     DrizzleModule,
-    LoggingModule.forRootAsync(),
+    LoggingModule,
     RedisCacheModule,
     ChatbotCoreModule,
 
