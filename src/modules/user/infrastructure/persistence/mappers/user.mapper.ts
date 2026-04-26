@@ -42,7 +42,7 @@ export class UserMapper {
         departmentCode: raw.employeeProfile.position?.orgUnit?.code, // ✅ Nhặt code từ DB Join
         location: raw.employeeProfile.location?.name,
         // THÊM DÒNG NÀY:
-        organization_id: raw.employeeProfile.organization_id,
+        organizationId: raw.employeeProfile.organizationId,
       };
     }
 

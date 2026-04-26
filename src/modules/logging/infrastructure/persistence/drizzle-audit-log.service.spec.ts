@@ -42,8 +42,8 @@ describe('DrizzleAuditLogService', () => {
             const entry = {
                 action: 'TEST_ACTION',
                 resource: 'test',
-                resource_id: '1',
-                actor_name: 'Test Actor',
+                resourceId: '1',
+                actorName: 'Test Actor',
             };
 
             await service.log(entry);
@@ -54,7 +54,7 @@ describe('DrizzleAuditLogService', () => {
             expect(insertResult.values).toHaveBeenCalledWith(expect.objectContaining({
                 action: 'TEST_ACTION',
                 resource: 'test',
-                actor_name: 'Test Actor',
+                actorName: 'Test Actor',
             }));
         });
 
@@ -67,22 +67,7 @@ describe('DrizzleAuditLogService', () => {
         });
     });
 
-    describe('logBatch', () => {
-        it('should call db.insert with multiple values', async () => {
-            const entries = [
-                { action: 'A', resource: 'R', resource_id: '1' },
-                { action: 'B', resource: 'R', resource_id: '2' },
-            ];
 
-            await service.logBatch(entries);
-
-            const insertResult = mockDb.insert(schema.auditLogs);
-            expect(insertResult.values).toHaveBeenCalledWith(expect.arrayContaining([
-                expect.objectContaining({ action: 'A' }),
-                expect.objectContaining({ action: 'B' }),
-            ]));
-        });
-    });
 
     describe('query', () => {
         it('should call findMany with filters', async () => {

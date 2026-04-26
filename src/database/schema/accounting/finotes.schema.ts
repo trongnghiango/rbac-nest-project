@@ -9,6 +9,7 @@ import {
     index,
     boolean,
     pgEnum,
+    bigint,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { employees } from '../hrm/employees.schema';
@@ -28,30 +29,28 @@ export const finotes = pgTable(
         code: varchar('code', { length: 50 }).notNull().unique(),
         type: finoteTypeEnum('type').default('INCOME').notNull(),
         
-        source_org_id: integer('source_org_id').references(() => organizations.id, {
-            onDelete: 'set null',
-        }),
+        sourceOrgId: bigint('source_org_id', { mode: 'number' })
+            .references(() => organizations.id, { onDelete: 'set null' }),
 
-        requested_by_id: integer('requested_by_id')
+        requestedById: integer('requested_by_id')
             .notNull()
             .references(() => employees.id, { onDelete: 'restrict' }),
 
-        reviewer_id: integer('reviewer_id').references(() => employees.id, {
-            onDelete: 'set null',
-        }),
+        reviewerId: integer('reviewer_id')
+            .references(() => employees.id, { onDelete: 'set null' }),
 
         title: text('title').notNull(),
-        total_amount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
-        total_vat: numeric('total_vat', { precision: 15, scale: 2 }).default('0'),
+        totalAmount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
+        totalVat: numeric('total_vat', { precision: 15, scale: 2 }).default('0'),
         currency: text('currency').default('VND'),
         category: text('category'),
         description: text('description'),
         status: finoteStatusEnum('status').default('PENDING').notNull(), 
 
-        deadline_at: timestamp('deadline_at', { withTimezone: true }).notNull(),
-        paid_at: timestamp('paid_at', { withTimezone: true }),
-        created_at: timestamp('created_at').defaultNow().notNull(),
-        updated_at: timestamp('updated_at').defaultNow().notNull(),
+        deadlineAt: timestamp('deadline_at', { withTimezone: true }).notNull(),
+        paidAt: timestamp('paid_at', { withTimezone: true }),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
     }
 );
 
@@ -60,12 +59,15 @@ export const finotes = pgTable(
  */
 export const finoteItems = pgTable('finote_items', {
     id: serial('id').primaryKey(),
-    finote_id: integer('finote_id').notNull().references(() => finotes.id, { onDelete: 'cascade' }),
+    finoteId: integer('finote_id')
+        .notNull()
+        .references(() => finotes.id, { onDelete: 'cascade' }),
+    
     description: text('description').notNull(),
     amount: numeric('amount', { precision: 15, scale: 2 }).notNull(),
-    vat_rate: integer('vat_rate').default(0),
-    vat_amount: numeric('vat_amount', { precision: 15, scale: 2 }).default('0'),
-    total_amount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
+    vatRate: integer('vat_rate').default(0),
+    vatAmount: numeric('vat_amount', { precision: 15, scale: 2 }).default('0'),
+    totalAmount: numeric('total_amount', { precision: 15, scale: 2 }).notNull(),
 });
 
 /**
@@ -75,12 +77,12 @@ export const cashTransactions = pgTable('cash_transactions', {
     id: serial('id').primaryKey(),
     type: cashTransactionTypeEnum('type').notNull(),
     amount: numeric('amount', { precision: 15, scale: 2 }).notNull(),
-    transaction_date: timestamp('transaction_date', { withTimezone: true }).defaultNow().notNull(),
-    payment_method: varchar('payment_method', { length: 50 }),
-    bank_account: varchar('bank_account', { length: 100 }),
-    transaction_ref: text('transaction_ref'),
+    transactionDate: timestamp('transaction_date', { withTimezone: true }).defaultNow().notNull(),
+    paymentMethod: varchar('payment_method', { length: 50 }),
+    bankAccount: varchar('bank_account', { length: 100 }),
+    transactionRef: text('transaction_ref'),
     note: text('note'),
-    recorded_by_id: integer('recorded_by_id').references(() => employees.id),
+    recordedById: integer('recorded_by_id').references(() => employees.id),
     status: varchar('status', { length: 20 }).default('COMPLETED'),
 });
 
@@ -89,10 +91,16 @@ export const cashTransactions = pgTable('cash_transactions', {
  */
 export const finotePayments = pgTable('finote_payments', {
     id: serial('id').primaryKey(),
-    finote_id: integer('finote_id').notNull().references(() => finotes.id),
-    cash_transaction_id: integer('cash_transaction_id').notNull().references(() => cashTransactions.id),
-    amount_mapped: numeric('amount_mapped', { precision: 15, scale: 2 }).notNull(),
-    created_at: timestamp('created_at').defaultNow().notNull(),
+    finoteId: integer('finote_id')
+        .notNull()
+        .references(() => finotes.id),
+    
+    cashTransactionId: integer('cash_transaction_id')
+        .notNull()
+        .references(() => cashTransactions.id),
+    
+    amountMapped: numeric('amount_mapped', { precision: 15, scale: 2 }).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 /**
@@ -100,12 +108,15 @@ export const finotePayments = pgTable('finote_payments', {
  */
 export const billingTemplates = pgTable('billing_templates', {
     id: serial('id').primaryKey(),
-    organization_id: integer('organization_id').notNull().references(() => organizations.id),
+    organizationId: bigint('organization_id', { mode: 'number' })
+        .notNull()
+        .references(() => organizations.id),
+    
     title: text('title').notNull(),
-    base_amount: numeric('base_amount', { precision: 15, scale: 2 }).notNull(),
+    baseAmount: numeric('base_amount', { precision: 15, scale: 2 }).notNull(),
     frequency: varchar('frequency', { length: 20 }).notNull(),
-    next_billing_date: timestamp('next_billing_date').notNull(),
-    is_active: boolean('is_active').default(true),
+    nextBillingDate: timestamp('next_billing_date').notNull(),
+    isActive: boolean('is_active').default(true),
 });
 
 /**
@@ -113,28 +124,29 @@ export const billingTemplates = pgTable('billing_templates', {
  */
 export const finoteAttachments = pgTable('finote_attachments', {
     id: serial('id').primaryKey(),
-    finote_id: integer('finote_id')
+    finoteId: integer('finote_id')
         .notNull()
         .references(() => finotes.id, { onDelete: 'cascade' }),
-    file_name: text('file_name').notNull(),
-    google_drive_id: text('google_drive_id').notNull().unique(),
-    web_view_link: text('web_view_link'),
-    mime_type: text('mime_type'),
-    file_size: integer('file_size'),
-    uploaded_at: timestamp('uploaded_at').defaultNow().notNull(),
+    
+    fileName: text('file_name').notNull(),
+    googleDriveId: text('google_drive_id').notNull().unique(),
+    webViewLink: text('web_view_link'),
+    mimeType: text('mime_type'),
+    fileSize: integer('file_size'),
+    uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
 });
 
 // --- RELATIONS ---
 export const finotesRelations = relations(finotes, ({ one, many }) => ({
-    requestedBy: one(employees, { fields: [finotes.requested_by_id], references: [employees.id], relationName: 'requested' }),
+    requestedBy: one(employees, { fields: [finotes.requestedById], references: [employees.id], relationName: 'requested' }),
     items: many(finoteItems),
     payments: many(finotePayments),
     attachments: many(finoteAttachments),
-    organization: one(organizations, { fields: [finotes.source_org_id], references: [organizations.id] }),
+    organization: one(organizations, { fields: [finotes.sourceOrgId], references: [organizations.id] }),
 }));
 
 export const finoteItemsRelations = relations(finoteItems, ({ one }) => ({
-    finote: one(finotes, { fields: [finoteItems.finote_id], references: [finotes.id] }),
+    finote: one(finotes, { fields: [finoteItems.finoteId], references: [finotes.id] }),
 }));
 
 export const cashTransactionsRelations = relations(cashTransactions, ({ many }) => ({
@@ -142,10 +154,10 @@ export const cashTransactionsRelations = relations(cashTransactions, ({ many }) 
 }));
 
 export const finotePaymentsRelations = relations(finotePayments, ({ one }) => ({
-    finote: one(finotes, { fields: [finotePayments.finote_id], references: [finotes.id] }),
-    transaction: one(cashTransactions, { fields: [finotePayments.cash_transaction_id], references: [cashTransactions.id] }),
+    finote: one(finotes, { fields: [finotePayments.finoteId], references: [finotes.id] }),
+    transaction: one(cashTransactions, { fields: [finotePayments.cashTransactionId], references: [cashTransactions.id] }),
 }));
 
 export const finoteAttachmentsRelations = relations(finoteAttachments, ({ one }) => ({
-    finote: one(finotes, { fields: [finoteAttachments.finote_id], references: [finotes.id] }),
+    finote: one(finotes, { fields: [finoteAttachments.finoteId], references: [finotes.id] }),
 }));

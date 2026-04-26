@@ -6,20 +6,20 @@ export class AssignmentMapper {
         if (!raw) return null;
         return new ServiceAssignment(
             raw.id,
-            raw.organization_id,
-            raw.employee_id,
+            raw.organizationId,
+            raw.employeeId,
             raw.role,
-            raw.assigned_at,
+            raw.assignedAt,
         );
     }
 
     static toPersistence(domain: ServiceAssignment) {
         return {
             id: domain.id,
-            organization_id: domain.organizationId,
-            employee_id: domain.employeeId,
+            organizationId: domain.organizationId,
+            employeeId: domain.employeeId,
             role: domain.role,
-            assigned_at: domain.assignedAt,
+            assignedAt: domain.assignedAt,
         };
     }
 }

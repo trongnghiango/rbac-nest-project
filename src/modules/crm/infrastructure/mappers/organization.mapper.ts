@@ -6,11 +6,11 @@ export class OrganizationMapper {
         // Quan trọng: Phải map từ snake_case của DB sang camelCase của Entity
         return new Organization({
             id: raw.id,
-            companyName: raw.company_name, // Map ở đây
-            taxCode: raw.tax_code,         // Map ở đây
+            companyName: raw.companyName, // Map ở đây
+            taxCode: raw.taxCode,         // Map ở đây
             type: raw.type as OrganizationType,
             status: raw.status as OrganizationStatus,
-            isInternal: raw.is_internal,
+            isInternal: raw.isInternal,
             industry: raw.industry,
             website: raw.website,
             address: raw.address,
@@ -21,11 +21,11 @@ export class OrganizationMapper {
     static toPersistence(domain: Organization) {
         return {
             id: domain.id,
-            company_name: domain.companyName,
-            tax_code: domain.taxCode,
+            companyName: domain.companyName,
+            taxCode: domain.taxCode,
             type: domain.type,
             status: domain.status,
-            is_internal: domain.isInternal,
+            isInternal: domain.isInternal,
             industry: domain.industry,
             website: domain.website,
             address: domain.address,

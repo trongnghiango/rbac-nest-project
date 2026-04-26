@@ -6,23 +6,23 @@ import { employees } from '../hrm/employees.schema';
 
 export const serviceAssignments = pgTable('service_assignments', {
     id: serial('id').primaryKey(),
-    organization_id: integer('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
-    employee_id: integer('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
+    organizationId: integer('organization_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    employeeId: integer('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
 
     role: text('role').notNull(), // LEADER, CHUYEN_VIEN_B1, TRO_LY...
 
-    assigned_at: timestamp('assigned_at').defaultNow().notNull(),
+    assignedAt: timestamp('assigned_at').defaultNow().notNull(),
 }, (table) => ({
-    org_idx: index('idx_service_assignments_org').on(table.organization_id),
+    org_idx: index('idx_service_assignments_org').on(table.organizationId),
 }));
 
 export const serviceAssignmentsRelations = relations(serviceAssignments, ({ one }) => ({
     organization: one(organizations, {
-        fields: [serviceAssignments.organization_id],
+        fields: [serviceAssignments.organizationId],
         references: [organizations.id],
     }),
     employee: one(employees, {
-        fields: [serviceAssignments.employee_id],
+        fields: [serviceAssignments.employeeId],
         references: [employees.id],
     }),
 }));

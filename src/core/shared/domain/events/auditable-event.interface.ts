@@ -18,7 +18,7 @@ import { IDomainEvent } from './domain-event.interface';
  *     return {
  *       action: 'LEAD.STAGE_CHANGED',
  *       resource: 'leads',
- *       resource_id: this.aggregateId,
+ *       resourceId: this.aggregateId,
  *       before: { stage: this.payload.oldStage },
  *       after: { stage: this.payload.newStage },
  *     };
@@ -28,18 +28,18 @@ import { IDomainEvent } from './domain-event.interface';
 export interface IAuditableEvent extends IDomainEvent {
     /**
      * Convert event thành AuditEntry để ghi DB.
-     * Handler sẽ merge thêm actor_id, actor_ip, request_id từ request context.
+     * Handler sẽ merge thêm actorId, actor_ip, request_id từ request context.
      */
     toAuditEntry(): AuditEntryPayload;
 }
 
 /**
- * Partial entry — handler sẽ enrich thêm WHO context (actor_id, ip, request_id)
+ * Partial entry — handler sẽ enrich thêm WHO context (actorId, ip, request_id)
  */
 export interface AuditEntryPayload {
     action: string;           // e.g. 'LEAD.STAGE_CHANGED'
     resource: string;         // table/entity name
-    resource_id?: string;     // entity PK as string
+    resourceId?: string;     // entity PK as string
     before?: Record<string, any> | null;
     after?: Record<string, any> | null;
     severity?: 'INFO' | 'WARN' | 'CRITICAL';

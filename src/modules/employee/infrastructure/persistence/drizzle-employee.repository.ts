@@ -18,7 +18,7 @@ export class DrizzleEmployeeRepository extends DrizzleBaseRepository implements 
         let result;
         if (data.id) {
             const [updated] = await db.update(employees)
-                .set({ ...data, updated_at: new Date() })
+                .set({ ...data, updatedAt: new Date() })
                 .where(eq(employees.id, data.id))
                 .returning();
             result = updated;

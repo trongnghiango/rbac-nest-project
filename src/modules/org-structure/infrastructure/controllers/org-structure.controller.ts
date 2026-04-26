@@ -73,7 +73,7 @@ export class OrgStructureController {
         @CurrentUser() user: User,
     ) {
         // Tự động lấy ID Công ty của người tạo truyền xuống Service
-        const orgId = user.profileContext?.employee?.organization_id;
+        const orgId = user.profileContext?.employee?.organizationId;
 
         if (!orgId) {
             throw new BadRequestException('Tài khoản của bạn chưa thuộc tổ chức nào, không thể tạo phòng ban!');

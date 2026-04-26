@@ -18,15 +18,15 @@ export class DrizzleServiceAssignmentRepository extends DrizzleBaseRepository im
 
         // 1. Xóa cũ
         await db.delete(schema.serviceAssignments)
-            .where(eq(schema.serviceAssignments.organization_id, orgId));
+            .where(eq(schema.serviceAssignments.organizationId, orgId));
 
         // 2. Chèn mới
         if (assignments.length > 0) {
             const dataToInsert = assignments.map(a => ({
-                organization_id: orgId,
-                employee_id: a.employeeId,
+                organizationId: orgId,
+                employeeId: a.employeeId,
                 role: a.role,
-                assigned_at: new Date(),
+                assignedAt: new Date(),
             }));
             await db.insert(schema.serviceAssignments).values(dataToInsert as any);
         }

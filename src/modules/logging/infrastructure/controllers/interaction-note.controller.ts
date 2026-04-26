@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Get, Inject, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Inject, ParseIntPipe } from '@nestjs/common';
 import { INTERACTION_NOTE_PORT, IInteractionNoteService } from '@core/shared/application/ports/interaction-note.port';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
@@ -13,13 +13,13 @@ export class InteractionNoteController {
     @ApiOperation({ summary: 'Thêm ghi chú tương tác thủ công cho doanh nghiệp' })
     async createNote(
         @Param('orgId', ParseIntPipe) orgId: number,
-        @Body() body: { content: string, type?: string, metadata?: any }
+        @Body() dto: { content: string, type?: string, metadata?: any }
     ) {
         return this.noteService.create({
-            organization_id: orgId,
-            content: body.content,
-            type: body.type,
-            metadata: body.metadata,
+            organizationId: orgId,
+            content: dto.content,
+            type: dto.type,
+            metadata: dto.metadata,
         });
     }
 

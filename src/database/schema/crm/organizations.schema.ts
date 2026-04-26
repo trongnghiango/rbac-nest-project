@@ -16,12 +16,12 @@ export const organizations = pgTable(
     'organizations',
     {
         id: serial('id').primaryKey(),
-        user_id: bigint('user_id', { mode: 'number' }).unique().references(() => users.id, { onDelete: 'set null' }),
+        userId: bigint('user_id', { mode: 'number' }).unique().references(() => users.id, { onDelete: 'set null' }),
 
-        is_internal: boolean('is_internal').default(false).notNull(),
+        isInternal: boolean('is_internal').default(false).notNull(),
 
-        company_name: text('company_name').notNull(),
-        tax_code: text('tax_code').unique(),
+        companyName: text('company_name').notNull(),
+        taxCode: text('tax_code').unique(),
 
         type: organizationTypeEnum('type').default('INDIVIDUAL').notNull(),
         industry: text('industry'),
@@ -31,18 +31,18 @@ export const organizations = pgTable(
         status: organizationStatusEnum('status').default('PROSPECT').notNull(),
         note: text('note'),
         metadata: jsonb('metadata'),
-        created_at: timestamp('created_at').defaultNow().notNull(),
-        updated_at: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
     },
     (table) => ({
         status_idx: index('idx_organizations_status').on(table.status),
-        internal_idx: index('idx_organizations_internal').on(table.is_internal),
+        internal_idx: index('idx_organizations_internal').on(table.isInternal),
     }),
 );
 
 export const organizationsRelations = relations(organizations, ({ one, many }) => ({
     user: one(users, {
-        fields: [organizations.user_id],
+        fields: [organizations.userId],
         references: [users.id],
     }),
     contacts: many(contacts),

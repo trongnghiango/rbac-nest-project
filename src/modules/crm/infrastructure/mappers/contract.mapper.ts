@@ -6,30 +6,30 @@ export class ContractMapper {
         if (!raw) return null;
         return new Contract({
             id: raw.id,
-            organizationId: raw.organization_id,
-            leadId: raw.lead_id,
-            contractNumber: raw.contract_number,
+            organizationId: raw.organizationId,
+            leadId: raw.leadId,
+            contractNumber: raw.contractNumber,
             title: raw.title,
-            contractType: raw.contract_type as ContractType,
+            contractType: raw.type as ContractType,
             status: raw.status as ContractStatus,
             value: Number(raw.value),
             currency: raw.currency,
-            signedAt: raw.signed_at,
+            signedAt: raw.signedAt,
         });
     }
 
     static toPersistence(domain: Contract) {
         return {
             id: domain.id,
-            organization_id: domain.organizationId,
-            lead_id: domain.leadId,
-            contract_number: domain.contractNumber,
+            organizationId: domain.organizationId,
+            leadId: domain.leadId,
+            contractNumber: domain.contractNumber,
             title: domain.title,
-            contract_type: domain.contractType,
+            type: domain.contractType,
             status: domain.status,
             value: domain.value.toString(),
             currency: domain.currency,
-            signed_at: domain.signedAt,
+            signedAt: domain.signedAt,
         };
     }
 }

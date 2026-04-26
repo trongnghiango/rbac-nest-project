@@ -7,27 +7,27 @@ export class ContactMapper {
 
         return new Contact({
             id: raw.id,
-            organizationId: raw.organization_id,
-            fullName: raw.full_name,
+            organizationId: raw.organizationId,
+            fullName: raw.fullName,
             phone: raw.phone,
             email: raw.email,
-            position: raw.job_title,
-            isMain: raw.is_primary,
-            createdAt: raw.created_at,
-            updatedAt: raw.updated_at,
+            position: raw.jobTitle,
+            isMain: raw.isPrimary,
+            createdAt: raw.createdAt,
+            updatedAt: raw.updatedAt,
         });
     }
 
     static toPersistence(domain: Contact): any {
         return {
             id: domain.id,
-            organization_id: domain.organizationId,
-            full_name: domain.fullName,
+            organizationId: domain.organizationId,
+            fullName: domain.fullName,
             phone: domain.phone,
             email: domain.email,
-            job_title: domain.position,
-            is_primary: domain.isMain,
-            updated_at: new Date(),
+            jobTitle: domain.position,
+            isPrimary: domain.isMain,
+            updatedAt: new Date(),
         };
     }
 }

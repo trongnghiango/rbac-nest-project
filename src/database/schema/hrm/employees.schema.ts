@@ -19,10 +19,13 @@ export const employees = pgTable('employees', {
     id: serial('id').primaryKey(),
 
     // Neo Nhân viên này thuộc Công ty nào?
-    organization_id: integer('organization_id').notNull().references(() => organizations.id),
+    organizationId: bigint('organization_id', { mode: 'number' })
+        .notNull()
+        .references(() => organizations.id),
+
     userId: bigint('user_id', { mode: 'number' })
-        .unique() // Vẫn giữ unique để 1 User chỉ map 1 Employee
-        .references(() => users.id, { onDelete: 'set null' }), // Đổi cascade thành set null để khi xóa User, hồ sơ NV vẫn còn
+        .unique() 
+        .references(() => users.id, { onDelete: 'set null' }), 
 
     employeeCode: text('employee_code').notNull().unique(), // VD: 001, 007
     fullName: text('full_name').notNull(),
@@ -66,7 +69,7 @@ export const performanceReviews = pgTable('performance_reviews', {
 // --- RELATIONS ---
 export const employeesRelations = relations(employees, ({ one, many }) => ({
     organization: one(organizations, {
-        fields: [employees.organization_id],
+        fields: [employees.organizationId],
         references: [organizations.id]
     }),
     user: one(users, { fields: [employees.userId], references: [users.id] }),
@@ -93,4 +96,3 @@ export const performanceReviewsRelations = relations(performanceReviews, ({ one 
     reviewer: one(employees, { fields: [performanceReviews.reviewerId], references: [employees.id] }),
     proposedPosition: one(positions, { fields: [performanceReviews.proposedPositionId], references: [positions.id] }),
 }));
-

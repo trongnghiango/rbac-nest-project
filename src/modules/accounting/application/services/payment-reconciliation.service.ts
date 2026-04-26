@@ -81,9 +81,9 @@ export class PaymentReconciliationService {
                 this.auditLog.log({
                     action: 'PAYMENT.ALLOCATED',
                     resource: 'finotes',
-                    resource_id: finote.id?.toString(),
-                    organization_id: finote.sourceOrgId,
-                    actor_id: transactionData.recordedBy,
+                    resourceId: finote.id?.toString(),
+                    organizationId: finote.sourceOrgId,
+                    actorId: transactionData.recordedBy,
                     metadata: {
                         cashTransactionId: savedCashTx.id,
                         amount: allocation.amount,

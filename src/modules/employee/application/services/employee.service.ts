@@ -54,7 +54,7 @@ export class EmployeeService {
                 email: dto.email,
                 username: finalUsername,
                 fullName: employee.fullName,
-                organizationId: employee.organizationId, // FIX 2: Sửa organization_id thành organizationId
+                organizationId: employee.organizationId, // FIX 2: Sửa organizationId thành organizationId
             }),
         );
 

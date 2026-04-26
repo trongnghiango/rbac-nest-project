@@ -29,7 +29,7 @@ export class CompanyImportController {
         if (!file.originalname.endsWith('.csv')) throw new BadRequestException('Chỉ chấp nhận định dạng .csv');
 
         // Lấy organizationId từ profileContext của người đang upload (Admin)
-        const organizationId = admin.profileContext?.employee?.organization_id;
+        const organizationId = admin.profileContext?.employee?.organizationId;
 
         if (!organizationId) {
             throw new BadRequestException('Tài khoản của bạn chưa được liên kết với bất kỳ công ty nào, không thể upload file nhân sự!');

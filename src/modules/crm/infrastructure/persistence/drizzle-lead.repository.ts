@@ -30,7 +30,7 @@ export class DrizzleLeadRepository extends DrizzleBaseRepository implements ILea
 
     async updateStage(id: number, stage: LeadStage): Promise<void> {
         await this.getDb().update(schema.leads)
-            .set({ stage: stage as any, updated_at: new Date() })
+            .set({ status: stage as any, updatedAt: new Date() })
             .where(eq(schema.leads.id, id));
     }
 }

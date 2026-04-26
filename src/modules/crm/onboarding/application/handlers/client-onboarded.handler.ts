@@ -27,9 +27,9 @@ export class ClientOnboardedHandler implements OnModuleInit {
             await this.auditLog.log({
                 action: 'ONBOARDING.BILLING_INIT',
                 resource: 'organizations',
-                resource_id: orgId.toString(),
-                organization_id: orgId,
-                actor_name: 'ONBOARDING_ENGINE',
+                resourceId: orgId.toString(),
+                organizationId: orgId,
+                actorName: 'ONBOARDING_ENGINE',
                 metadata: { contractId, step: 'AUTO_BILLING' }
             });
 
@@ -40,9 +40,9 @@ export class ClientOnboardedHandler implements OnModuleInit {
             await this.auditLog.log({
                 action: 'ONBOARDING.COMPLETED',
                 resource: 'organizations',
-                resource_id: orgId.toString(),
-                organization_id: orgId,
-                actor_name: 'ONBOARDING_ENGINE',
+                resourceId: orgId.toString(),
+                organizationId: orgId,
+                actorName: 'ONBOARDING_ENGINE',
                 metadata: { status: 'SUCCESS' }
             });
 

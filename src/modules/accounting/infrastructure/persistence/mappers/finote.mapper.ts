@@ -10,13 +10,13 @@ export class FinoteMapper {
             id: raw.id,
             code: raw.code,
             type: raw.type,
-            sourceOrgId: raw.source_org_id,
-            requestedById: raw.requested_by_id,
-            reviewerId: raw.reviewer_id,
+            sourceOrgId: raw.sourceOrgId,
+            requestedById: raw.requestedById,
+            reviewerId: raw.reviewerId,
             title: raw.title,
             // Sử dụng totalAmount thay cho amount cũ
-            totalAmount: new Money(Math.round(Number(raw.total_amount || 0))),
-            totalVat: new Money(Math.round(Number(raw.total_vat || 0))),
+            totalAmount: new Money(Math.round(Number(raw.totalAmount || 0))),
+            totalVat: new Money(Math.round(Number(raw.totalVat || 0))),
             currency: raw.currency || 'VND',
             category: raw.category,
             description: raw.description,
@@ -24,8 +24,8 @@ export class FinoteMapper {
             deadlineAt: new Date(raw.deadline_at),
             // Hệ thống mới gạch nợ qua payments, nhưng ta vẫn giữ paidAmount để tương thích
             paidAmount: new Money(Math.round(Number(raw.paid_amount || 0))),
-            createdAt: raw.created_at,
-            updatedAt: raw.updated_at,
+            createdAt: raw.createdAt,
+            updatedAt: raw.updatedAt,
         });
     }
 
@@ -33,18 +33,18 @@ export class FinoteMapper {
         const data: any = {
             code: domain.code,
             type: domain.type,
-            source_org_id: domain.sourceOrgId,
-            requested_by_id: domain.requestedById,
-            reviewer_id: domain.reviewerId,
+            sourceOrgId: domain.sourceOrgId,
+            requestedById: domain.requestedById,
+            reviewerId: domain.reviewerId,
             title: domain.title,
-            total_amount: domain.totalAmount.getAmount().toString(),
-            total_vat: domain.totalVat.getAmount().toString(),
+            totalAmount: domain.totalAmount.getAmount().toString(),
+            totalVat: domain.totalVat.getAmount().toString(),
             currency: domain.totalAmount.getCurrency(),
             category: domain.category,
             description: domain.description,
             status: domain.status,
             deadline_at: domain.deadlineAt,
-            updated_at: new Date(),
+            updatedAt: new Date(),
         };
 
         if (domain.id) {

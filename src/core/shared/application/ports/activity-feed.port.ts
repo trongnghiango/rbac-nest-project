@@ -1,35 +1,30 @@
-import { InteractionNoteRecord } from './interaction-note.port';
-
 export const ACTIVITY_FEED_PORT = Symbol('ACTIVITY_FEED_PORT');
 
-export interface ActivityItem {
-    id: string | number;
-    timestamp: Date;
-    type: 'SYSTEM_AUDIT' | 'HUMAN_NOTE';
-    actor: {
-        id: number | null;
-        name: string;
-    };
+export interface ActivityFeedItem {
+    id: number;
     action: string;
-    displayText: string;
-    severity: 'INFO' | 'WARN' | 'ERROR';
-    metadata?: any;
-    reference?: {
-        type: string;
-        id: string | number;
-    };
+    resource: string;
+    resourceId?: string;
+    organizationId?: number;
+    actorId: string | number;
+    actorName: string;
+    content?: string;
+    metadata?: Record<string, any>;
+    severity: string;
+    createdAt: Date;
 }
 
-export interface ActivityFeedQuery {
+export interface GetTimelineQuery {
     organizationId: number;
     page?: number;
     limit?: number;
-    type?: 'SYSTEM_AUDIT' | 'HUMAN_NOTE';
+}
+
+export interface ActivityFeedResponse {
+    items: ActivityFeedItem[];
+    total?: number;
 }
 
 export interface IActivityFeedService {
-    getTimeline(query: ActivityFeedQuery): Promise<{
-        items: ActivityItem[];
-        total: number;
-    }>;
+    getTimeline(query: GetTimelineQuery): Promise<ActivityFeedResponse>;
 }

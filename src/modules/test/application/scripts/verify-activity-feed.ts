@@ -1,52 +1,53 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from '../../../../bootstrap/app.module';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ACTIVITY_FEED_PORT, IActivityFeedService } from '@core/shared/application/ports/activity-feed.port';
-import { INTERACTION_NOTE_PORT, IInteractionNoteService } from '@core/shared/application/ports/interaction-note.port';
-import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports/audit-log.port';
+import { AUDIT_LOG_PORT, IAuditLogService, AuditLogSeverity } from '@core/shared/application/ports/audit-log.port';
 
-async function bootstrap() {
-    const app = await NestFactory.createApplicationContext(AppModule);
-    const activityFeedService = app.get<IActivityFeedService>(ACTIVITY_FEED_PORT);
-    const noteService = app.get<IInteractionNoteService>(INTERACTION_NOTE_PORT);
-    const auditLogService = app.get<IAuditLogService>(AUDIT_LOG_PORT);
+@Injectable()
+export class VerifyActivityFeedScript {
+    private readonly logger = new Logger(VerifyActivityFeedScript.name);
 
-    const ORG_ID = 20; // Dùng Org ID có sẵn từ migration
+    constructor(
+        @Inject(ACTIVITY_FEED_PORT) private readonly activityFeedService: IActivityFeedService,
+        @Inject(AUDIT_LOG_PORT) private readonly auditLogService: IAuditLogService
+    ) {}
 
-    console.log('--- 🛡️ VERIFY ACTIVITY FEED ENGINE ---');
+    async run(orgId: number) {
+        this.logger.log(`🚀 Bắt đầu kiểm chứng Activity Feed cho Org: ${orgId}`);
 
-    // 1. Tạo một Audit Log mẫu (Đã có organization_id)
-    console.log('\n1. Ghi Audit Log mẫu...');
-    await auditLogService.log({
-        action: 'TEST.ACTIVITY_CHECK',
-        resource: 'organizations',
-        resource_id: ORG_ID.toString(),
-        organization_id: ORG_ID,
-        actor_name: 'Antigravity AI',
-        metadata: { info: 'Kiểm tra tính năng timeline' }
-    });
+        // 1. Tạo một hành động giả để test
+        await this.auditLogService.log({
+            action: 'TEST.ACTIVITY_CHECK',
+            resource: 'leads',
+            resourceId: '999',
+            organizationId: orgId,
+            actorId: 'SYSTEM',
+            actorName: 'Verify Script',
+            severity: AuditLogSeverity.INFO,
+            metadata: { info: 'Kiểm tra tính năng timeline' }
+        });
 
-    // 2. Tạo một Interaction Note thủ công
-    console.log('2. Thêm Interaction Note thủ công...');
-    await noteService.create({
-        organization_id: ORG_ID,
-        type: 'CALL',
-        content: 'Đã gọi điện cho khách hàng lúc 10h sáng. Khách đồng ý xem báo giá.',
-        metadata: { duration: '5m' }
-    });
+        this.logger.debug('Đã ghi log test, đang chờ 1s để DB cập nhật...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // 3. Truy vấn Timeline hội tụ
-    console.log('3. Truy vấn Timeline hội tụ (Omnichannel)...');
-    const timeline = await activityFeedService.getTimeline({ organizationId: ORG_ID });
+        // 2. Lấy timeline
+        const result = await this.activityFeedService.getTimeline({
+            organizationId: orgId,
+            page: 1,
+            limit: 20
+        });
 
-    console.log(`\n✅ Kết quả: Tìm thấy ${timeline.items.length} hoạt động.`);
-    
-    timeline.items.forEach((item, index) => {
-        const typeIcon = item.type === 'SYSTEM_AUDIT' ? '🤖' : '👤';
-        console.log(`   [${index + 1}] ${typeIcon} [${item.timestamp.toISOString()}] ${item.actor.name}: ${item.displayText}`);
-    });
+        console.log(`\n✅ Kết quả: Tìm thấy ${result.items.length} hoạt động.`);
+        
+        result.items.forEach((item, index) => {
+            console.log(`   [${index + 1}] [${item.action}] ${item.action} at ${item.createdAt}`);
+        });
 
-    console.log('\n--- VERIFICATION COMPLETED ---');
-    await app.close();
+        if (result.items.length > 0) {
+            this.logger.log('✅ Activity Feed hoạt động tốt!');
+            return true;
+        }
+
+        this.logger.error('❌ Không tìm thấy hoạt động nào trong timeline.');
+        return false;
+    }
 }
-
-bootstrap();

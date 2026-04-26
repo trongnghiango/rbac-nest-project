@@ -128,7 +128,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const fieldMap: Record<string, string> = {
       email: 'Email',
       username: 'Tên đăng nhập',
-      employee_code: 'Mã nhân viên',
+      employeeCode: 'Mã nhân viên',
     };
 
     return `${fieldMap[field] || field} này đã tồn tại trên hệ thống.`;

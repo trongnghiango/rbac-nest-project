@@ -26,7 +26,7 @@ export class EmployeeController {
         @Body() dto: CreateEmployeeRequestDto,
         @CurrentUser() user: User
     ): Promise<EmployeeResponseDto> {
-        const orgId = user.profileContext?.employee?.organization_id || 1;
+        const orgId = user.profileContext?.employee?.organizationId || 1;
 
         if (!orgId) {
             throw new BadRequestException('Tài khoản của bạn chưa được liên kết với Công ty nào.');

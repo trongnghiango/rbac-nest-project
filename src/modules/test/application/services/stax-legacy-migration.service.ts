@@ -60,7 +60,7 @@ export class StaxLegacyMigrationService {
 
                     // Bước C: Tạo thực thể Employee
                     await tx.insert(schema.employees).values({
-                        organization_id: staxOrgId,
+                        organizationId: staxOrgId,
                         userId: userId,
                         employeeCode: row.maNv,
                         fullName: row.ten,

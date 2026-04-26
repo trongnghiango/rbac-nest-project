@@ -40,8 +40,9 @@ export class UserAccountService implements IUserAccountService {
         this.auditLog.log({
             action: 'USER.PROVISIONED',
             resource: 'users',
-            resource_id: savedUser.id.toString(),
-            actor_name: 'SYSTEM (USER_PROVISION)',
+            resourceId: savedUser.id.toString(),
+            actorId: 'SYSTEM',
+            actorName: 'SYSTEM (USER_PROVISION)',
             metadata: { username: savedUser.username, email: savedUser.email, roles: props.roles },
             severity: 'INFO'
         });

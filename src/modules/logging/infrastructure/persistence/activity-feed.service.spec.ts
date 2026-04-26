@@ -40,8 +40,8 @@ describe('ActivityFeedService (Unit Test)', () => {
                 id: 1,
                 action: 'LEAD.CLOSE_WON',
                 resource: 'leads',
-                actor_name: 'Robot SQL',
-                created_at: new Date(now.getTime() - 10000) // 10 giây trước
+                actorName: 'Robot SQL',
+                createdAt: new Date(now.getTime() - 10000) // 10 giây trước
             }
         ]);
 
@@ -51,8 +51,8 @@ describe('ActivityFeedService (Unit Test)', () => {
                 id: 10,
                 type: 'CALL',
                 content: 'Ghi chú mới nhất',
-                actor_id: 1,
-                created_at: now // Hiện tại
+                actorId: 1,
+                createdAt: now // Hiện tại
             }
         ]);
 
@@ -60,13 +60,13 @@ describe('ActivityFeedService (Unit Test)', () => {
         const result = await service.getTimeline({ organizationId: ORG_ID });
 
         // 4. Kiểm chứng
-        expect(result.items).toHaveLength(2);
+        expect(result).toHaveLength(2);
         // Phần tử đầu tiên phải là "Ghi chú mới nhất" (vì thời gian mới hơn)
-        expect(result.items[0].type).toBe('HUMAN_NOTE');
-        expect(result.items[0].displayText).toContain('Ghi chú mới nhất');
+        expect(result[0].type).toBe('HUMAN_NOTE');
+        expect(result[0].action).toContain('Ghi chú mới nhất');
         
         // Phần tử thứ 2 là Log hệ thống
-        expect(result.items[1].type).toBe('SYSTEM_AUDIT');
-        expect(result.items[1].action).toBe('LEAD.CLOSE_WON');
+        expect(result[1].type).toBe('SYSTEM_AUDIT');
+        expect(result[1].action).toBe('LEAD.CLOSE_WON');
     });
 });

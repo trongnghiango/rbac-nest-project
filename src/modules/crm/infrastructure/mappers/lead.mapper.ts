@@ -10,7 +10,7 @@ export class LeadMapper {
 
         return new Lead({
             id: raw.id,
-            organizationId: raw.organization_id,
+            organizationId: raw.organizationId,
             contactId: raw.contact_id,
             assignedToId: raw.assigned_to_id,
             createdById: raw.created_by_id,
@@ -23,8 +23,8 @@ export class LeadMapper {
             expectedCloseDate: raw.expected_close_date,
             closedAt: raw.closed_at,
             lostReason: raw.lost_reason,
-            createdAt: raw.created_at,
-            updatedAt: raw.updated_at,
+            createdAt: raw.createdAt,
+            updatedAt: raw.updatedAt,
         });
     }
 
@@ -34,7 +34,7 @@ export class LeadMapper {
     static toPersistence(domain: Lead): any {
         return {
             id: domain.id,
-            organization_id: domain.organizationId,
+            organizationId: domain.organizationId,
             contact_id: domain.contactId,
             assigned_to_id: domain.assignedToId,
             created_by_id: domain.createdById,
@@ -47,8 +47,8 @@ export class LeadMapper {
             expected_close_date: domain.expectedCloseDate,
             closed_at: domain.closedAt,
             lost_reason: domain.lostReason,
-            created_at: domain.createdAt,
-            updated_at: domain.updatedAt,
+            createdAt: domain.createdAt,
+            updatedAt: domain.updatedAt,
         };
     }
 }

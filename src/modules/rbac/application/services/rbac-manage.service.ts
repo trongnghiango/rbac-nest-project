@@ -31,8 +31,8 @@ export class RbacManageService implements IRbacManageService {
         this.auditLog.log({
             action: 'RBAC.ROLE_ASSIGNED',
             resource: 'users',
-            resource_id: userId.toString(),
-            actor_id: assignedBy,
+            resourceId: userId.toString(),
+            actorId: assignedBy,
             metadata: { roleName, roleId: role.id },
             severity: 'WARN' // Role assignment là hành động quan trọng
         });

@@ -54,15 +54,15 @@ export class DatabaseSeeder implements OnModuleInit {
 
   private async seedStaxOrganization(): Promise<number> {
     let staxOrg = await this.db.query.organizations.findFirst({
-      where: eq(schema.organizations.is_internal, true)
+      where: eq(schema.organizations.isInternal, true)
     });
 
     if (!staxOrg) {
       const [newStax] = await this.db.insert(schema.organizations).values({
-        company_name: 'STAX ENTERPRISE',
-        tax_code: 'STAX-MASTER',
+        companyName: 'STAX ENTERPRISE',
+        taxCode: 'STAX-MASTER',
         type: 'ENTERPRISE',
-        is_internal: true,
+        isInternal: true,
         status: 'ACTIVE'
       }).returning();
       this.logger.log(` - 🏢 Khởi tạo Master Organization (STAX) thành công! ID: ${newStax.id}`);
@@ -92,11 +92,11 @@ export class DatabaseSeeder implements OnModuleInit {
         .returning({ id: schema.users.id });
       userId = newUser.id;
 
-      // FIX LỖI TẠI ĐÂY: Truyền organization_id vào
+      // FIX LỖI TẠI ĐÂY: Truyền organizationId vào
       await this.db
         .insert(schema.employees)
         .values({
-          organization_id: staxOrgId,
+          organizationId: staxOrgId,
           userId: userId,
           employeeCode: 'ADMIN-001',
           fullName: 'Super Admin',

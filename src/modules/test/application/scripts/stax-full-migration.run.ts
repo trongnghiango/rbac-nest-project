@@ -25,7 +25,7 @@ async function bootstrap() {
     try {
         // 1. Lấy STAX Organization ID (Anchor)
         const staxOrg = await db.query.organizations.findFirst({
-            where: eq(schema.organizations.is_internal, true)
+            where: eq(schema.organizations.isInternal, true)
         });
 
         if (!staxOrg) {

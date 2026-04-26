@@ -2,23 +2,24 @@ export const INTERACTION_NOTE_PORT = Symbol('INTERACTION_NOTE_PORT');
 
 export interface InteractionNoteRecord {
     id: number;
-    organization_id: number;
-    created_by_id: number | null;
+    organizationId: number;
+    createdById: number | null;
     type: string;
     content: string;
-    metadata?: any;
-    created_at: Date;
-    updated_at: Date;
+    metadata?: Record<string, any>;
+    createdAt: Date;
+    updatedAt: Date;
 }
 
 export interface CreateInteractionNoteCommand {
-    organization_id: number;
+    organizationId: number;
+    createdById?: number;
     type?: string;
     content: string;
-    metadata?: any;
+    metadata?: Record<string, any>;
 }
 
 export interface IInteractionNoteService {
     create(command: CreateInteractionNoteCommand): Promise<InteractionNoteRecord>;
-    findByOrganization(organization_id: number): Promise<InteractionNoteRecord[]>;
+    findByOrganization(organizationId: number): Promise<InteractionNoteRecord[]>;
 }

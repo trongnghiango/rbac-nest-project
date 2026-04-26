@@ -56,12 +56,12 @@ describe('ClientOnboardedHandler (Unit Test)', () => {
         // 4. Kiểm chứng: Audit Log phải được gọi ít nhất 2 lần (Billing Init & Completed)
         expect(mockAuditLog.log).toHaveBeenCalledWith(expect.objectContaining({
             action: 'ONBOARDING.BILLING_INIT',
-            organization_id: 20
+            organizationId: 20
         }));
 
         expect(mockAuditLog.log).toHaveBeenCalledWith(expect.objectContaining({
             action: 'ONBOARDING.COMPLETED',
-            organization_id: 20
+            organizationId: 20
         }));
     });
 });

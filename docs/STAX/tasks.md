@@ -119,4 +119,8 @@ Làm xong bước này, bạn sẽ không cần dùng chuột để kéo thả t
 *   Nhờ có **Milestones**, bạn luôn biết mình có đang đi đúng tiến độ của Giai đoạn 1 hay không (Nó có thanh Progress bar xanh lá cây hiển thị % hoàn thành rất đẹp).
 *   Nếu khách hàng STAX muốn xem tiến độ, hãy gửi cho họ đường link của bảng Project này (Nhớ set quyền ở mức Read). Họ vào xem sẽ thấy bạn làm việc bài bản như một tập đoàn công nghệ lớn.
 
-Hãy thực hành setup ngay bây giờ với 1 Issue test thử, bạn sẽ ghiền cách làm việc này ngay lập tức! Chúc bạn làm chủ dự án thành công.
+Hãy thực hành setup ngay bây giờ với 1 Issue test thử, bạn sẽ ghiền cách làm việc này ngay lập tức! Chúc bạn làm chủ dự án thành công.- [x] Standardize Peripheral Schemas (rbac, finotes, employees, notifications)
+- [x] Execute Mass Clean Up (fix legacy snake_case)
+- [x] Resolve Edge Cases and Compilation Errors (Mappers, Test scripts)
+- [x] Validation (0 compilation errors, fix MODULE_NOT_FOUND)
+

@@ -22,7 +22,8 @@ export class DrizzleInteractionNoteService extends DrizzleBaseRepository impleme
         const db = this.getDb();
         
         const [result] = await db.insert(schema.interactionNotes).values({
-            organization_id: command.organization_id,
+            organizationId: command.organizationId,
+            createdById: command.createdById,
             type: command.type || 'NOTE',
             content: command.content,
             metadata: command.metadata,
@@ -31,11 +32,11 @@ export class DrizzleInteractionNoteService extends DrizzleBaseRepository impleme
         return result as InteractionNoteRecord;
     }
 
-    async findByOrganization(organization_id: number): Promise<InteractionNoteRecord[]> {
+    async findByOrganization(organizationId: number): Promise<InteractionNoteRecord[]> {
         const db = this.getDb();
         return await db.query.interactionNotes.findMany({
-            where: eq(schema.interactionNotes.organization_id, organization_id),
-            orderBy: [desc(schema.interactionNotes.created_at)],
+            where: eq(schema.interactionNotes.organizationId, organizationId),
+            orderBy: [desc(schema.interactionNotes.createdAt)],
         }) as InteractionNoteRecord[];
     }
 }

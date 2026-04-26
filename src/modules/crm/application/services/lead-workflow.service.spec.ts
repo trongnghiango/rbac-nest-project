@@ -71,9 +71,9 @@ describe('LeadWorkflowService', () => {
         expect(mockAuditLog.log).toHaveBeenCalledWith(expect.objectContaining({
             action: 'LEAD.CLOSE_WON',
             resource: 'leads',
-            resource_id: '1',
-            actor_id: 42,
-            actor_name: 'Test Sales',
+            resourceId: '1',
+            actorId: 42,
+            actorName: 'Test Sales',
         }));
     });
 });

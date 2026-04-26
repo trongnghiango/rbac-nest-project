@@ -132,22 +132,22 @@ export class TestController {
       const result = await this.db.transaction(async (tx) => {
         // 1. Tạo Organization
         const [newOrg] = await tx.insert(schema.organizations).values({
-          company_name: dto.companyName,
-          tax_code: dto.taxCode,
+          companyName: dto.companyName,
+          taxCode: dto.taxCode,
           industry: dto.industry,
           address: dto.address,
           status: (dto.status || 'ACTIVE') as any,
-          is_internal: false // Chắc chắn đây là khách ngoài
+          isInternal: false // Chắc chắn đây là khách ngoài
         }).returning();
 
         // 2. Tạo Contact móc nối vào Organization
         const [newContact] = await tx.insert(schema.contacts).values({
-          organization_id: newOrg.id,
-          full_name: dto.contactName,
+          organizationId: newOrg.id,
+          fullName: dto.contactName,
           phone: dto.contactPhone,
           email: dto.contactEmail,
-          job_title: dto.contactJobTitle,
-          is_primary: true
+          jobTitle: dto.contactJobTitle,
+          isPrimary: true
         }).returning();
 
         return { organization: newOrg, primaryContact: newContact };
@@ -173,15 +173,15 @@ export class TestController {
   async seedMockLead() {
     // 1. Tạo 1 Organization nháp
     const [org] = await this.db.insert(schema.organizations).values({
-      company_name: 'Anh Long (Chưa có cty)',
+      companyName: 'Anh Long (Chưa có cty)',
       status: 'PROSPECT' as any
     }).returning();
 
     // 2. Tạo 1 Lead gắn vào Org đó
     const [lead] = await this.db.insert(schema.leads).values({
-      organization_id: org.id,
+      organizationId: org.id,
       title: 'Tư vấn thành lập công ty',
-      stage: 'NEW' as any
+      status: 'NEW' as any
     }).returning();
 
     return { message: 'Tạo Lead nháp thành công', leadId: lead.id, orgId: org.id };
