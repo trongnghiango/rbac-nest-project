@@ -24,6 +24,7 @@ export const auditLogs = pgTable(
         action:      varchar('action', { length: 100 }).notNull(), // e.g. 'LEAD.STAGE_CHANGED'
         resource:    varchar('resource', { length: 50 }).notNull(),// e.g. 'leads'
         resource_id: varchar('resource_id', { length: 50 }),      // e.g. '123'
+        organization_id: integer('organization_id'),               // NEW: Dùng để query timeline theo khách hàng
 
         // ── CHANGE SNAPSHOT ───────────────────────────────────
         before: jsonb('before'),  // state trước khi thay đổi (null = CREATE action)

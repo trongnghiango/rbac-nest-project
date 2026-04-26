@@ -17,6 +17,7 @@ export interface AuditEntryDto {
     action: string;
     resource: string;
     resource_id?: string;
+    organization_id?: number;
     // CHANGE
     before?: Record<string, any> | null;
     after?: Record<string, any> | null;

@@ -14,8 +14,10 @@ import { DrizzleServiceAssignmentRepository } from './infrastructure/persistence
 import { IContactRepository } from './domain/repositories/contact.repository';
 import { DrizzleContactRepository } from './infrastructure/persistence/drizzle-contact.repository';
 
+import { OnboardingModule } from './onboarding/onboarding.module';
+
 @Module({
-    imports: [RbacModule],
+    imports: [RbacModule, OnboardingModule],
     controllers: [LeadController],
     providers: [
         LeadWorkflowService,

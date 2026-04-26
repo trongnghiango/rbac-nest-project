@@ -82,6 +82,7 @@ export class PaymentReconciliationService {
                     action: 'PAYMENT.ALLOCATED',
                     resource: 'finotes',
                     resource_id: finote.id?.toString(),
+                    organization_id: finote.sourceOrgId,
                     actor_id: transactionData.recordedBy,
                     metadata: {
                         cashTransactionId: savedCashTx.id,

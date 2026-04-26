@@ -36,6 +36,7 @@ export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAu
                 user_agent: entry.user_agent,
                 metadata: entry.metadata,
                 severity: entry.severity || 'INFO',
+                organization_id: entry.organization_id,
             });
         } catch (error) {
             // Fire-and-forget: Fail silently for audit logs to not block business logic
@@ -60,6 +61,7 @@ export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAu
                 user_agent: entry.user_agent,
                 metadata: entry.metadata,
                 severity: entry.severity || 'INFO',
+                organization_id: entry.organization_id,
             }));
             await db.insert(schema.auditLogs).values(values);
         } catch (error) {

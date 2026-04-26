@@ -34,6 +34,7 @@ export * from './crm/contracts.schema';       // NEW: Hợp đồng khách hàng
 export * from './crm/quotes.schema';          // NEW: Báo giá + Quote Items
 export * from './crm/contacts.schema'; // <-- NEW
 export * from './crm/service-assignments.schema'; // <-- NEW
+export * from './crm/interaction-notes.schema'; // <-- NEW
 
 // ─── ACCOUNTING ──────────────────────────────────────────────────────────────
 export * from './accounting/finotes.schema';  // NEW: Phiếu ĐNTT + Attachments

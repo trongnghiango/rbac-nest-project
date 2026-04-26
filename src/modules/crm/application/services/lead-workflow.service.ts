@@ -10,6 +10,8 @@ import { CloseLeadCommand } from '../dtos/close-lead.dto';
 import { Contract, ContractType, ContractStatus } from '../../domain/entities/contract.entity';
 import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports/audit-log.port';
 
+import { ClientOnboardedEvent } from '../../onboarding/domain/events/client-onboarded.event';
+
 @Injectable()
 export class LeadWorkflowService {
     private readonly logger = new Logger(LeadWorkflowService.name);
@@ -81,22 +83,22 @@ export class LeadWorkflowService {
 
             // 6. Bắn Event (Vấn đề 5: Sử dụng mã nghiệp vụ hoặc ID sạch)
             this.logger.debug(`[${trackingId}] 5. Phát hành sự kiện CLIENT_ONBOARDED.`);
-            await this.eventBus.publish({
-                aggregateId: org.id.toString(),
-                occurredAt: new Date(),
-                payload: {
-                    event: 'CLIENT_ONBOARDED',
+            await this.eventBus.publish(new ClientOnboardedEvent(
+                org.id.toString(),
+                new Date(),
+                {
                     orgId: org.id,
                     contractId: savedContract.id,
                     contractNumber: savedContract.contractNumber
                 }
-            });
+            ));
 
             // 7. Ghi Audit Log (Fire-and-forget)
             this.auditLog.log({
                 action: 'LEAD.CLOSE_WON',
                 resource: 'leads',
                 resource_id: lead.id?.toString(),
+                organization_id: org.id,
                 actor_id: command.actorId as any, // Giả định actorId từ command
                 actor_name: command.actorName,
                 before: { stage: 'INTERACTIVE' }, // Ví dụ đơn giản
