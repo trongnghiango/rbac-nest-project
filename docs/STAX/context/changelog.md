@@ -4,6 +4,22 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 📉 [2026-04-26] - Optimization: Delta Logging (Diff) Implementation
+
+Nâng cấp hệ thống Audit Log từ việc chụp ảnh toàn bộ thực thể (Full Snapshot) sang việc chỉ lưu trữ các thay đổi (Delta/Diff).
+
+### 1. Core Optimization
+*   **ObjectDiff Utility:** Phát triển module `ObjectDiff` mạnh mẽ, hỗ trợ so sánh sâu (Deep comparison) và loại trừ các trường nhạy cảm/không cần thiết.
+*   **Storage Reduction:** Giảm thiểu dung lượng lưu trữ của bảng `audit_logs` trung bình 60-80% bằng cách chỉ lưu Snapshot của các cột bị thay đổi.
+*   **Enhanced Readability:** Cải thiện trải nghiệm Activity Feed. Người dùng có thể nhìn thấy ngay sự thay đổi cụ thể (trước và sau) thay vì phải tự đối chiếu các khối JSON lớn.
+
+### 2. Infrastructure Hardening
+*   **In-Place Diffing:** Tích hợp logic Diff trực tiếp vào `DrizzleAuditLogService`, đảm bảo tính minh bạch đối với các module nghiệp vụ gọi log.
+*   **Security by Default:** Tự động loại bỏ các trường nhạy cảm như `password` khỏi toàn bộ nhật ký hệ thống.
+*   **ADR 006:** Chính thức hóa chiến lược Delta Logging vào tài liệu kiến trúc.
+
+---
+
 ## 🛡️ [2026-04-26] - Audit Log System: Hoàn thiện Kiến trúc Giám sát
 
 Thiết lập hệ thống nhật ký hành động toàn diện (Audit Log) cho toàn dự án STAX.

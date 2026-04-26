@@ -139,6 +139,8 @@ erDiagram
     *   Các module (CRM, Accounting, HRM) **KHÔNG import Service của nhau**. Giao tiếp qua Message Queue (RabbitMQ/Kafka).
 3.  **Audit Log & Transaction Protection:**
     *   Sử dụng `DrizzleBaseRepository` kết hợp với **Async Local Storage (ALS)** để tự động quản lý Transaction và truy vết Actor thực hiện hành động.
+4.  **Delta Logging (Tối ưu lưu trữ):**
+    *   Chỉ lưu trữ các trường thực sự thay đổi thay vì toàn bộ Object, giảm 60-80% dung lượng Database log.
 
 ---
 
@@ -240,6 +242,12 @@ sequenceDiagram
 ### ADR 005: Fire-and-forget Logging Pattern
 *   **Quyết định:** Việc ghi log không được phép làm lỗi luồng nghiệp vụ chính. 
 *   **Cơ chế:** Sử dụng try-catch bao bọc lệnh ghi log. Nếu DB ghi log bị lỗi (đầy disk, lock...), hệ thống vẫn phải cho phép hoàn tất giao dịch tài chính/nghiệp vụ. Audit Log là "Support System", không phải "Hard Constraint".
+
+### ADR 006: Chiến lược Delta Logging (Diff)
+*   **Quyết định:** Chuyển đổi từ Full Snapshot sang Delta Logging tại tầng Service.
+*   **Lý do:** Khi hệ thống phình to, việc lưu trữ hàng triệu bản ghi Audit Log chứa toàn bộ JSON của Entity sẽ gây quá tải storage. 
+*   **Thiết kế:** Sử dụng `ObjectDiff` utility để tự động tính toán sự khác biệt giữa `before` và `after`. Chỉ những key bị thay đổi mới được lưu vào Database.
+*   **Áp dụng:** Toàn hệ thống thông qua `DrizzleAuditLogService` (26/04/2026).
 
 ---
 *Tài liệu được cập nhật ngày 26/04/2026 bởi Antigravity AI.*

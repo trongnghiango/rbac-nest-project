@@ -7,6 +7,7 @@ import { DrizzleBaseRepository } from '@core/shared/infrastructure/persistence/d
 import { and, eq } from 'drizzle-orm';
 
 import { RequestContextService } from '@core/shared/infrastructure/context/request-context.service';
+import { ObjectDiff } from '@core/shared/utils/object-diff.util';
 
 @Injectable()
 export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAuditLogService {
@@ -25,6 +26,22 @@ export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAu
         const ipAddress = entry.ipAddress || context?.ip;
         const userAgent = entry.userAgent || context?.userAgent;
         
+        // Tối ưu hóa dung lượng bằng cách chỉ lưu phần thay đổi (Delta Logging)
+        let beforeToLog = entry.before;
+        let afterToLog = entry.after;
+
+        if (beforeToLog && afterToLog && typeof beforeToLog === 'object' && typeof afterToLog === 'object') {
+            const diff = ObjectDiff.calculate(beforeToLog, afterToLog);
+            if (diff) {
+                beforeToLog = diff.before;
+                afterToLog = diff.after;
+            } else if (entry.action.includes('UPDATE')) {
+                // Nếu là hành động UPDATE mà không có thay đổi, ta có thể log object rỗng
+                beforeToLog = {};
+                afterToLog = {};
+            }
+        }
+
         // Sử dụng this.db thay vì getDb() để đảm bảo thoát khỏi transaction context hiện tại
         setImmediate(async () => {
             try {
@@ -35,8 +52,8 @@ export class DrizzleAuditLogService extends DrizzleBaseRepository implements IAu
                     organizationId: entry.organizationId,
                     actorId: actorId ? Number(actorId) : null,
                     actorName: actorName,
-                    before: entry.before,
-                    after: entry.after,
+                    before: beforeToLog,
+                    after: afterToLog,
                     metadata: entry.metadata,
                     severity: (entry.severity as any) || 'INFO',
                     actorIp: ipAddress,
