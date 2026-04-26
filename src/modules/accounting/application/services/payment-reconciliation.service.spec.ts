@@ -5,11 +5,13 @@ import { ITransactionManager } from '@core/shared/application/ports/transaction-
 import { Finote, FinoteType, FinoteStatus } from '../../domain/entities/finote.entity';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 import { BadRequestException } from '@nestjs/common';
+import { AUDIT_LOG_PORT } from '@core/shared/application/ports/audit-log.port';
 
 describe('PaymentReconciliationService', () => {
     let service: PaymentReconciliationService;
     let mockRepo: jest.Mocked<IAccountingRepository>;
     let mockTxManager: jest.Mocked<ITransactionManager>;
+    let mockAuditLog: any;
 
     beforeEach(() => {
         mockRepo = {
@@ -23,7 +25,11 @@ describe('PaymentReconciliationService', () => {
             runInTransaction: jest.fn((cb) => cb()), // Chạy thẳng callback cho Unit Test
         } as any;
 
-        service = new PaymentReconciliationService(mockRepo, mockTxManager);
+        mockAuditLog = {
+            log: jest.fn().mockResolvedValue(undefined),
+        };
+
+        service = new PaymentReconciliationService(mockRepo, mockTxManager, mockAuditLog);
     });
 
     it('nên gạch nợ thành công một dòng tiền cho nhiều hóa đơn', async () => {

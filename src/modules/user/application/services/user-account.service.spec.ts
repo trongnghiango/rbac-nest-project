@@ -5,6 +5,7 @@ import { IUserRepository } from '../../domain/repositories/user.repository';
 import { UserUniquenessChecker } from '../../domain/services/user-uniqueness.checker';
 import { User } from '../../domain/entities/user.entity';
 import { ConflictException } from '@nestjs/common';
+import { AUDIT_LOG_PORT } from '@core/shared/application/ports/audit-log.port';
 
 describe('UserAccountService', () => {
   let service: UserAccountService;
@@ -26,6 +27,7 @@ describe('UserAccountService', () => {
         UserAccountService,
         { provide: IUserRepository, useValue: mockUserRepository },
         { provide: UserUniquenessChecker, useValue: mockUniquenessChecker },
+        { provide: AUDIT_LOG_PORT, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

@@ -8,6 +8,7 @@ import { IContractRepository } from '@modules/crm/domain/repositories/contract.r
 import { IServiceAssignmentRepository } from '@modules/crm/domain/repositories/service-assignment.repository';
 import { CloseLeadCommand } from '../dtos/close-lead.dto';
 import { Contract, ContractType, ContractStatus } from '../../domain/entities/contract.entity';
+import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports/audit-log.port';
 
 @Injectable()
 export class LeadWorkflowService {
@@ -20,6 +21,7 @@ export class LeadWorkflowService {
         @Inject(IOrganizationRepository) private readonly orgRepo: IOrganizationRepository,
         @Inject(IContractRepository) private readonly contractRepo: IContractRepository,
         @Inject(IServiceAssignmentRepository) private readonly assignmentRepo: IServiceAssignmentRepository,
+        @Inject(AUDIT_LOG_PORT) private readonly auditLog: IAuditLogService,
     ) { }
 
     async closeLeadAsWon(command: CloseLeadCommand) {
@@ -88,6 +90,22 @@ export class LeadWorkflowService {
                     contractId: savedContract.id,
                     contractNumber: savedContract.contractNumber
                 }
+            });
+
+            // 7. Ghi Audit Log (Fire-and-forget)
+            this.auditLog.log({
+                action: 'LEAD.CLOSE_WON',
+                resource: 'leads',
+                resource_id: lead.id?.toString(),
+                actor_id: command.actorId as any, // Giả định actorId từ command
+                actor_name: command.actorName,
+                before: { stage: 'INTERACTIVE' }, // Ví dụ đơn giản
+                after: { stage: 'WON', contractId: savedContract.id },
+                metadata: {
+                    contractNumber: savedContract.contractNumber,
+                    orgId: org.id
+                },
+                severity: 'INFO'
             });
 
             this.logger.log(`[${trackingId}] HOÀN TẤT: Chốt Lead thành công (ContractId: ${savedContract.id}).`);

@@ -49,4 +49,6 @@ export interface CloseLeadCommand {
     taxCode?: string;
     newCompanyName?: string;
     teamAssignments?: { employeeId: number; role: string }[];
+    actorId?: number;
+    actorName?: string;
 }

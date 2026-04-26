@@ -5,6 +5,7 @@ import { ITransactionManager } from '@core/shared/application/ports/transaction-
 import { Money } from '@core/shared/domain/value-objects/money.vo';
 import { CashTransaction } from '../../domain/entities/cash-transaction.entity';
 import { FinoteStatus } from '../../domain/entities/finote.entity';
+import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports/audit-log.port';
 
 export interface PaymentAllocation {
     finoteId: number;
@@ -16,6 +17,7 @@ export class PaymentReconciliationService {
     constructor(
         @Inject(IAccountingRepository) private readonly accountingRepo: IAccountingRepository,
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
+        @Inject(AUDIT_LOG_PORT) private readonly auditLog: IAuditLogService,
     ) { }
 
     /**
@@ -74,6 +76,21 @@ export class PaymentReconciliationService {
 
                 // Lưu vết móc nối giữa Tiền và Hóa đơn (Audit Trail)
                 await this.accountingRepo.linkPayment(finote.id!, savedCashTx.id!, allocation.amount);
+
+                // 4. Ghi Audit Log toàn hệ thống
+                this.auditLog.log({
+                    action: 'PAYMENT.ALLOCATED',
+                    resource: 'finotes',
+                    resource_id: finote.id?.toString(),
+                    actor_id: transactionData.recordedBy,
+                    metadata: {
+                        cashTransactionId: savedCashTx.id,
+                        amount: allocation.amount,
+                        finoteCode: finote.code,
+                        bankRef: transactionData.bankRef
+                    },
+                    severity: 'INFO'
+                });
             }
 
             return {

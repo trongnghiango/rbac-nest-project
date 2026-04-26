@@ -19,7 +19,7 @@ Hệ thống được thiết kế dựa trên 4 trụ cột kiến trúc, đả
 
 | Cấp độ | Đặc điểm | Ví dụ Module |
 | :--- | :--- | :--- |
-| **Tier 1 (Foundation)** | Không có nghiệp vụ. Chỉ cung cấp hạ tầng dùng chung cho toàn hệ thống. | `Rbac`, `Notification`, `AuditLog`, `Storage` |
+| **Tier 1 (Foundation)** | Không có nghiệp vụ. Chỉ cung cấp hạ tầng dùng chung cho toàn hệ thống. | `Rbac`, `Notification`, `AuditLog (Nhật ký)`, `Storage` |
 | **Tier 2 (Domain Core)** | Chứa các thực thể DNA và quy trình vận hành xương sống của doanh nghiệp. | `Employee`, `OrgStructure`, `Office`, `Kpi` |
 | **Tier 3 (Process Flow)** | Các module quản lý dòng chảy nghiệp vụ (Flow) và tiền bạc. Phụ thuộc vào Tier 2. | `CRM (Leads)`, `Accounting (Finotes)`, `Contracts` |
 
@@ -32,7 +32,15 @@ Hệ thống được thiết kế dựa trên 4 trụ cột kiến trúc, đả
 
 ---
 
-## 3. NGÔN NGỮ NGHIỆP VỤ & QUY CHUẨN ĐẶT TÊN (UBIQUITOUS LANGUAGE)
+## 3. HỆ THỐNG GIÁM SÁT (AUDIT LOGGING SYSTEM)
+Để đảm bảo tính minh bạch và khả năng truy vết (Traceability), hệ thống triển khai cơ chế Audit Log tập trung:
+*   **Mục tiêu:** Ghi lại mọi hành động thay đổi dữ liệu trọng yếu (Ai làm, Làm gì, Khi nào, Dữ liệu trước và sau).
+*   **Cơ chế:** Hybrid Sync/Async. Ghi log theo nguyên tắc **Fire-and-forget** (không làm gián đoạn nghiệp vụ chính).
+*   **Tích hợp:** Tích hợp trực tiếp vào các Orchestration Services tại tầng Application (Lead Won, Payment Reconciliation, RBAC Assignment).
+
+---
+
+## 4. NGÔN NGỮ NGHIỆP VỤ & QUY CHUẨN ĐẶT TÊN (UBIQUITOUS LANGUAGE)
 
 Trong Domain-Driven Design (DDD), việc thống nhất ngôn ngữ giữa Đội Lập trình (Dev) và Đội Kinh doanh (Biz) là yếu tố sống còn. 
 
@@ -53,7 +61,7 @@ Trong Domain-Driven Design (DDD), việc thống nhất ngôn ngữ giữa Độ
 
 ---
 
-## 3. SƠ ĐỒ THỰC THỂ ĐA MÔ HÌNH (OMNICHANNEL ERD)
+## 4. SƠ ĐỒ THỰC THỂ ĐA MÔ HÌNH (OMNICHANNEL ERD)
 
 Sơ đồ này minh họa việc tách biệt Entities, Processes và Cashflow.
 
@@ -123,18 +131,18 @@ erDiagram
 
 ---
 
-## 4. CHIẾN LƯỢC KIẾN TRÚC MỞ RỘNG (SCALABILITY ARCHITECTURE)
+## 5. CHIẾN LƯỢC KIẾN TRÚC MỞ RỘNG (SCALABILITY ARCHITECTURE)
 
 1.  **Ports & Adapters (Hexagonal Architecture):**
     *   Tầng `Domain` không biết DB là gì. Việc đổi Storage chỉ cần code thêm Adapter.
 2.  **Event-Driven (Sự kiện điều hướng):**
     *   Các module (CRM, Accounting, HRM) **KHÔNG import Service của nhau**. Giao tiếp qua Message Queue (RabbitMQ/Kafka).
-3.  **Background Processing (BullMQ):**
-    *   API trả về `201 Created` cực nhanh. Các task I/O (Sinh PDF, Upload Drive, Gửi Mail) đẩy vào BullMQ cho Worker tự xử lý.
+3.  **Audit Log & Transaction Protection:**
+    *   Sử dụng `DrizzleBaseRepository` kết hợp với **Async Local Storage (ALS)** để tự động quản lý Transaction và truy vết Actor thực hiện hành động.
 
 ---
 
-## 5. CÁC LUỒNG NGHIỆP VỤ CỐT LÕI (CORE WORKFLOWS)
+## 6. CÁC LUỒNG NGHIỆP VỤ CỐT LÕI (CORE WORKFLOWS)
 
 ### Luồng 1: Chốt Sale Doanh Nghiệp (CRM Workflow)
 **Mục tiêu:** Tạo pháp nhân, ký hợp đồng và bàn giao đội ngũ vận hành.
@@ -143,16 +151,18 @@ erDiagram
 sequenceDiagram
     participant Sales
     participant DB as Database (Tx)
+    participant Audit as AuditLog Service
     participant RMQ as RabbitMQ
 
     Sales->>DB: Nhập thông tin Khách hàng & Nhu cầu vào LEAD
-    Sales->>DB: Nhấn[CHỐT HỢP ĐỒNG]
+    Sales->>DB: Nhấn [CHỐT HỢP ĐỒNG]
     rect rgb(10, 18, 25)
         Note right of DB: Bắt đầu Transaction
         DB->>DB: 1. Update Lead (Stage = WON)
         DB->>DB: 2. Update Organization (Status = ACTIVE_CLIENT)
-        DB->>DB: 3. Insert Contract (Hợp đồng Kế toán / One-off)
-        DB->>DB: 4. Insert Service_Assignments (Gán nhân viên vận hành)
+        DB->>DB: 3. Insert Contract
+        DB->>DB: 4. Insert Service_Assignments
+        DB->>Audit: 5. Ghi log hành động [LEAD.CLOSE_WON]
         Note right of DB: Commit Transaction
     end
     DB->>RMQ: Publish: [ClientOnboardedEvent]
@@ -185,17 +195,18 @@ sequenceDiagram
 
 ---
 
-## 6. LỘ TRÌNH THỰC THI (ROADMAP)
+## 7. LỘ TRÌNH THỰC THI (ROADMAP)
 
-### Phase 1: Core Foundation & Hardening (Đã hoàn thành 90%)
+### Phase 1: Core Foundation & Hardening (Đã hoàn thành 100%) 🚀
 - [x] **Clean Architecture Refactor:** Chuyển đổi CRM & Accounting sang kiến trúc 4 lớp.
 - [x] **Intelligent Intake:** Hệ thống tiếp nhận Lead thông minh với khả năng chống trùng (Deduplication).
 - [x] **Strict Enum Hardening:** (ADR 002) Gia cố toàn bộ trạng thái hệ thống bằng Enum cứng tại DB và Domain.
+- [x] **Audit Log System:** (ADR 004) Kiến trúc nhật ký hành động toàn diện cho 4 luồng chính (Lead, Payment, RBAC, User).
 - [x] **Legacy Data Migration:** (ADR 003) Di cư toàn bộ dữ liệu CRM legacy (Clients, Leads, Contracts, Finotes) vào hệ thống mới. **363 Finotes + 158 Contracts + 1,172 Leads + 202 Orgs đã vào thành công.**
-- [ ] **Unit Testing:** Đảm bảo coverage cho các service lõi (Lead Intake, Payment Reconciliation).
+- [x] **Unit Testing:** Đảm bảo coverage cho các service lõi (Lead Intake, Payment Reconciliation, AuditLog).
 
 ### Phase 2: Operational Intelligence (Tư duy Bánh đà - Đang thực hiện)
-- [ ] **Omnichannel Activity Feed:** Xây dựng dòng thời gian tương tác hội tụ tại Organization (God-view).
+- [/] **Omnichannel Activity Feed:** 🏗️ Xây dựng dòng thời gian tương tác dựa trên hệ thống Audit Log vừa triển khai.
 - [ ] **Unified Onboarding:** Tự động hóa việc bàn giao hồ sơ từ Sales sang Operations (Contract -> Task Checklist).
 - [ ] **AI-Powered Parsing:** Tự động đọc nội dung chat Zalo/Email và điền vào form Intake.
 
@@ -205,7 +216,7 @@ sequenceDiagram
 
 ---
 
-## 7. HỒ SƠ QUYẾT ĐỊNH KIẾN TRÚC (ADR)
+## 8. HỒ SƠ QUYẾT ĐỊNH KIẾN TRÚC (ADR)
 
 ### ADR 001: Export Repository trực tiếp từ CRM Module
 *   **Quyết định:** Export `IOrganizationRepository` và `IContactRepository`.
@@ -220,6 +231,15 @@ sequenceDiagram
 *   **Quyết định:** Thêm cột `metadata JSONB` vào các bảng `organizations`, `contacts`, `leads`, `contracts` để lưu dữ liệu legacy không có cột tương ứng trong schema quan hệ.
 *   **Lý do:** File CSV/Excel legacy của STAX chứa hàng chục trường "greedy" (Nick name, Ghi chú nội bộ, Thời hạn tạm ngưng...) không phù hợp mô hình quan hệ nhưng không thể bỏ. Thêm cột thật vào schema sẽ gây bloat và vi phạm Single Responsibility. JSONB cho phép preserve 100% dữ liệu lịch sử và query linh hoạt khi cần.
 *   **Áp dụng:** Organizations, Contacts, Leads, Contracts (26/04/2026).
+
+### ADR 004: Kiến trúc Audit Log Tập trung (Tier 1 Foundation)
+*   **Quyết định:** Xây dựng `AUDIT_LOG_PORT` và `DrizzleAuditLogService` tại Tier 1.
+*   **Lý do:** Đảm bảo tính nhất quán (Consistency) trong việc giám sát hành động người dùng. Tránh việc mỗi module tự viết log theo cách riêng.
+*   **Thiết kế:** Sử dụng schema tập trung `audit_logs` với JSONB `before/after` để lưu vết thay đổi dữ liệu chi tiết.
+
+### ADR 005: Fire-and-forget Logging Pattern
+*   **Quyết định:** Việc ghi log không được phép làm lỗi luồng nghiệp vụ chính. 
+*   **Cơ chế:** Sử dụng try-catch bao bọc lệnh ghi log. Nếu DB ghi log bị lỗi (đầy disk, lock...), hệ thống vẫn phải cho phép hoàn tất giao dịch tài chính/nghiệp vụ. Audit Log là "Support System", không phải "Hard Constraint".
 
 ---
 *Tài liệu được cập nhật ngày 26/04/2026 bởi Antigravity AI.*

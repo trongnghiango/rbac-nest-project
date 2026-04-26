@@ -30,7 +30,8 @@ export class LeadController {
     @ApiResponse({ status: 400, description: 'Lỗi logic: Lead đã WON hoặc không tìm thấy.' })
     async closeLead(
         @Param('id', ParseIntPipe) leadId: number,
-        @Body() dto: CloseLeadRequestDto
+        @Body() dto: CloseLeadRequestDto,
+        @CurrentUser() user: any
     ) {
         // Gọi thẳng vào Use Case Orchestrator mà ta đã định nghĩa
         return this.leadWorkflowService.closeLeadAsWon({
@@ -41,6 +42,8 @@ export class LeadController {
             taxCode: dto.taxCode,
             newCompanyName: dto.newCompanyName,
             teamAssignments: dto.teamAssignments,
+            actorId: user.userId,
+            actorName: user.username,
         });
     }
 

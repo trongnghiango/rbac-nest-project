@@ -4,12 +4,14 @@ import { IUserAccountService, CreateAccountProps } from '../../domain/ports/user
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
 import { UserUniquenessChecker } from '../../domain/services/user-uniqueness.checker';
+import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports/audit-log.port';
 
 @Injectable()
 export class UserAccountService implements IUserAccountService {
     constructor(
         @Inject(IUserRepository) private readonly userRepository: IUserRepository,
         private readonly uniquenessChecker: UserUniquenessChecker,
+        @Inject(AUDIT_LOG_PORT) private readonly auditLog: IAuditLogService,
     ) { }
 
     async provisionAccount(props: CreateAccountProps): Promise<User> {
@@ -33,6 +35,16 @@ export class UserAccountService implements IUserAccountService {
         if (!savedUser.id) {
             throw new InternalServerErrorException('Failed to generate User ID during provision');
         }
+
+        // ✅ Ghi Audit Log khi tạo User mới
+        this.auditLog.log({
+            action: 'USER.PROVISIONED',
+            resource: 'users',
+            resource_id: savedUser.id.toString(),
+            actor_name: 'SYSTEM (USER_PROVISION)',
+            metadata: { username: savedUser.username, email: savedUser.email, roles: props.roles },
+            severity: 'INFO'
+        });
 
         return savedUser;
     }

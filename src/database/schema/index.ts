@@ -20,6 +20,7 @@ export * from './rbac/rbac.schema';           // FIX: đổi tên cột sang sna
 export * from './system/notifications.schema';
 export * from './system/attachments.schema';  // NEW: File đính kèm dùng chung (Polymorphic)
 export * from './system/sequences.schema';
+export * from './system/audit-logs.schema';   // NEW: Audit Log toàn hệ thống
 
 // ─── HRM ─────────────────────────────────────────────────────────────────────
 export * from './hrm/org-structure.schema';   // locations, grades, orgUnits, positions
