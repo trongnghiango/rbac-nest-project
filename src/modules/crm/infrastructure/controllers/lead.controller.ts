@@ -1,10 +1,11 @@
 // src/modules/crm/infrastructure/controllers/lead.controller.ts
-import { Controller, Post, Body, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody, ApiParam } from '@nestjs/swagger';
 import { LeadWorkflowService } from '../../application/services/lead-workflow.service';
 import { LeadIntakeService } from '../../application/services/lead-intake.service';
 import { CloseLeadRequestDto } from '@modules/crm/infrastructure/dtos/close-lead.request.dto';
 import { IntelligentIntakeRequestDto } from '@modules/crm/infrastructure/dtos/intelligent-intake.request.dto';
+import { AssignLeadRequestDto } from '@modules/crm/infrastructure/dtos/assign-lead.request.dto';
 import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard';
 import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
@@ -18,6 +19,20 @@ export class LeadController {
         private readonly leadWorkflowService: LeadWorkflowService,
         private readonly leadIntakeService: LeadIntakeService
     ) { }
+
+    @Patch(':id/assign')
+    @ApiOperation({
+        summary: 'Giao Lead cho nhân viên (Assign/Reassign)',
+        description: 'Dành cho Sếp điều phối Leads hoặc cho nhân viên tự gán Lead cho đồng nghiệp.'
+    })
+    @ApiParam({ name: 'id', description: 'ID của Lead', example: 1 })
+    @ApiBody({ type: AssignLeadRequestDto })
+    async assignLead(
+        @Param('id', ParseIntPipe) leadId: number,
+        @Body() dto: AssignLeadRequestDto
+    ) {
+        return this.leadWorkflowService.assignLead(leadId, dto.employeeId);
+    }
 
     @Post(':id/won')
     @ApiOperation({

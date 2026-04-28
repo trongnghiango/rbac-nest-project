@@ -33,4 +33,15 @@ export class SystemController {
   getLookups() {
     return this.lookupService.getCommonLookups();
   }
+
+  @Get('my-team/summary')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Báo cáo nhanh cho Quản lý (My Team Summary)',
+    description: 'Dành cho Sếp soi nhanh các chỉ số quan trọng của đội ngũ (Lead mới, Finote chờ duyệt, hiệu suất nhân viên).'
+  })
+  async getTeamSummary(@CurrentUser() user: User) {
+    return this.bootstrapService.getTeamSummary(user);
+  }
 }

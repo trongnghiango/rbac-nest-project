@@ -1,5 +1,4 @@
-// src/modules/accounting/application/services/finote.service.ts
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { SequenceGeneratorService } from '@core/shared/application/services/sequence-generator.service';
 import { CreateFinoteDto } from '../dtos/create-finote.dto';
@@ -17,6 +16,37 @@ export class FinoteService {
         @Inject(IEventBus) private readonly eventBus: IEventBus,
         private readonly sequenceService: SequenceGeneratorService,
     ) { }
+
+    async approve(id: number, reviewerId: number) {
+        const finote = await this.finoteRepo.findById(id);
+        if (!finote) throw new NotFoundException('Không tìm thấy phiếu thu/chi');
+
+        if (finote.status !== FinoteStatus.PENDING) {
+          throw new BadRequestException('Chỉ có thể duyệt phiếu đang ở trạng thái PENDING');
+        }
+
+        finote.status = FinoteStatus.APPROVED;
+        finote.reviewerId = reviewerId;
+        finote.updatedAt = new Date();
+
+        return this.finoteRepo.save(finote);
+    }
+
+    async reject(id: number, reviewerId: number, reason: string) {
+        const finote = await this.finoteRepo.findById(id);
+        if (!finote) throw new NotFoundException('Không tìm thấy phiếu thu/chi');
+
+        if (finote.status !== FinoteStatus.PENDING) {
+          throw new BadRequestException('Chỉ có thể từ chối phiếu đang ở trạng thái PENDING');
+        }
+
+        finote.status = FinoteStatus.REJECTED;
+        finote.reviewerId = reviewerId;
+        finote.description = `${finote.description || ''} [Lý do từ chối: ${reason}]`.trim();
+        finote.updatedAt = new Date();
+
+        return this.finoteRepo.save(finote);
+    }
 
     async createFinote(dto: CreateFinoteDto, creatorId: number) {
         return this.txManager.runInTransaction(async () => {

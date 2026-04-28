@@ -6,6 +6,7 @@ import { ILeadRepository } from '@modules/crm/domain/repositories/lead.repositor
 import { IOrganizationRepository } from '@modules/crm/domain/repositories/organization.repository';
 import { IContractRepository } from '@modules/crm/domain/repositories/contract.repository';
 import { IServiceAssignmentRepository } from '@modules/crm/domain/repositories/service-assignment.repository';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
 import { CloseLeadCommand } from '../dtos/close-lead.dto';
 import { Contract, ContractType, ContractStatus } from '../../domain/entities/contract.entity';
 
@@ -22,7 +23,35 @@ export class LeadWorkflowService {
         @Inject(IOrganizationRepository) private readonly orgRepo: IOrganizationRepository,
         @Inject(IContractRepository) private readonly contractRepo: IContractRepository,
         @Inject(IServiceAssignmentRepository) private readonly assignmentRepo: IServiceAssignmentRepository,
+        @Inject(IUserRepository) private readonly userRepo: IUserRepository,
     ) { }
+
+    /**
+     * Gán Lead cho nhân viên mới
+     * Dành cho Sếp (Manager/Admin) điều phối công việc
+     */
+    async assignLead(leadId: number, employeeId: number) {
+        this.logger.log(`[ASSIGN] Đang gán Lead ${leadId} cho nhân viên ${employeeId}`);
+
+        const [lead, employeeExists] = await Promise.all([
+            this.leadRepo.findById(leadId),
+            this.userRepo.exists(employeeId)
+        ]);
+
+        if (!lead) throw new NotFoundException('Không tìm thấy Lead');
+        if (!employeeExists) throw new BadRequestException('Không tìm thấy nhân viên được gán');
+
+        // Thực thi logic gán trong Entity
+        lead.assignTo(employeeId);
+
+        await this.leadRepo.save(lead);
+
+        return {
+            success: true,
+            message: `Đã gán Lead cho nhân viên thành công`,
+            assignedToId: employeeId
+        };
+    }
 
     async closeLeadAsWon(command: CloseLeadCommand) {
         const trackingId = `WON-${command.leadId}-${Date.now()}`;

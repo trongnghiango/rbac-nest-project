@@ -1,8 +1,8 @@
-// src/modules/accounting/infrastructure/dtos/finote-response.dto.ts
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Finote } from '../../domain/entities/finote.entity';
+import { Finote, FinoteStatus } from '../../domain/entities/finote.entity';
+import { ActionableDto, ActionDetailDto } from '@core/shared/infrastructure/dtos/actionable.dto';
 
-export class FinoteResponseDto {
+export class FinoteResponseDto extends ActionableDto {
     @ApiProperty({ example: 1 })
     id: number;
 
@@ -39,24 +39,43 @@ export class FinoteResponseDto {
     @ApiPropertyOptional()
     createdAt?: Date;
 
-    static fromDomain(entity: Finote): FinoteResponseDto {
+    // Actionable metadata for UI
+    @ApiProperty({ description: 'Các hành động có thể thực hiện trên UI' })
+    _actions: Record<string, ActionDetailDto>;
+
+    static fromDomain(entity: Finote, userPermissions: string[] = []): FinoteResponseDto {
         const dto = new FinoteResponseDto();
         dto.id = entity.id!;
         dto.code = entity.code;
         dto.type = entity.type;
         dto.title = entity.title;
-
-        // ĐÂY LÀ SỰ LỢI HẠI CỦA DTO: 
-        // Bóc Value Object 'Money' thành primitive type cho API
         dto.amount = entity.totalAmount.getAmount();
         dto.currency = entity.totalAmount.getCurrency();
         dto.paidAmount = entity.paidAmount.getAmount();
-
         dto.category = entity.category || '';
         dto.description = entity.description;
         dto.status = entity.status;
         dto.deadlineAt = entity.deadlineAt;
         dto.createdAt = entity.createdAt;
+
+        // Tính toán Matrix hành động chuyên nghiệp
+        const isPending = entity.status === FinoteStatus.PENDING;
+        const canManage = userPermissions.includes('*') || userPermissions.includes('finote:approve');
+
+        dto._actions = {
+            approve: { 
+                allowed: isPending && canManage,
+                reason: !isPending ? 'Chỉ có thể duyệt phiếu đang chờ' : (!canManage ? 'Bạn không có quyền duyệt' : undefined)
+            },
+            reject: { 
+                allowed: isPending && canManage,
+                reason: !isPending ? 'Chỉ có thể từ chối phiếu đang chờ' : undefined
+            },
+            edit: {
+                allowed: isPending,
+                reason: !isPending ? 'Không thể sửa phiếu đã được xử lý' : undefined
+            }
+        };
 
         return dto;
     }

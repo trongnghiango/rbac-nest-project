@@ -37,7 +37,34 @@ export class BootstrapService {
       canViewDashboard: true,
       canManageLeads: true,
       canManageContracts: true,
-      canApproveFinotes: false,
+      canApproveFinotes: user.username === 'superadmin' || user.username.includes('manager'),
+    };
+  }
+
+  /**
+   * Trả về báo cáo nhanh cho cấp quản lý (My Team Summary)
+   * Chẻ số liệu từ CRM và Accounting
+   */
+  async getTeamSummary(user: User) {
+    // Logic thực tế sẽ gọi sang LeadRepository và FinoteRepository
+    // Tạm thời mock dữ liệu "chuẩn" để Frontend build UI
+    return {
+      period: '2026-04',
+      leads: {
+        totalNew: 12,
+        totalConverted: 5,
+        conversionRate: '41.6%',
+        pendingAssignment: 3
+      },
+      accounting: {
+        pendingApprovals: 8,
+        totalPendingAmount: 150000000,
+        currency: 'VND'
+      },
+      staffPerformance: [
+        { name: 'Nguyễn Văn A', activeLeads: 5, wonLeads: 2 },
+        { name: 'Trần Thị B', activeLeads: 8, wonLeads: 3 }
+      ]
     };
   }
 }
