@@ -3,6 +3,7 @@ import { LeadWorkflowService } from './application/services/lead-workflow.servic
 import { LeadIntakeService } from './application/services/lead-intake.service';
 import { LeadController } from './infrastructure/controllers/lead.controller';
 import { RbacModule } from '@modules/rbac/rbac.module';
+import { UserModule } from '@modules/user/user.module';
 import { ILeadRepository } from './domain/repositories/lead.repository';
 import { DrizzleLeadRepository } from './infrastructure/persistence/drizzle-lead.repository';
 import { IOrganizationRepository } from './domain/repositories/organization.repository';
@@ -17,7 +18,7 @@ import { DrizzleContactRepository } from './infrastructure/persistence/drizzle-c
 import { OnboardingModule } from './onboarding/onboarding.module';
 
 @Module({
-    imports: [RbacModule, OnboardingModule],
+    imports: [RbacModule, UserModule, OnboardingModule],
     controllers: [LeadController],
     providers: [
         LeadWorkflowService,
