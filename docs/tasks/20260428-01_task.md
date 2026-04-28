@@ -1,0 +1,8 @@
+- [x] Cập nhật tài liệu README.md
+- [x] Bọc try-catch xung quanh auditLog trong payment-reconciliation.service.ts
+- [x] Bọc try-catch xung quanh auditLog trong rbac-manage.service.ts
+- [x] Bọc try-catch xung quanh auditLog trong user-account.service.ts
+- [x] Gỡ dependency thư thừa (AUDIT_LOG_PORT) trong lead-workflow.service.ts
+- [x] Ánh xạ ResponseDTO cho OrgStructureController
+- [x] Thêm các stub file test cho rbac-manager.service.spec.ts, role.service.spec.ts, finote.service.spec.ts
+- [x] Chạy lệnh kiểm tra Unit Test cục bộ và TSC
