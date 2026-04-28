@@ -30,6 +30,7 @@ import { OrgStructureModule } from '@modules/org-structure/org-structure.module'
 import { EmployeeModule } from '@modules/employee/employee.module';
 import { AccountingModule } from '@modules/accounting/accounting.module';
 import { CrmModule } from '@modules/crm/crm.module';
+import { SystemModule } from '@modules/system/system.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { CrmModule } from '@modules/crm/crm.module';
     EmployeeModule,
     AccountingModule,
     CrmModule,
+    SystemModule,
   ],
 })
 export class AppModule {
