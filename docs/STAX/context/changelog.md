@@ -4,6 +4,27 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 💎 [2026-04-28] - System & UI/UX Integration: Professional API Renaissance
+
+Đợt Refactor toàn diện lớp Application và Infrastructure của `SystemModule` cùng với việc chuẩn hóa giao thức tương tác Backend-Frontend (BE-FE Contract).
+
+### 1. Refactoring System Architecture
+*   **Decoupling Logic:** Triển khai `LookupService` và `BootstrapService` để loại bỏ hoàn toàn Business Logic và Mock Data khỏi `SystemController`.
+*   **Clean Controller Pattern:** `SystemController` hiện tại chỉ đóng vai trò điều hướng (Routing), tuân thủ nghiêm ngặt nguyên tắc Single Responsibility.
+*   **Infrastructure Registry:** Module được cấu trúc lại để quản lý tập trung tài nguyên hệ thống, giúp dễ dàng mở rộng context ứng dụng cho Frontend.
+
+### 2. UI/UX Interaction Standard (`_actions`)
+*   **Actionable Metadata Standard:** Giới thiệu `ActionableDto` làm chuẩn giao tiếp cho mọi thực thể có tính tương tác cao.
+*   **Backend-Driven UI:** Thay vì Frontend tự tính toán logic hiển thị nút bấm, Backend trả về object `_actions` kèm theo lý do (`reason`) nếu hành động bị chặn. Áp dụng đầu tiên cho: `Finote` (Approve/Reject).
+*   **Management Renaissance:** Bổ sung bộ API điều phối và báo cáo dành cho vai trò Lãnh đạo (`MANAGER`, `ADMIN`):
+    *   `GET /system/my-team/summary`: Báo cáo nhanh hiệu suất đa module.
+    *   `PATCH /crm/leads/:id/assign`: Điều phối Lead giữa các nhân sự.
+
+### 3. Core Shared Improvements
+*   **Utils Abstraction:** Tách biệt `DrizzlePaginationUtil` khỏi HTTP DTO, cho phép tái sử dụng bộ phân trang chuẩn hóa trong các Repository và Background Jobs mà không phụ thuộc vào lớp Controller.
+
+---
+
 ## 📉 [2026-04-26] - Optimization: Delta Logging (Diff) Implementation
 
 Nâng cấp hệ thống Audit Log từ việc chụp ảnh toàn bộ thực thể (Full Snapshot) sang việc chỉ lưu trữ các thay đổi (Delta/Diff).

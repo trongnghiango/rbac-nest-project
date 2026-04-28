@@ -33,5 +33,14 @@ Nguyên tắc: Bất cứ API `GET` danh sách nào (Leads, Contracts, Users, Fi
 - Endpoint `/search/omni` cho phép search 1 string text across rất nhiều Table Khác nhau (Leads, Deals, Organization).
 - Trả về tập danh sách đã nhúng phân trang nhưng được chẻ theo Category để gán vào ô Auto-complete của tính năng thanh Search Command.
 
+### 2.5. Siêu dữ liệu Hành động (Actionable Metadata `_actions`)
+Đây là tiêu chuẩn mới giúp Backend điều động giao diện (Backend-Driven UI).
+- Mọi entity (Lead, Finote) khi trả về object nên kèm theo field `_actions`.
+- **Cấu trúc:** `_actions: { [actionName]: { allowed: boolean, reason?: string } }`.
+- Frontend chỉ đọc `allowed` để toggle UI, không tự tính toán logic trạng thái.
+
 ## 3. Lộ trình Triển khai Code
 Căn cứ trên các tiêu chuẩn trên, lộ trình bổ sung các tiện ích API này sẽ được chia làm 3 Phases nhỏ trong Kế hoạch của đợt Phát triển Frontend API Integration.
+
+---
+*Tài liệu được cập nhật ngày 28/04/2026 bởi Antigravity AI.*
