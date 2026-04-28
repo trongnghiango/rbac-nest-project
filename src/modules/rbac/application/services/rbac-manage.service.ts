@@ -1,5 +1,5 @@
 // src/modules/rbac/application/services/rbac-manage.service.ts
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, Logger } from '@nestjs/common';
 import { IRbacManageService } from '../../domain/ports/rbac-manage.service.port';
 import { IRoleRepository, IUserRoleRepository } from '../../domain/repositories/rbac.repository';
 import { UserRole } from '../../domain/entities/user-role.entity';
@@ -7,6 +7,8 @@ import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports
 
 @Injectable()
 export class RbacManageService implements IRbacManageService {
+    private readonly logger = new Logger(RbacManageService.name);
+
     constructor(
         @Inject(IRoleRepository) private readonly roleRepo: IRoleRepository,
         @Inject(IUserRoleRepository) private readonly userRoleRepo: IUserRoleRepository,
@@ -27,15 +29,19 @@ export class RbacManageService implements IRbacManageService {
 
         await this.userRoleRepo.save(userRole);
 
-        // ✅ Ghi Audit Log cho hành động nhạy cảm
-        this.auditLog.log({
-            action: 'RBAC.ROLE_ASSIGNED',
-            resource: 'users',
-            resourceId: userId.toString(),
-            actorId: assignedBy,
-            metadata: { roleName, roleId: role.id },
-            severity: 'WARN' // Role assignment là hành động quan trọng
-        });
+        // ✅ Ghi Audit Log cho hành động nhạy cảm (Fire-and-forget)
+        try {
+            this.auditLog.log({
+                action: 'RBAC.ROLE_ASSIGNED',
+                resource: 'users',
+                resourceId: userId.toString(),
+                actorId: assignedBy,
+                metadata: { roleName, roleId: role.id },
+                severity: 'WARN' // Role assignment là hành động quan trọng
+            });
+        } catch (error) {
+            this.logger.error(`[Audit Log] Lỗi khi ghi nhận Audit: ${error.message}`);
+        }
     }
 
     async findRoleByName(name: string): Promise<any> {

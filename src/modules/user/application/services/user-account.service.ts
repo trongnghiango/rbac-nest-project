@@ -1,5 +1,5 @@
 // src/modules/user/application/services/user-account.service.ts
-import { Injectable, Inject, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Inject, InternalServerErrorException, Logger } from '@nestjs/common';
 import { IUserAccountService, CreateAccountProps } from '../../domain/ports/user-account.service.port';
 import { IUserRepository } from '../../domain/repositories/user.repository';
 import { User } from '../../domain/entities/user.entity';
@@ -8,6 +8,8 @@ import { AUDIT_LOG_PORT, IAuditLogService } from '@core/shared/application/ports
 
 @Injectable()
 export class UserAccountService implements IUserAccountService {
+    private readonly logger = new Logger(UserAccountService.name);
+
     constructor(
         @Inject(IUserRepository) private readonly userRepository: IUserRepository,
         private readonly uniquenessChecker: UserUniquenessChecker,
@@ -36,16 +38,20 @@ export class UserAccountService implements IUserAccountService {
             throw new InternalServerErrorException('Failed to generate User ID during provision');
         }
 
-        // ✅ Ghi Audit Log khi tạo User mới
-        this.auditLog.log({
-            action: 'USER.PROVISIONED',
-            resource: 'users',
-            resourceId: savedUser.id.toString(),
-            actorId: 'SYSTEM',
-            actorName: 'SYSTEM (USER_PROVISION)',
-            metadata: { username: savedUser.username, email: savedUser.email, roles: props.roles },
-            severity: 'INFO'
-        });
+        // ✅ Ghi Audit Log khi tạo User mới (Fire-and-forget)
+        try {
+            this.auditLog.log({
+                action: 'USER.PROVISIONED',
+                resource: 'users',
+                resourceId: savedUser.id.toString(),
+                actorId: 'SYSTEM',
+                actorName: 'SYSTEM (USER_PROVISION)',
+                metadata: { username: savedUser.username, email: savedUser.email, roles: props.roles },
+                severity: 'INFO'
+            });
+        } catch (error) {
+            this.logger.error(`[Audit Log] Lỗi khi ghi nhận Audit USER.PROVISIONED: ${error.message}`);
+        }
 
         return savedUser;
     }

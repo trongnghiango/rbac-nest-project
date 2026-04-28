@@ -1,5 +1,5 @@
 // src/modules/accounting/application/services/payment-reconciliation.service.ts
-import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { IAccountingRepository } from '../../domain/repositories/accounting.repository';
 import { ITransactionManager } from '@core/shared/application/ports/transaction-manager.port';
 import { Money } from '@core/shared/domain/value-objects/money.vo';
@@ -14,6 +14,8 @@ export interface PaymentAllocation {
 
 @Injectable()
 export class PaymentReconciliationService {
+    private readonly logger = new Logger(PaymentReconciliationService.name);
+
     constructor(
         @Inject(IAccountingRepository) private readonly accountingRepo: IAccountingRepository,
         @Inject(ITransactionManager) private readonly txManager: ITransactionManager,
@@ -77,21 +79,25 @@ export class PaymentReconciliationService {
                 // Lưu vết móc nối giữa Tiền và Hóa đơn (Audit Trail)
                 await this.accountingRepo.linkPayment(finote.id!, savedCashTx.id!, allocation.amount);
 
-                // 4. Ghi Audit Log toàn hệ thống
-                this.auditLog.log({
-                    action: 'PAYMENT.ALLOCATED',
-                    resource: 'finotes',
-                    resourceId: finote.id?.toString(),
-                    organizationId: finote.sourceOrgId,
-                    actorId: transactionData.recordedBy,
-                    metadata: {
-                        cashTransactionId: savedCashTx.id,
-                        amount: allocation.amount,
-                        finoteCode: finote.code,
-                        bankRef: transactionData.bankRef
-                    },
-                    severity: 'INFO'
-                });
+                // 4. Ghi Audit Log toàn hệ thống (Fire-and-forget, không lỗi luồng chính)
+                try {
+                    this.auditLog.log({
+                        action: 'PAYMENT.ALLOCATED',
+                        resource: 'finotes',
+                        resourceId: finote.id?.toString(),
+                        organizationId: finote.sourceOrgId,
+                        actorId: transactionData.recordedBy,
+                        metadata: {
+                            cashTransactionId: savedCashTx.id,
+                            amount: allocation.amount,
+                            finoteCode: finote.code,
+                            bankRef: transactionData.bankRef
+                        },
+                        severity: 'INFO'
+                    });
+                } catch (error) {
+                    this.logger.error(`[Audit Log] Lỗi khi ghi nhận Audit PAYMENT.ALLOCATED cho Finote ${finote.id}: ${error.message}`);
+                }
             }
 
             return {
