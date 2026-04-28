@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '@modules/auth/infrastructure/guards/jwt-auth.guard
 import { PermissionGuard } from '@modules/rbac/infrastructure/guards/permission.guard';
 import { PERMISSIONS } from '@modules/rbac/domain/constants/rbac.constants';
 import { CurrentUser } from '@modules/auth/infrastructure/decorators/current-user.decorator';
+import { OrgUnitResponseDto } from '../dtos/org-unit.response.dto';
 import { User } from '@modules/user/domain/entities/user.entity';
 import { BadRequestException } from '@nestjs/common';
 
@@ -55,7 +56,8 @@ export class OrgStructureController {
         }
     })
     async getOrgTree() {
-        return this.orgService.getOrganizationTree();
+        const tree = await this.orgService.getOrganizationTree();
+        return { data: OrgUnitResponseDto.fromTree(tree) };
     }
 
     @Post('units')
@@ -79,10 +81,11 @@ export class OrgStructureController {
             throw new BadRequestException('Tài khoản của bạn chưa thuộc tổ chức nào, không thể tạo phòng ban!');
         }
 
-        return this.orgService.createUnit({
+        const newUnit = await this.orgService.createUnit({
             ...dto,
             organizationId: orgId
         });
+        return { data: OrgUnitResponseDto.fromDomain(newUnit) };
     }
 
     @Patch('units/:id')
@@ -93,7 +96,8 @@ export class OrgStructureController {
     @ApiResponse({ status: 200, description: 'Cập nhật thành công.' })
     @ApiResponse({ status: 404, description: 'Không tìm thấy phòng ban với ID cung cấp.' })
     async updateUnit(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateOrgUnitRequestDto) {
-        return this.orgService.updateUnit(id, dto);
+        const updatedUnit = await this.orgService.updateUnit(id, dto);
+        return { data: OrgUnitResponseDto.fromDomain(updatedUnit) };
     }
 
     @Delete('units/:id')

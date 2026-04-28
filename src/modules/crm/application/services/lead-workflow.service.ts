@@ -8,7 +8,6 @@ import { IContractRepository } from '@modules/crm/domain/repositories/contract.r
 import { IServiceAssignmentRepository } from '@modules/crm/domain/repositories/service-assignment.repository';
 import { CloseLeadCommand } from '../dtos/close-lead.dto';
 import { Contract, ContractType, ContractStatus } from '../../domain/entities/contract.entity';
-import { AUDIT_LOG_PORT, IAuditLogService, AuditLogSeverity } from '@core/shared/application/ports/audit-log.port';
 
 import { ClientOnboardedEvent } from '../../onboarding/domain/events/client-onboarded.event';
 
@@ -23,7 +22,6 @@ export class LeadWorkflowService {
         @Inject(IOrganizationRepository) private readonly orgRepo: IOrganizationRepository,
         @Inject(IContractRepository) private readonly contractRepo: IContractRepository,
         @Inject(IServiceAssignmentRepository) private readonly assignmentRepo: IServiceAssignmentRepository,
-        @Inject(AUDIT_LOG_PORT) private readonly auditLog: IAuditLogService,
     ) { }
 
     async closeLeadAsWon(command: CloseLeadCommand) {
