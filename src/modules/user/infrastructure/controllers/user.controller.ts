@@ -47,7 +47,8 @@ export class UserController {
   ) {
     // FIX: User từ Token chắc chắn phải có ID
     if (!user.id) throw new BadRequestException('Invalid User Context');
-    return this.userService.updateUserProfile(user.id, profileData);
+    const updatedUser = await this.userService.updateUserProfile(user.id, profileData);
+    return UserResponseDto.fromDomain(updatedUser);
   }
 
 
