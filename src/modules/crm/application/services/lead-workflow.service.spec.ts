@@ -6,6 +6,7 @@ import { ILeadRepository } from '@modules/crm/domain/repositories/lead.repositor
 import { IOrganizationRepository } from '@modules/crm/domain/repositories/organization.repository';
 import { IContractRepository } from '@modules/crm/domain/repositories/contract.repository';
 import { IServiceAssignmentRepository } from '@modules/crm/domain/repositories/service-assignment.repository';
+import { IUserRepository } from '@modules/user/domain/repositories/user.repository';
 import { CloseLeadCommand } from '../dtos/close-lead.dto';
 
 describe('LeadWorkflowService', () => {
@@ -14,6 +15,7 @@ describe('LeadWorkflowService', () => {
     let mockLeadRepo: any;
     let mockOrgRepo: any;
     let mockContractRepo: any;
+    let mockUserRepo: any;
 
     beforeEach(async () => {
         mockEventBus = {
@@ -23,7 +25,8 @@ describe('LeadWorkflowService', () => {
             findById: jest.fn().mockResolvedValue({ 
                 id: 1, 
                 organizationId: 1, 
-                closeAsWon: jest.fn() 
+                closeAsWon: jest.fn(),
+                assignTo: jest.fn()
             }),
             save: jest.fn().mockResolvedValue(undefined),
         };
@@ -38,6 +41,9 @@ describe('LeadWorkflowService', () => {
         mockContractRepo = {
             create: jest.fn().mockResolvedValue({ id: 99, contractNumber: 'CT-001' }),
         };
+        mockUserRepo = {
+            exists: jest.fn().mockResolvedValue(true)
+        };
 
         const module: TestingModule = await Test.createTestingModule({
             providers: [
@@ -48,6 +54,7 @@ describe('LeadWorkflowService', () => {
                 { provide: IOrganizationRepository, useValue: mockOrgRepo },
                 { provide: IContractRepository, useValue: mockContractRepo },
                 { provide: IServiceAssignmentRepository, useValue: { replaceByOrganization: jest.fn().mockResolvedValue(undefined) } },
+                { provide: IUserRepository, useValue: mockUserRepo },
             ],
         }).compile();
 
