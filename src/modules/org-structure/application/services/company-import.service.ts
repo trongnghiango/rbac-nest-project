@@ -42,7 +42,7 @@ export class CompanyImportService {
 
         // 1. Thu thập dữ liệu duy nhất để xử lý batch
         const uniqueData = this.extractUniqueMetadata(records);
-        const defaultPassword = await PasswordUtil.hash('Company@2026');
+        const defaultPassword = await PasswordUtil.hash(process.env.SEED_DEFAULT_PASSWORD || 'Company@2026');
 
         return await this.txManager.runInTransaction(async () => {
             // 2. Xử lý Master Data (Locations, Grades, JobTitles) thông qua Repositories

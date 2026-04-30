@@ -187,7 +187,7 @@ export class StaxLegacyMigrationService {
     }
 
     private async ensureUserAccount(tx: any, info: { username: string, email: string, fullName: string, roleName: string }) {
-        const hashedPassword = await bcrypt.hash('Stax@123', 10);
+        const hashedPassword = await bcrypt.hash(process.env.SEED_DEFAULT_PASSWORD || 'Stax@123', 10);
         
         let user = await tx.query.users.findFirst({
             where: eq(schema.users.username, info.username)

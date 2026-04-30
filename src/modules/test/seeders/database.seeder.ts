@@ -74,7 +74,7 @@ export class DatabaseSeeder implements OnModuleInit {
   }
 
   private async seedSystemUsers(staxOrgId: number) {
-    const hashedPassword = await bcrypt.hash('K@2026', 10);
+    const hashedPassword = await bcrypt.hash(process.env.SEED_DEFAULT_PASSWORD || 'K@2026', 10);
     let existingUser = await this.db.query.users.findFirst({
       where: eq(schema.users.username, 'superadmin'),
     });
