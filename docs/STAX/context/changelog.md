@@ -4,6 +4,27 @@ File này ghi lại các quyết định quan trọng về kiến trúc và các
 
 ---
 
+## 🏗️ [2026-04-30] - Hardening: Clean Architecture & Domain Integrity
+
+Đợt rà soát và củng cố tính toàn vẹn của Domain Model cùng với việc fix các lỗi nghiêm trọng về an toàn dữ liệu và trải nghiệm người dùng (Swagger).
+
+### 1. Domain Model Hardening (Rich Domain Model)
+*   **Encapsulation:** Chuyển đổi `Finote` entity sang mô hình Rich Domain Model. Toàn bộ thuộc tính `status` và `reviewer_id` hiện đã được `private`, chỉ cho phép thay đổi thông qua các phương thức nghiệp vụ như `.approve()` và `.reject()`.
+*   **Business Logic Location:** Di chuyển toàn bộ các quy tắc kiểm tra logic (Invariants) từ Service xuống Entity, đảm bảo Domain không bao giờ ở trạng thái sai lệch.
+
+### 2. Security & Environment
+*   **Zero Magic Passwords:** Loại bỏ hoàn toàn các mật khẩu hardcode (`Company@2026`, `Stax@123`, `K@2026`) trong các script seeding và migration. Chuyển sang sử dụng `process.env.SEED_DEFAULT_PASSWORD`.
+
+### 3. API & Developer Experience (DX)
+*   **Swagger Payload Support:** Khắc phục lỗi Swagger không hiển thị body nhập liệu cho API tạo Interaction Note bằng cách triển khai `CreateInteractionNoteDto`.
+*   **Stability:** Fix lỗi 500 (Null Pointer) khi gửi request body trống đến các API logging bằng cách thêm validation logic tại tầng Controller.
+
+### 4. Infrastructure Cleanup
+*   **EventBus Alignment:** Sửa logic logging trong `KafkaEventBusAdapter` (trước đây log nhầm prefix `[RabbitMQ]`).
+*   **Code Review Fixes:** Đơn giản hóa logic ánh xạ dữ liệu nhân sự (Mapper cleanup) để tăng tính minh bạch và hiệu năng.
+
+---
+
 ## 💎 [2026-04-28] - System & UI/UX Integration: Professional API Renaissance
 
 Đợt Refactor toàn diện lớp Application và Infrastructure của `SystemModule` cùng với việc chuẩn hóa giao thức tương tác Backend-Frontend (BE-FE Contract).

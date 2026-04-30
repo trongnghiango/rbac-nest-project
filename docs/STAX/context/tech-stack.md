@@ -10,7 +10,7 @@ Tài liệu này liệt kê các công nghệ cốt lõi được sử dụng đ
 *   **Schema Design:** Tuân thủ mô hình **Single-Source-of-Truth** xoay quanh bảng `organizations`.
 
 ## 3. Communication & Jobs
-*   **EventBus (RabbitMQ):** Sử dụng để giao tiếp bất đồng bộ giữa các module (Choreography Pattern). Ví dụ: Khi có Lead mới -> Gửi thông báo Telegram.
+*   **EventBus (Kafka/RabbitMQ):** Sử dụng để giao tiếp bất đồng bộ giữa các module (Choreography Pattern). Hiện tại đã triển khai `KafkaEventBusAdapter` làm adapter chính.
 *   **BullMQ (Redis):** Xử lý các tác vụ nặng chạy ngầm (Background Jobs) như: Sinh PDF hóa đơn, Import hàng loạt dữ liệu Lead (2000+ records).
 
 ## 4. Frontend & Presentation
@@ -26,4 +26,4 @@ Tài liệu này liệt kê các công nghệ cốt lõi được sử dụng đ
 *   **Hybrid Storage (JSONB)**: Cột `metadata JSONB` trên các bảng chính để lưu dữ liệu legacy không có cột riêng. Chi tiết xem **ADR 003** trong `architecture.md`.
 
 ---
-*Cập nhật ngày 26/04/2026.*
+*Cập nhật ngày 30/04/2026 bởi Antigravity AI.*

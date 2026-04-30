@@ -256,4 +256,7 @@ TRUNCATE TABLE leads CASCADE;
 
 ---
 
-*Báo cáo được tạo tự động sau khi hoàn thành toàn bộ 4 phase migration vào ngày 26/04/2026.*
+> [!IMPORTANT]
+> **Cập nhật bảo mật (30/04/2026):** Toàn bộ các mật khẩu mặc định sử dụng trong quá trình migration (`Stax@123`, `Company@2026`) đã được chuyển sang quản lý qua biến môi trường `SEED_DEFAULT_PASSWORD`. Tuyệt đối không hardcode mật khẩu vào source code hoặc scripts.
+
+*Báo cáo được cập nhật lần cuối vào ngày 30/04/2026 bởi Antigravity AI.*

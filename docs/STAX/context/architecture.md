@@ -249,5 +249,10 @@ sequenceDiagram
 *   **Thiết kế:** Sử dụng `ObjectDiff` utility để tự động tính toán sự khác biệt giữa `before` và `after`. Chỉ những key bị thay đổi mới được lưu vào Database.
 *   **Áp dụng:** Toàn hệ thống thông qua `DrizzleAuditLogService` (26/04/2026).
 
+### ADR 007: Rich Domain Model & Field Encapsulation
+*   **Quyết định:** Chuyển đổi các Entity trọng yếu (VD: `Finote`) từ Anemic Domain Model sang Rich Domain Model. Toàn bộ các thuộc tính trạng thái (`status`, `reviewer_id`) được chuyển sang `private`.
+*   **Lý do:** Đảm bảo tính toàn vẹn của dữ liệu (Data Integrity). Việc thay đổi trạng thái phải đi qua các phương thức nghiệp vụ (`approve`, `reject`) để kiểm tra các điều kiện ràng buộc (Invariants), tránh việc Service can thiệp thô bạo vào trạng thái thực thể.
+*   **Áp dụng:** Finote Entity (30/04/2026).
+
 ---
-*Tài liệu được cập nhật ngày 26/04/2026 bởi Antigravity AI.*
+*Tài liệu được cập nhật ngày 30/04/2026 bởi Antigravity AI.*
