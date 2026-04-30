@@ -1,0 +1,6 @@
+- [x] Update Finote entity to encapsulate state `status` and `reviewerId`
+- [x] Update `FinoteService` to use `approve` and `reject` mechanisms on the `Finote` entity
+- [x] Simplify redundant map logic in `EmployeeMapper`
+- [x] Replace hardcoded passwords with `process.env.SEED_DEFAULT_PASSWORD` in `company-import.service.ts`, `stax-legacy-migration.service.ts`, and `database.seeder.ts`
+- [x] Remove hardcoded roles from `getUiPermissions` in `BootstrapService`
+- [x] Fix logger prefix in `KafkaEventBusAdapter`
