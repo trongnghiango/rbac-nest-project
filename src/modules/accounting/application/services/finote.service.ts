@@ -21,13 +21,7 @@ export class FinoteService {
         const finote = await this.finoteRepo.findById(id);
         if (!finote) throw new NotFoundException('Không tìm thấy phiếu thu/chi');
 
-        if (finote.status !== FinoteStatus.PENDING) {
-          throw new BadRequestException('Chỉ có thể duyệt phiếu đang ở trạng thái PENDING');
-        }
-
-        finote.status = FinoteStatus.APPROVED;
-        finote.reviewerId = reviewerId;
-        finote.updatedAt = new Date();
+        finote.approve(reviewerId);
 
         return this.finoteRepo.save(finote);
     }
@@ -36,14 +30,7 @@ export class FinoteService {
         const finote = await this.finoteRepo.findById(id);
         if (!finote) throw new NotFoundException('Không tìm thấy phiếu thu/chi');
 
-        if (finote.status !== FinoteStatus.PENDING) {
-          throw new BadRequestException('Chỉ có thể từ chối phiếu đang ở trạng thái PENDING');
-        }
-
-        finote.status = FinoteStatus.REJECTED;
-        finote.reviewerId = reviewerId;
-        finote.description = `${finote.description || ''} [Lý do từ chối: ${reason}]`.trim();
-        finote.updatedAt = new Date();
+        finote.reject(reviewerId, reason);
 
         return this.finoteRepo.save(finote);
     }

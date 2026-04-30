@@ -55,13 +55,13 @@ export class Finote {
     public readonly type: FinoteType;
     public readonly sourceOrgId?: number;
     public readonly requestedById: number;
-    public reviewerId?: number;
+    private _reviewerId?: number;
     public title: string;
     public totalAmount: Money;
     public totalVat: Money;
     public category?: string;
     public description?: string;
-    public status: FinoteStatus;
+    private _status: FinoteStatus;
     public deadlineAt: Date;
     public items: FinoteItem[];
     public paidAmount: Money;
@@ -74,13 +74,13 @@ export class Finote {
         this.type = props.type;
         this.sourceOrgId = props.sourceOrgId;
         this.requestedById = props.requestedById;
-        this.reviewerId = props.reviewerId;
+        this._reviewerId = props.reviewerId;
         this.title = props.title;
         this.totalAmount = props.totalAmount;
         this.totalVat = props.totalVat || new Money(0);
         this.category = props.category;
         this.description = props.description;
-        this.status = props.status || FinoteStatus.PENDING;
+        this._status = props.status || FinoteStatus.PENDING;
         this.deadlineAt = props.deadlineAt;
         this.items = props.items || [];
         this.paidAmount = props.paidAmount || new Money(0);
@@ -90,6 +90,33 @@ export class Finote {
 
     get amount(): Money {
         return this.totalAmount;
+    }
+
+    get status(): FinoteStatus {
+        return this._status;
+    }
+
+    get reviewerId(): number | undefined {
+        return this._reviewerId;
+    }
+
+    approve(reviewerId: number) {
+        if (this._status !== FinoteStatus.PENDING) {
+            throw new Error('Chỉ có thể duyệt phiếu đang ở trạng thái PENDING');
+        }
+        this._status = FinoteStatus.APPROVED;
+        this._reviewerId = reviewerId;
+        this.updatedAt = new Date();
+    }
+
+    reject(reviewerId: number, reason: string) {
+        if (this._status !== FinoteStatus.PENDING) {
+            throw new Error('Chỉ có thể từ chối phiếu đang ở trạng thái PENDING');
+        }
+        this._status = FinoteStatus.REJECTED;
+        this._reviewerId = reviewerId;
+        this.description = `${this.description || ''} [Lý do từ chối: ${reason}]`.trim();
+        this.updatedAt = new Date();
     }
 
     recalculateTotals() {
@@ -106,9 +133,9 @@ export class Finote {
     recordPayment(paymentAmount: Money) {
         this.paidAmount = this.paidAmount.add(paymentAmount);
         if (this.paidAmount.getAmount() >= this.totalAmount.getAmount()) {
-            this.status = FinoteStatus.PAID;
+            this._status = FinoteStatus.PAID;
         } else if (this.paidAmount.getAmount() > 0) {
-            this.status = FinoteStatus.PARTIALLY_PAID;
+            this._status = FinoteStatus.PARTIALLY_PAID;
         }
         this.updatedAt = new Date();
     }
