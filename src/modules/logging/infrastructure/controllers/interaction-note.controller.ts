@@ -1,6 +1,7 @@
-import { Controller, Post, Get, Body, Param, Inject, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Inject, ParseIntPipe, BadRequestException } from '@nestjs/common';
 import { INTERACTION_NOTE_PORT, IInteractionNoteService } from '@core/shared/application/ports/interaction-note.port';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { CreateInteractionNoteDto } from '../dtos/create-interaction-note.dto';
 
 @ApiTags('Logging & Activities')
 @Controller('organizations/:orgId/notes')
@@ -11,10 +12,14 @@ export class InteractionNoteController {
 
     @Post()
     @ApiOperation({ summary: 'Thêm ghi chú tương tác thủ công cho doanh nghiệp' })
+    @ApiBody({ type: CreateInteractionNoteDto })
     async createNote(
         @Param('orgId', ParseIntPipe) orgId: number,
-        @Body() dto: { content: string, type?: string, metadata?: any }
+        @Body() dto: CreateInteractionNoteDto
     ) {
+        if (!dto || !dto.content) {
+            throw new BadRequestException('Content is required');
+        }
         return this.noteService.create({
             organizationId: orgId,
             content: dto.content,
